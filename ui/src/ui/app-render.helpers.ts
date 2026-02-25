@@ -90,7 +90,9 @@ export function renderChatControls(state: AppViewState) {
     mainSessionKey,
   );
   const disableThinkingToggle = state.onboarding;
+  const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
   // Refresh icon
   const refreshIcon = html`
     <svg

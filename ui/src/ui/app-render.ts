@@ -144,6 +144,7 @@ function renderBustlyUserSection(state: AppViewState) {
     bustlyUserMenuOpen: boolean;
     oauthLoginPending: boolean;
     oauthLoginSuccess: boolean;
+    oauthLoginError: string | null;
     handleBustlyLogin: () => void;
     handleBustlyUserMenuToggle: () => void;
     handleConfigureAiOpen: () => void;
@@ -212,12 +213,14 @@ function renderBustlyUserSection(state: AppViewState) {
   }
 
   // Not logged in - show login button
+  const loginError = bustlyState.oauthLoginError?.trim() || "";
   return html`
     <button
-      class="bustly-login-btn"
+      class="bustly-login-btn ${loginError ? "bustly-login-btn--error" : ""}"
       @click=${bustlyState.handleBustlyLogin}
+      title=${loginError || "Log in to Bustly"}
     >
-      Log in →
+      ${loginError ? "Log in (failed)" : "Log in →"}
     </button>
   `;
 }

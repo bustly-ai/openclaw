@@ -241,6 +241,16 @@
   color: #27ae60;
 }
 
+.bustly-login-btn--error {
+  background: rgba(231, 76, 60, 0.14);
+  color: #c0392b;
+}
+
+.bustly-login-btn--error:hover:not(:disabled) {
+  background: rgba(231, 76, 60, 0.2);
+  color: #a93226;
+}
+
 /* Bustly user avatar section */
 .bustly-user-section {
   position: relative;
