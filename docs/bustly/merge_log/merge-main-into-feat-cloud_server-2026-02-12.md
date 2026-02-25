@@ -215,3 +215,27 @@ env -u ELECTRON_RUN_AS_NODE pnpm -C openclaw/apps/electron run dev
 补充说明：
 
 - 本轮验证中登录链路已成功，但桌面端是否直接进入完整控制台界面仍取决于本地 `openclaw.json` 配置文件是否存在（与 Bustly 登录态为两条独立状态链路）。
+
+### 7.7 AWS 部署补充（2026-02-25）
+
+背景：
+
+- 将本地 `feat/cloud_server`（已推送至 `ae23afc63`）部署到 AWS EC2 上现有 `~/openclaw` 部署环境
+- 服务器采用 `docker-compose.yml + docker-compose.ec2.yml`，运行容器 `openclaw-openclaw-gateway-1`
+
+执行结果与阻塞点：
+
+- 服务器仓库已 fast-forward 到 `ae23afc63`
+- 首次执行 `docker compose up -d --build openclaw-gateway` 未触发源码重建（compose 使用的是预构建镜像标签 `OPENCLAW_IMAGE=openclaw:ec2`）
+- 显式执行 `docker build -t openclaw:ec2 .` 时，Docker 构建阶段 `pnpm build` 失败：
+  - TypeScript 错误：`Property 'lifecycleErrorEmitted' does not exist on type 'EmbeddedPiSubscribeState'`
+
+修复：
+
+- `openclaw/src/agents/pi-embedded-subscribe.handlers.types.ts` 为 `EmbeddedPiSubscribeState` 补充可选字段：
+  - `lifecycleErrorEmitted?: boolean`
+- 该修复为类型定义补齐，不改变运行时逻辑（运行时原本已按 falsy 值使用）
+
+说明：
+
+- 这是在服务器源码镜像构建时发现的编译阻塞点，属于主线合并后构建一致性修复。

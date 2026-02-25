@@ -53,6 +53,7 @@ export type EmbeddedPiSubscribeState = {
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
   reasoningStreamOpen: boolean;
+  lifecycleErrorEmitted?: boolean;
   assistantMessageIndex: number;
   lastAssistantTextMessageIndex: number;
   lastAssistantTextNormalized?: string;
