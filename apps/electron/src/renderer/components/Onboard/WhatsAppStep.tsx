@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import bustlyLogo from "../../assets/imgs/collapsed_logo_v2.svg";
 import whatsAppIcon from "../../assets/imgs/whats-app.svg";
 import OnboardContainer from "./OnboardContainer";
 
-type PhoneMode = "personal" | "separate";
+const DEFAULT_WHATSAPP_NUMBER = "+1";
 
 interface WhatsAppStepProps {
   onBack: () => void;
@@ -16,11 +16,9 @@ export default function WhatsAppStep({ onBack, onSkip, onDone }: WhatsAppStepPro
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [linkMessage, setLinkMessage] = useState<string | null>(null);
   const [loadingLink, setLoadingLink] = useState(false);
-  const [checkingLink, setCheckingLink] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [phoneMode] = useState<PhoneMode>("personal");
-  const [personalNumber, setPersonalNumber] = useState("");
+  const checkingLinkRef = useRef(false);
 
   const loadStatus = useCallback(async () => {
     if (!window.electronAPI?.onboardWhatsAppStatus) {
@@ -29,10 +27,6 @@ export default function WhatsAppStep({ onBack, onSkip, onDone }: WhatsAppStepPro
     try {
       const nextStatus = await window.electronAPI.onboardWhatsAppStatus();
       setStatus(nextStatus);
-      if (nextStatus.selfChatMode) {
-        const personal = nextStatus.allowFrom?.find((value) => value !== "*") ?? "";
-        setPersonalNumber(personal);
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -63,13 +57,12 @@ export default function WhatsAppStep({ onBack, onSkip, onDone }: WhatsAppStepPro
   );
 
   const handleCheckLink = useCallback(async () => {
-    if (!window.electronAPI?.onboardWhatsAppWait) {
+    if (!window.electronAPI?.onboardWhatsAppWait || checkingLinkRef.current) {
       return;
     }
-    setCheckingLink(true);
-    setError(null);
+    checkingLinkRef.current = true;
     try {
-      const result = await window.electronAPI.onboardWhatsAppWait();
+      const result = await window.electronAPI.onboardWhatsAppWait({ timeoutMs: 1000 });
       setLinkMessage(result.message);
       await loadStatus();
       if (result.connected) {
@@ -78,23 +71,33 @@ export default function WhatsAppStep({ onBack, onSkip, onDone }: WhatsAppStepPro
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setCheckingLink(false);
+      checkingLinkRef.current = false;
     }
   }, [loadStatus]);
+
+  useEffect(() => {
+    if (status?.linked || !qrDataUrl) {
+      return;
+    }
+    void handleCheckLink();
+    const intervalId = setInterval(() => {
+      void handleCheckLink();
+    }, 1000);
+    return () => clearInterval(intervalId);
+  }, [status?.linked, qrDataUrl, handleCheckLink]);
 
   const handleSave = useCallback(async () => {
     if (!window.electronAPI?.onboardWhatsAppConfig) {
       return;
     }
     setError(null);
-    if (phoneMode === "personal" && !personalNumber.trim()) {
-      setError("Enter your WhatsApp number.");
-      return;
-    }
 
     setSavingConfig(true);
     try {
-      const payload: WhatsAppConfigRequest = { mode: "personal", personalNumber };
+      const payload: WhatsAppConfigRequest = {
+        mode: "personal",
+        personalNumber: DEFAULT_WHATSAPP_NUMBER,
+      };
       const result = await window.electronAPI.onboardWhatsAppConfig(payload);
       if (!result.success) {
         setError(result.error ?? "Failed to save WhatsApp settings");
@@ -106,7 +109,7 @@ export default function WhatsAppStep({ onBack, onSkip, onDone }: WhatsAppStepPro
     } finally {
       setSavingConfig(false);
     }
-  }, [phoneMode, personalNumber, onDone]);
+  }, [onDone]);
 
   return (
     <OnboardContainer align="start" className="w-full max-w-lg mx-auto px-6">
@@ -149,14 +152,6 @@ export default function WhatsAppStep({ onBack, onSkip, onDone }: WhatsAppStepPro
                 <img src={qrDataUrl} alt="WhatsApp QR" className="w-full h-full object-contain" />
               </div>
             </div>
-            <button
-              type="button"
-              onClick={handleCheckLink}
-              disabled={checkingLink}
-              className="mt-2 px-6 py-2 rounded-xl bg-[#1A162F] text-white font-semibold hover:bg-[#1A162F]/90 disabled:opacity-60"
-            >
-              {checkingLink ? "Checking..." : "I scanned it"}
-            </button>
           </div>
         )}
 
@@ -175,21 +170,6 @@ export default function WhatsAppStep({ onBack, onSkip, onDone }: WhatsAppStepPro
         )}
 
         {linkMessage && <p className="mt-4 text-xs text-[#6B6F86]">{linkMessage}</p>}
-      </div>
-
-      <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm mt-6">
-        <div className="flex flex-col gap-2">
-          <label className="text-xs font-semibold text-[#6B6F86]" htmlFor="wa-personal">
-            WhatsApp number (E.164)
-          </label>
-          <input
-            id="wa-personal"
-            value={personalNumber}
-            onChange={(event) => setPersonalNumber(event.target.value)}
-            placeholder="+15555550123"
-            className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-[#1A162F] shadow-sm focus:border-[#1A162F] focus:outline-none focus:ring-2 focus:ring-[#1A162F]/10 placeholder:text-[#6B6F86]"
-          />
-        </div>
       </div>
 
       <div className="flex justify-end items-center mt-8 border-t border-gray-100 pt-6">

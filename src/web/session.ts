@@ -117,7 +117,7 @@ export async function createWaSocket(
     version,
     logger,
     printQRInTerminal: false,
-    browser: ["openclaw", "cli", VERSION],
+    browser: ["Bustly", "Chrome", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
   });

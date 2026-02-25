@@ -785,6 +785,32 @@ export class OpenClawApp extends LitElement {
     console.warn("[Bustly Auth] Settings link unavailable outside Electron.");
   }
 
+  async handleBustlyReonboard() {
+    this.bustlyUserMenuOpen = false;
+    const confirmed = window.confirm(
+      "Reonboard will clear all local data and restart the app. Continue?",
+    );
+    if (!confirmed) {
+      return;
+    }
+    const electronAPI = (window as unknown as {
+      electronAPI?: { bustlyReonboard?: () => Promise<{ success: boolean; error?: string }> };
+    }).electronAPI;
+    if (!electronAPI?.bustlyReonboard) {
+      console.warn("[Bustly Reonboard] Only available in Electron.");
+      return;
+    }
+    try {
+      const result = await electronAPI.bustlyReonboard();
+      if (!result?.success) {
+        throw new Error(result?.error ?? "Reonboard failed");
+      }
+    } catch (err) {
+      console.error("[Bustly Reonboard] Failed:", err);
+      window.alert(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   handleBustlyUserMenuClose(event: MouseEvent) {
     const target = event.target as HTMLElement;
     const menu = this.querySelector('.bustly-user-section');

@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   bustlyOpenLogin: () => ipcRenderer.invoke("bustly-open-login"),
   bustlyOpenSettings: () => ipcRenderer.invoke("bustly-open-settings"),
   bustlyOpenProviderSetup: () => ipcRenderer.invoke("bustly-open-provider-setup"),
+  bustlyReonboard: () => ipcRenderer.invoke("bustly-reonboard"),
   onboardListProviders: () => ipcRenderer.invoke("onboard-list-providers"),
   onboardAuthApiKey: (provider: string, apiKey: string) =>
     ipcRenderer.invoke("onboard-auth-api-key", provider, apiKey),

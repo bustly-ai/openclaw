@@ -92,6 +92,7 @@ function renderBustlyUserSection(state: AppViewState) {
     handleBustlyUserMenuToggle: () => void;
     handleConfigureAiOpen: () => void;
     handleBustlyOpenSettings: () => void;
+    handleBustlyReonboard: () => void;
     handleBustlyLogout: () => void;
   };
 
@@ -120,17 +121,23 @@ function renderBustlyUserSection(state: AppViewState) {
               </div>
             </div>
             <div class="bustly-user-dropdown__divider"></div>
-            <button
+            ${false ? `<button
               class="bustly-user-dropdown__settings"
               @click=${bustlyState.handleConfigureAiOpen}
             >
               Configure AI model
-            </button>
+            </button>` : ''}
             <button
               class="bustly-user-dropdown__settings"
               @click=${bustlyState.handleBustlyOpenSettings}
             >
               Settings
+            </button>
+            <button
+              class="bustly-user-dropdown__settings"
+              @click=${bustlyState.handleBustlyReonboard}
+            >
+              Reonboard
             </button>
             <button
               class="bustly-user-dropdown__logout"

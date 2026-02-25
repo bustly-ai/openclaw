@@ -1398,6 +1398,29 @@ function setupIpcHandlers(): void {
     }
   });
 
+  ipcMain.handle("bustly-reonboard", async () => {
+    try {
+      await stopGateway();
+      const stateDir = resolveElectronStateDir();
+      rmSync(stateDir, { recursive: true, force: true });
+      initResult = null;
+      gatewayToken = null;
+      gatewayProcess = null;
+      needsOnboardAtLaunch = true;
+      setTimeout(() => {
+        app.relaunch();
+        app.exit(0);
+      }, 50);
+      return { success: true };
+    } catch (error) {
+      console.error("[Reonboard] Error:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
   // === Onboarding handlers ===
 
   // List available providers
