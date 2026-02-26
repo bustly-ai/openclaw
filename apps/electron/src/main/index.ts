@@ -407,6 +407,9 @@ function loadGatewayConfig(): { port: number; bind: string; token?: string } | n
  * Start the OpenClaw Gateway process
  */
 async function startGateway(): Promise<boolean> {
+  const oauthCallbackPort = await startOAuthCallbackServer();
+  console.log("[Bustly] OAuth callback server started on port", oauthCallbackPort);
+
   return new Promise((resolvePromise, reject) => {
     const startAt = Date.now();
     if (gatewayProcess) {
@@ -571,10 +574,6 @@ async function startGateway(): Promise<boolean> {
     };
 
     const envVars = loadEnvVars();
-
-    // Start OAuth callback server for Bustly login
-    const oauthCallbackPort = startOAuthCallbackServer();
-    console.log("[Bustly] OAuth callback server started on port", oauthCallbackPort);
 
     const spawnEnv = {
       ...process.env,
@@ -1287,7 +1286,7 @@ function setupIpcHandlers(): void {
       console.log("[Bustly Login] OAuth state initialized, traceId:", oauthState.loginTraceId);
 
       // Start OAuth callback server
-      const oauthPort = startOAuthCallbackServer();
+      const oauthPort = await startOAuthCallbackServer();
       console.log("[Bustly Login] OAuth callback server started on port", oauthPort);
 
       // Generate login URL

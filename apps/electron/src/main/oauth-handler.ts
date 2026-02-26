@@ -5,6 +5,7 @@
 
 import { shell } from "electron";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { loginOpenAICodex, loginAntigravity } from "@mariozechner/pi-ai";
 import { loadConfig } from "../../../../src/config/config.js";
 import * as BustlyOAuth from "./bustly-oauth.js";
@@ -19,6 +20,7 @@ let oauthPromptResolver: ((value: string) => void) | null = null;
 const DEFAULT_OAUTH_CALLBACK_PORT = 18790;
 
 let oauthServer: ReturnType<typeof createServer> | null = null;
+let oauthServerPort: number | null = null;
 let oauthCodeResolver: ((code: string) => void) | null = null;
 
 /**
@@ -79,19 +81,21 @@ export function generateLoginUrl(
 }
 
 /**
- * Start the OAuth callback HTTP server
+ * Start the OAuth callback HTTP server and return the actual listening port.
+ * Falls back to an ephemeral loopback port when the configured port is occupied.
  */
-export function startOAuthCallbackServer(): number {
+export async function startOAuthCallbackServer(): Promise<number> {
   if (oauthServer) {
-    const port = getOAuthCallbackPort();
-    console.log("[Bustly OAuth] OAuth server already running on port", port);
-    return port;
+    const currentPort = oauthServerPort ?? getOAuthCallbackPort();
+    console.log("[Bustly OAuth] OAuth server already running on port", currentPort);
+    return currentPort;
   }
 
-  const port = getOAuthCallbackPort();
-  console.log("[Bustly OAuth] Starting OAuth callback server on port", port);
+  const configuredPort = getOAuthCallbackPort();
+  console.log("[Bustly OAuth] Starting OAuth callback server on port", configuredPort);
 
-  oauthServer = createServer((req: IncomingMessage, res: ServerResponse) => {
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    const currentPort = oauthServerPort ?? configuredPort;
     console.log("=".repeat(60));
     console.log("[Bustly OAuth] Received request:", req.method, req.url);
     console.log("=".repeat(60));
@@ -104,7 +108,7 @@ export function startOAuthCallbackServer(): number {
       return;
     }
 
-    const url = new URL(urlRaw, `http://127.0.0.1:${port}`);
+    const url = new URL(urlRaw, `http://127.0.0.1:${currentPort}`);
     console.log("[Bustly OAuth] Pathname:", url);
 
     // Check if this is an OAuth callback
@@ -223,15 +227,54 @@ export function startOAuthCallbackServer(): number {
     console.log("=".repeat(60));
   });
 
-  oauthServer.listen(port, "127.0.0.1", () => {
-    console.log("[Bustly OAuth] OAuth callback server listening on http://127.0.0.1:" + port);
-  });
+  oauthServer = server;
 
-  oauthServer.on("error", (err: Error) => {
-    console.error("[Bustly OAuth] OAuth server error:", err);
-  });
+  const startServer = (portToTry: number): Promise<number> =>
+    new Promise((resolve, reject) => {
+      const onListening = () => {
+        const address = server.address() as AddressInfo | null;
+        const actualPort = address?.port ?? portToTry;
+        oauthServerPort = actualPort;
+        console.log("[Bustly OAuth] OAuth callback server listening on http://127.0.0.1:" + actualPort);
+        cleanup();
+        resolve(actualPort);
+      };
+      const onError = (err: Error) => {
+        cleanup();
+        reject(err);
+      };
+      const cleanup = () => {
+        server.off("listening", onListening);
+        server.off("error", onError);
+      };
+      server.on("listening", onListening);
+      server.on("error", onError);
+      server.listen(portToTry, "127.0.0.1");
+    });
 
-  return port;
+  try {
+    return await startServer(configuredPort);
+  } catch (err) {
+    const nodeErr = err as NodeJS.ErrnoException;
+    if (nodeErr.code !== "EADDRINUSE") {
+      oauthServer = null;
+      oauthServerPort = null;
+      console.error("[Bustly OAuth] OAuth server failed to start:", err);
+      throw err;
+    }
+
+    console.warn(
+      `[Bustly OAuth] Port ${configuredPort} is in use; retrying on a random loopback port`,
+    );
+    try {
+      return await startServer(0);
+    } catch (fallbackErr) {
+      oauthServer = null;
+      oauthServerPort = null;
+      console.error("[Bustly OAuth] OAuth server fallback start failed:", fallbackErr);
+      throw fallbackErr;
+    }
+  }
 }
 
 /**
@@ -244,6 +287,7 @@ export function stopOAuthCallbackServer(): void {
       console.log("[Bustly OAuth] OAuth callback server stopped");
     });
     oauthServer = null;
+    oauthServerPort = null;
   }
 }
 
