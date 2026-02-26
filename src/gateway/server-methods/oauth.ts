@@ -8,7 +8,7 @@ import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./type
 
 // In-memory OAuth state storage (for pending logins)
 const pendingOAuthLogins = new Map<string, { expiresAt: number }>();
-export const BUSTLY_OAUTH_CALLBACK_PATH = "/__openclaw__/bustly/authorize";
+export const BUSTLY_OAUTH_CALLBACK_PATH = "/authorize";
 
 /**
  * Get OAuth callback port from environment or default
@@ -28,19 +28,24 @@ function generateTraceId(): string {
 }
 
 function resolvePublicRedirectUri(params: Record<string, unknown>): string {
-  const publicOrigin =
-    typeof params.publicOrigin === "string" ? params.publicOrigin.trim() : undefined;
-  if (publicOrigin) {
+  const candidates = [
+    typeof params.publicOrigin === "string" ? params.publicOrigin.trim() : "",
+    process.env.BUSTLY_OAUTH_PUBLIC_ORIGIN?.trim() ?? "",
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
     try {
-      const url = new URL(publicOrigin);
-      if ((url.protocol === "http:" || url.protocol === "https:") && url.host) {
+      const url = new URL(candidate);
+      if (url.protocol === "http:" || url.protocol === "https:") {
         url.pathname = BUSTLY_OAUTH_CALLBACK_PATH;
         url.search = "";
         url.hash = "";
         return url.toString();
       }
     } catch {
-      // Fall back to localhost callback below.
+      // Try the next candidate.
     }
   }
   return `http://127.0.0.1:${getOAuthCallbackPort()}${BUSTLY_OAUTH_CALLBACK_PATH}`;
@@ -77,6 +82,7 @@ export const oauthLogin: GatewayRequestHandler = async ({
 
     // Build OAuth login URL
     const redirectUri = resolvePublicRedirectUri(params);
+    console.log("[BustlyOAuth] oauth.login redirect_uri:", redirectUri);
     const query = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
