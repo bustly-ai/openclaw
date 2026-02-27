@@ -1,16 +1,14 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
-import {
-  renderMessageGroup,
-  renderReadingIndicatorGroup,
-  renderStreamingGroup,
-} from "../chat/grouped-render.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { extractTextCached, extractThinkingCached } from "../chat/message-extract.ts";
+import { normalizeMessage } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
+import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { detectTextDirection } from "../text-direction.ts";
+import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import type { SessionsListResult } from "../types.ts";
-import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
@@ -45,6 +43,7 @@ export type ChatProps = {
   toolMessages: unknown[];
   stream: string | null;
   streamStartedAt: number | null;
+  streamUpdatedAt?: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
@@ -81,6 +80,28 @@ export type ChatProps = {
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
 };
+
+type TimelineNode =
+  | {
+      kind: "text";
+      key: string;
+      timestamp: number;
+      text: string;
+      tone: "user" | "assistant" | "thinking" | "system";
+      streaming?: boolean;
+    }
+  | {
+      kind: "tool";
+      key: string;
+      timestamp: number;
+      mergeKey: string;
+      summary: string;
+      detail: string;
+      hasOutput: boolean;
+      completed: boolean;
+      running?: boolean;
+    }
+  | { kind: "divider"; key: string; label: string; timestamp: number };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
@@ -241,13 +262,6 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
-  const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
-  const reasoningLevel = activeSession?.reasoningLevel ?? "off";
-  const showReasoning = props.showThinking && reasoningLevel !== "off";
-  const assistantIdentity = {
-    name: props.assistantName,
-    avatar: props.assistantAvatar ?? props.assistantAvatarUrl ?? null,
-  };
 
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const composePlaceholder = props.connected
@@ -258,6 +272,8 @@ export function renderChat(props: ChatProps) {
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const timeline = buildTimelineNodes(props);
+  const activeRunningToolKey = resolveActiveRunningToolKey(timeline);
   const thread = html`
     <div
       class="chat-thread"
@@ -273,7 +289,7 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
       ${repeat(
-        buildChatItems(props),
+        timeline,
         (item) => item.key,
         (item) => {
           if (item.kind === "divider") {
@@ -285,30 +301,51 @@ export function renderChat(props: ChatProps) {
               </div>
             `;
           }
-
-          if (item.kind === "reading-indicator") {
-            return renderReadingIndicatorGroup(assistantIdentity);
+          if (item.kind === "tool") {
+            const running = item.running && item.key === activeRunningToolKey;
+            return html`
+              <details class="chat-flow-item chat-flow-item--tool ${running ? "is-running" : ""}">
+                <summary>
+                  <span class="chat-flow-tool-summary ${running ? "chat-flow-tool-summary--running" : "chat-flow-tool-summary--done"}">
+                    ${running ? `Running ${item.summary}` : `Completed ${item.summary}`}
+                  </span>
+                  ${
+                    running
+                      ? html`
+                          <span class="chat-flow-loader" aria-hidden="true"></span>
+                        `
+                      : nothing
+                  }
+                </summary>
+                <pre class="chat-flow-tool-detail mono">${item.detail}</pre>
+              </details>
+            `;
           }
-
-          if (item.kind === "stream") {
-            return renderStreamingGroup(
-              item.text,
-              item.startedAt,
-              props.onOpenSidebar,
-              assistantIdentity,
-            );
+          if (item.tone === "user") {
+            return html`
+              <div class="chat-flow-item chat-flow-item--user-bubble">
+                <div class="chat-flow-user-bubble">
+                  ${unsafeHTML(toSanitizedMarkdownHtml(item.text))}
+                </div>
+              </div>
+            `;
           }
-
-          if (item.kind === "group") {
-            return renderMessageGroup(item, {
-              onOpenSidebar: props.onOpenSidebar,
-              showReasoning,
-              assistantName: props.assistantName,
-              assistantAvatar: assistantIdentity.avatar,
-            });
-          }
-
-          return nothing;
+          const className =
+            item.tone === "thinking"
+              ? "chat-flow-item chat-flow-item--thinking"
+              : "chat-flow-item chat-flow-item--text";
+          return html`
+            <div class="${className} ${item.streaming ? "is-running" : ""}">
+              ${unsafeHTML(toSanitizedMarkdownHtml(item.text))}
+              ${
+                item.streaming
+                  ? html`
+                      <span class="chat-flow-loader" aria-hidden="true"></span>
+                    `
+                  : nothing
+              }
+            </div>
+          `;
         },
       )}
     </div>
@@ -481,84 +518,73 @@ export function renderChat(props: ChatProps) {
 
 const CHAT_HISTORY_RENDER_LIMIT = 200;
 
-function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
-  const result: Array<ChatItem | MessageGroup> = [];
-  let currentGroup: MessageGroup | null = null;
-
-  for (const item of items) {
-    if (item.kind !== "message") {
-      if (currentGroup) {
-        result.push(currentGroup);
-        currentGroup = null;
-      }
-      result.push(item);
-      continue;
+function buildTimelineNodes(props: ChatProps): TimelineNode[] {
+  const nodes: Array<{ node: TimelineNode; timestamp: number; order: number }> = [];
+  let order = 0;
+  const pushNode = (node: TimelineNode, timestamp: number) => {
+    nodes.push({ node, timestamp, order: order++ });
+  };
+  const upsertToolNode = (toolNode: Extract<TimelineNode, { kind: "tool" }>, timestamp: number) => {
+    const existing = nodes.find(
+      (entry) => entry.node.kind === "tool" && entry.node.mergeKey === toolNode.mergeKey,
+    );
+    if (!existing) {
+      pushNode(toolNode, timestamp);
+      return;
     }
-
-    const normalized = normalizeMessage(item.message);
-    const role = normalizeRoleForGrouping(normalized.role);
-    const timestamp = normalized.timestamp || Date.now();
-
-    if (!currentGroup || currentGroup.role !== role) {
-      if (currentGroup) {
-        result.push(currentGroup);
-      }
-      currentGroup = {
-        kind: "group",
-        key: `group:${role}:${item.key}`,
-        role,
-        messages: [{ message: item.message, key: item.key }],
-        timestamp,
-        isStreaming: false,
-      };
-    } else {
-      currentGroup.messages.push({ message: item.message, key: item.key });
-    }
-  }
-
-  if (currentGroup) {
-    result.push(currentGroup);
-  }
-  return result;
-}
-
-function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
-  const items: ChatItem[] = [];
+    const current = existing.node;
+    const completed = current.completed || toolNode.completed;
+    const summary =
+      toolNode.summary.length > current.summary.length ? toolNode.summary : current.summary;
+    existing.node = {
+      ...current,
+      summary,
+      detail: mergeToolDetails(current.detail, toolNode.detail),
+      hasOutput: current.hasOutput || toolNode.hasOutput,
+      completed,
+      running: !completed,
+      timestamp: Math.min(current.timestamp, toolNode.timestamp),
+    };
+    existing.timestamp = Math.min(existing.timestamp, timestamp);
+  };
   const seenMessageKeys = new Set<string>();
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
-  const isRunActive = Boolean(props.canAbort || props.stream !== null);
   const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
+  const fallbackBaseTs = Date.now();
   if (historyStart > 0) {
-    items.push({
-      kind: "message",
-      key: "chat:history:notice",
-      message: {
-        role: "system",
-        content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
-        timestamp: Date.now(),
+    pushNode(
+      {
+        kind: "text",
+        key: "chat:history:notice",
+        timestamp: Number.MIN_SAFE_INTEGER,
+        text: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
+        tone: "system",
       },
-    });
+      Number.MIN_SAFE_INTEGER,
+    );
   }
   for (let i = historyStart; i < history.length; i++) {
-    const msg = history[i];
+    const rawEntry = history[i];
+    const { message: msg, envelope } = unwrapMessageEnvelope(rawEntry);
     const normalized = normalizeMessage(msg);
-    const raw = msg as Record<string, unknown>;
-    const marker = raw.__openclaw as Record<string, unknown> | undefined;
+    const timestamp = resolveMessageTimestamp(msg, envelope, fallbackBaseTs + i);
+    const marker =
+      (envelope.__openclaw as Record<string, unknown> | undefined) ??
+      (msg.__openclaw as Record<string, unknown> | undefined);
     if (marker && marker.kind === "compaction") {
-      items.push({
-        kind: "divider",
-        key:
-          typeof marker.id === "string"
-            ? `divider:compaction:${marker.id}`
-            : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compaction",
-        timestamp: normalized.timestamp ?? Date.now(),
-      });
-      continue;
-    }
-
-    if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
+      pushNode(
+        {
+          kind: "divider",
+          key:
+            typeof marker.id === "string"
+              ? `divider:compaction:${marker.id}`
+              : `divider:compaction:${timestamp}:${i}`,
+          label: "Compaction",
+          timestamp,
+        },
+        timestamp,
+      );
       continue;
     }
 
@@ -579,43 +605,263 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       }
     }
 
-    const key = messageKey(msg, i);
+    const key = messageKey(rawEntry, i);
     seenMessageKeys.add(key);
-    items.push({
-      kind: "message",
-      key,
-      message: msg,
-    });
-  }
-  if (props.showThinking || isRunActive) {
-    for (let i = 0; i < tools.length; i++) {
-      const key = messageKey(tools[i], i + history.length);
-      if (seenMessageKeys.has(key)) {
-        continue;
-      }
-      items.push({
-        kind: "message",
-        key,
-        message: tools[i],
-      });
+    const role = normalized.role.toLowerCase();
+    const thinking = extractThinkingCached(msg);
+    if (thinking) {
+      pushNode(
+        {
+          kind: "text",
+          key: `thinking:${key}`,
+          timestamp,
+          text: thinking,
+          tone: "thinking",
+        },
+        timestamp,
+      );
     }
+    const toolNode = toToolNode(msg, key, timestamp);
+    if (toolNode) {
+      upsertToolNode(toolNode, timestamp);
+      continue;
+    }
+    const text = extractTextCached(msg);
+    if (!text?.trim()) {
+      continue;
+    }
+    pushNode(
+      {
+        kind: "text",
+        key: `text:${key}`,
+        timestamp,
+        text,
+        tone: role === "user" ? "user" : role === "assistant" ? "assistant" : "system",
+      },
+      timestamp,
+    );
+  }
+
+  for (let i = 0; i < tools.length; i++) {
+    const rawEntry = tools[i];
+    const { message: msg, envelope } = unwrapMessageEnvelope(rawEntry);
+    const key = messageKey(rawEntry, i + history.length);
+    if (seenMessageKeys.has(key)) {
+      continue;
+    }
+    const timestamp = resolveMessageTimestamp(msg, envelope, fallbackBaseTs + history.length + i);
+    const toolNode = toToolNode(msg, key, timestamp);
+    if (!toolNode) {
+      continue;
+    }
+    upsertToolNode(toolNode, timestamp);
   }
 
   if (props.stream !== null) {
-    const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
-      items.push({
-        kind: "stream",
+    const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}:text`;
+    const streamTimestamp =
+      props.streamUpdatedAt ??
+      props.streamStartedAt ??
+      fallbackBaseTs + history.length + tools.length;
+    pushNode(
+      {
+        kind: "text",
         key,
-        text: props.stream,
-        startedAt: props.streamStartedAt ?? Date.now(),
-      });
-    } else {
-      items.push({ kind: "reading-indicator", key });
-    }
+        timestamp: streamTimestamp,
+        text: props.stream.trim().length > 0 ? props.stream : "Thinking…",
+        tone: "assistant",
+        streaming: true,
+      },
+      streamTimestamp,
+    );
   }
 
-  return groupMessages(items);
+  return nodes
+    .toSorted((a, b) =>
+      a.timestamp === b.timestamp ? a.order - b.order : a.timestamp - b.timestamp,
+    )
+    .map((entry) => entry.node);
+}
+
+function resolveActiveRunningToolKey(nodes: TimelineNode[]): string | null {
+  const running = nodes.filter(
+    (node): node is Extract<TimelineNode, { kind: "tool" }> =>
+      node.kind === "tool" && node.running === true,
+  );
+  if (running.length === 0) {
+    return null;
+  }
+  return running[running.length - 1].key;
+}
+
+function toToolNode(message: unknown, key: string, timestamp: number): TimelineNode | null {
+  const m = message as Record<string, unknown>;
+  const content = Array.isArray(m.content) ? (m.content as Array<Record<string, unknown>>) : [];
+  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
+  const hasToolId = typeof m.toolCallId === "string" || typeof m.tool_call_id === "string";
+  const hasToolRole =
+    role === "toolresult" || role === "tool_result" || role === "tool" || role === "function";
+  const callItem = content.find((entry) => {
+    const type = (typeof entry.type === "string" ? entry.type : "").toLowerCase();
+    return type === "toolcall" || type === "tool_call" || type === "tooluse" || type === "tool_use";
+  });
+  const resultItem = content.find((entry) => {
+    const type = (typeof entry.type === "string" ? entry.type : "").toLowerCase();
+    return type === "toolresult" || type === "tool_result";
+  });
+  if (!hasToolId && !hasToolRole && !callItem && !resultItem) {
+    return null;
+  }
+
+  const name =
+    (typeof callItem?.name === "string" ? callItem.name : undefined) ??
+    (typeof resultItem?.name === "string" ? resultItem.name : undefined) ??
+    (typeof m.toolName === "string" ? m.toolName : undefined) ??
+    (typeof m.tool_name === "string" ? m.tool_name : undefined) ??
+    "tool";
+  const args = callItem?.arguments ?? callItem?.args;
+  const output =
+    extractToolResultText(resultItem) ??
+    extractTextCached(message) ??
+    (typeof m.text === "string" ? m.text : "");
+  const isReadTool = name.toLowerCase() === "read";
+  const hasResultSignal =
+    Boolean(resultItem) ||
+    role === "toolresult" ||
+    role === "tool_result" ||
+    role === "tool" ||
+    role === "function";
+  const hasOutput = !isReadTool && output.trim().length > 0;
+  const completed = hasResultSignal || hasOutput;
+  const running = !completed;
+  const display = resolveToolDisplay({ name, args });
+  const detail = formatToolDetail(display);
+  const summary = detail ? `${display.name || name} ${detail}` : display.name || name;
+  const rawToolCallId =
+    (typeof m.toolCallId === "string" ? m.toolCallId : undefined) ??
+    (typeof m.tool_call_id === "string" ? m.tool_call_id : undefined) ??
+    (typeof callItem?.id === "string" ? callItem.id : undefined);
+  const mergeKey = rawToolCallId
+    ? `tool:${rawToolCallId}`
+    : `sig:${display.name || name}:${safeJson(args ?? null)}`;
+  const detailText = [
+    `Tool: ${display.label}`,
+    detail ? `Detail: ${detail}` : null,
+    args != null ? `Args:\n${safeJson(args)}` : null,
+    hasOutput ? `Output:\n${output.trim()}` : null,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n");
+
+  return {
+    kind: "tool",
+    key: `tool-node:${key}`,
+    timestamp,
+    mergeKey,
+    summary,
+    hasOutput,
+    completed,
+    detail: detailText,
+    running,
+  };
+}
+
+function extractToolResultText(item: Record<string, unknown> | undefined): string | null {
+  if (!item) {
+    return null;
+  }
+  if (typeof item.text === "string") {
+    return item.text;
+  }
+  if (typeof item.content === "string") {
+    return item.content;
+  }
+  return null;
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function parseTimestamp(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const ms = Date.parse(value);
+    if (!Number.isNaN(ms)) {
+      return ms;
+    }
+  }
+  return null;
+}
+
+function unwrapMessageEnvelope(entry: unknown): {
+  message: Record<string, unknown>;
+  envelope: Record<string, unknown>;
+} {
+  const envelope = (entry ?? {}) as Record<string, unknown>;
+  const nested = envelope.message;
+  if (nested && typeof nested === "object") {
+    return { message: nested as Record<string, unknown>, envelope };
+  }
+  return { message: envelope, envelope };
+}
+
+function resolveMessageTimestamp(
+  message: Record<string, unknown>,
+  envelope: Record<string, unknown>,
+  fallback: number,
+): number {
+  return parseTimestamp(message.timestamp) ?? parseTimestamp(envelope.timestamp) ?? fallback;
+}
+
+function parseToolDetailSections(detail: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const chunks = detail
+    .split(/\n\s*\n/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  for (const chunk of chunks) {
+    const match = /^([A-Za-z]+):\s*([\s\S]*)$/.exec(chunk);
+    if (!match) {
+      continue;
+    }
+    const key = match[1];
+    const value = match[2]?.trim() ?? "";
+    if (!value) {
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+function mergeToolDetails(current: string, incoming: string): string {
+  const a = parseToolDetailSections(current);
+  const b = parseToolDetailSections(incoming);
+  const merged: string[] = [];
+  const tool = b.Tool ?? a.Tool;
+  const detail = a.Detail ?? b.Detail;
+  const args = a.Args ?? b.Args;
+  const output = b.Output ?? a.Output;
+  if (tool) {
+    merged.push(`Tool: ${tool}`);
+  }
+  if (detail) {
+    merged.push(`Detail: ${detail}`);
+  }
+  if (args) {
+    merged.push(`Args:\n${args}`);
+  }
+  if (output) {
+    merged.push(`Output:\n${output}`);
+  }
+  return merged.join("\n\n");
 }
 
 function messageKey(message: unknown, index: number): string {

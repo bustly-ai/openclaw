@@ -16,6 +16,7 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatStreamUpdatedAt: number | null;
   lastError: string | null;
 };
 
@@ -184,6 +185,7 @@ export async function sendChatMessage(
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
+  state.chatStreamUpdatedAt = now;
 
   // Convert attachments to API format
   const apiAttachments = hasAttachments
@@ -216,6 +218,7 @@ export async function sendChatMessage(
     state.chatRunId = null;
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    state.chatStreamUpdatedAt = null;
     state.lastError = error;
     state.chatMessages = [
       ...state.chatMessages,
@@ -276,6 +279,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       const current = state.chatStream ?? "";
       if (!current || next.length >= current.length) {
         state.chatStream = next;
+        state.chatStreamUpdatedAt = Date.now();
       }
     }
   } else if (payload.state === "final") {
@@ -286,6 +290,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatStreamUpdatedAt = null;
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage) {
@@ -306,10 +311,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatStreamUpdatedAt = null;
   } else if (payload.state === "error") {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatStreamUpdatedAt = null;
     const errorMessage = payload.errorMessage ?? "chat error";
     state.lastError = errorMessage;
     const trimmed = errorMessage.trim();

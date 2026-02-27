@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { handleChatEvent, type ChatEventPayload, type ChatState } from "./chat.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
@@ -11,6 +11,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatSending: false,
     chatStream: null,
     chatStreamStartedAt: null,
+    chatStreamUpdatedAt: null,
     chatThinkingLevel: null,
     client: null,
     connected: true,
@@ -51,6 +52,30 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe(null);
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Hello");
+  });
+
+  it("updates stream text and streamUpdatedAt on delta", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 100,
+      chatStreamUpdatedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Working..." }],
+      },
+    };
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(321);
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    nowSpy.mockRestore();
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatStreamUpdatedAt).toBe(321);
   });
 
   it("appends final payload from another run without clearing active stream", () => {

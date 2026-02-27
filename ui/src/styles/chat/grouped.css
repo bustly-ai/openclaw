@@ -92,8 +92,10 @@
   font-weight: 600;
   font-size: 14px;
   flex-shrink: 0;
-  align-self: flex-end; /* Align with last message in group */
-  margin-bottom: 4px; /* Optical alignment */
+  align-self: flex-end;
+  /* Align with last message in group */
+  margin-bottom: 4px;
+  /* Optical alignment */
 }
 
 .chat-avatar.user {
@@ -274,10 +276,12 @@ img.chat-avatar {
 }
 
 @keyframes pulsing-border {
+
   0%,
   100% {
     border-color: var(--border);
   }
+
   50% {
     border-color: var(--accent);
   }
@@ -293,8 +297,125 @@ img.chat-avatar {
     opacity: 0;
     transform: translateY(4px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* =============================================
+   LINEAR CHAT FLOW (text + tool)
+   ============================================= */
+
+.chat-flow-item {
+  margin: 0 8px 10px;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.chat-flow-item--user-bubble {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.chat-flow-user-bubble {
+  max-width: min(760px, 92%);
+  border-radius: 16px;
+  padding: 0px 14px;
+  background: var(--accent-subtle);
+  border: 1px solid transparent;
+  color: var(--text);
+}
+
+:root[data-theme="light"] .chat-flow-user-bubble {
+  border-color: rgba(234, 88, 12, 0.2);
+  background: rgba(251, 146, 60, 0.12);
+}
+
+.chat-flow-item--thinking {
+  color: var(--text);
+}
+
+.chat-flow-item--tool {
+  margin: 0 8px 8px;
+  color: var(--muted);
+  border-radius: 8px;
+  max-width: 70%;
+}
+
+.chat-flow-item--tool summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-flow-tool-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-flow-item--tool summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-flow-item--tool[open] summary {
+  color: var(--text);
+}
+
+.chat-flow-tool-detail {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-flow-loader {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 8px;
+  border-radius: 999px;
+  background: var(--muted);
+  animation: chat-flow-pulse 1s ease-in-out infinite;
+  vertical-align: middle;
+}
+
+.chat-flow-item.is-running {
+  color: var(--text);
+}
+
+.chat-flow-item--text,
+.chat-flow-item--thinking {
+  max-width: 70%;
+}
+
+@keyframes chat-flow-pulse {
+
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.8);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
   }
 }
