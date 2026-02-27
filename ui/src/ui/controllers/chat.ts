@@ -1,6 +1,6 @@
+import { extractText } from "../chat/message-extract.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ChatAttachment } from "../ui-types.ts";
-import { extractText } from "../chat/message-extract.ts";
 import { generateUUID } from "../uuid.ts";
 
 export type ChatState = {
@@ -26,6 +26,37 @@ export type ChatEventPayload = {
   message?: unknown;
   errorMessage?: string;
 };
+
+function sessionKeyVariants(value: unknown): Set<string> {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  const variants = new Set<string>();
+  if (!normalized) {
+    return variants;
+  }
+  variants.add(normalized);
+  const match = /^agent:[^:]+:(.+)$/.exec(normalized);
+  if (match?.[1]) {
+    variants.add(match[1]);
+  }
+  if (normalized === "main") {
+    variants.add("agent:main:main");
+  }
+  return variants;
+}
+
+function sessionKeysMatch(a: unknown, b: unknown): boolean {
+  const aSet = sessionKeyVariants(a);
+  const bSet = sessionKeyVariants(b);
+  if (aSet.size === 0 || bSet.size === 0) {
+    return false;
+  }
+  for (const key of aSet) {
+    if (bSet.has(key)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
@@ -221,7 +252,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
-  if (payload.sessionKey !== state.sessionKey) {
+  if (!sessionKeysMatch(payload.sessionKey, state.sessionKey)) {
     return null;
   }
 

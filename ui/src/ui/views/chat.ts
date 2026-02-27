@@ -1,9 +1,6 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
-import type { SessionsListResult } from "../types.ts";
-import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
-import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
@@ -12,6 +9,9 @@ import {
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
+import type { SessionsListResult } from "../types.ts";
+import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
@@ -524,8 +524,10 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 
 function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
+  const seenMessageKeys = new Set<string>();
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  const isRunActive = Boolean(props.canAbort || props.stream !== null);
   const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
   if (historyStart > 0) {
     items.push({
@@ -577,17 +579,23 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       }
     }
 
+    const key = messageKey(msg, i);
+    seenMessageKeys.add(key);
     items.push({
       kind: "message",
-      key: messageKey(msg, i),
+      key,
       message: msg,
     });
   }
-  if (props.showThinking) {
+  if (props.showThinking || isRunActive) {
     for (let i = 0; i < tools.length; i++) {
+      const key = messageKey(tools[i], i + history.length);
+      if (seenMessageKeys.has(key)) {
+        continue;
+      }
       items.push({
         kind: "message",
-        key: messageKey(tools[i], i + history.length),
+        key,
         message: tools[i],
       });
     }

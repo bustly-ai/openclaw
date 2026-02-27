@@ -1,20 +1,9 @@
-import type { EventLogEntry } from "./app-events.ts";
-import type { OpenClawApp } from "./app.ts";
-import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
-import type { Tab } from "./navigation.ts";
-import type { UiSettings } from "./storage.ts";
-import type {
-  AgentsListResult,
-  PresenceEntry,
-  HealthSnapshot,
-  StatusSummary,
-  UpdateAvailable,
-} from "./types.ts";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
+import type { EventLogEntry } from "./app-events.ts";
 import {
   applySettings,
   loadCron,
@@ -22,12 +11,14 @@ import {
   setLastActiveSessionKey,
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
+import type { OpenClawApp } from "./app.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
 import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
 import { loadDevices } from "./controllers/devices.ts";
+import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
   addExecApproval,
   parseExecApprovalRequested,
@@ -42,6 +33,15 @@ import {
   type GatewayHelloOk,
 } from "./gateway.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
+import type { Tab } from "./navigation.ts";
+import type { UiSettings } from "./storage.ts";
+import type {
+  AgentsListResult,
+  PresenceEntry,
+  HealthSnapshot,
+  StatusSummary,
+  UpdateAvailable,
+} from "./types.ts";
 
 type GatewayHost = {
   settings: UiSettings;
@@ -84,6 +84,24 @@ type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
   scope?: string;
 };
+
+const chatHistoryReloadTimers = new WeakMap<object, number>();
+
+function scheduleChatHistoryReload(host: GatewayHost, delayMs: number) {
+  const key = host as unknown as object;
+  const existing = chatHistoryReloadTimers.get(key);
+  if (existing != null) {
+    window.clearTimeout(existing);
+  }
+  const timer = window.setTimeout(
+    () => {
+      chatHistoryReloadTimers.delete(key);
+      void loadChatHistory(host as unknown as OpenClawApp);
+    },
+    Math.max(0, delayMs),
+  );
+  chatHistoryReloadTimers.set(key, timer);
+}
 
 function normalizeSessionKeyForDefaults(
   value: string | undefined,
@@ -231,8 +249,10 @@ function handleTerminalChatEvent(
   if (state !== "final" && state !== "error" && state !== "aborted") {
     return;
   }
-  resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
   void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
+  // Force transcript resync after terminal events so UI reflects persisted state
+  // even if websocket event ordering/fields vary across runs.
+  scheduleChatHistoryReload(host, 120);
   const runId = payload?.runId;
   if (!runId || !host.refreshSessionsAfterChat.has(runId)) {
     return;
@@ -253,6 +273,10 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     );
   }
   const state = handleChatEvent(host as unknown as OpenClawApp, payload);
+  if (state === "delta") {
+    // Keep UI moving with persisted transcript during long runs.
+    scheduleChatHistoryReload(host, 450);
+  }
   handleTerminalChatEvent(host, payload, state);
   if (state === "final" && shouldReloadHistoryForFinalEvent(payload)) {
     void loadChatHistory(host as unknown as OpenClawApp);
