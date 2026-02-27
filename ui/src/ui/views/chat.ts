@@ -42,6 +42,7 @@ export type ChatProps = {
   messages: unknown[];
   toolMessages: unknown[];
   stream: string | null;
+  thinkingStream?: string | null;
   streamStartedAt: number | null;
   streamUpdatedAt?: number | null;
   assistantAvatarUrl?: string | null;
@@ -274,6 +275,13 @@ export function renderChat(props: ChatProps) {
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
   const timeline = buildTimelineNodes(props);
   const activeRunningToolKey = resolveActiveRunningToolKey(timeline);
+  const hasRunningTool = timeline.some((item) => item.kind === "tool" && item.running);
+  const hasStreamingText = props.stream !== null && props.stream.trim().length > 0;
+  const thinkingLiveText =
+    typeof props.thinkingStream === "string" && props.thinkingStream.trim().length > 0
+      ? props.thinkingStream.trim()
+      : "Thinking…";
+  const showLiveThinking = Boolean(props.canAbort) && !hasStreamingText && !hasRunningTool;
   const thread = html`
     <div
       class="chat-thread"
@@ -314,13 +322,6 @@ export function renderChat(props: ChatProps) {
                       <path d="m9 6 6 6-6 6" />
                     </svg>
                   </span>
-                  ${
-                    running
-                      ? html`
-                          <span class="chat-flow-loader" aria-hidden="true"></span>
-                        `
-                      : nothing
-                  }
                 </summary>
                 <pre class="chat-flow-tool-detail mono">${item.detail}</pre>
               </details>
@@ -342,17 +343,19 @@ export function renderChat(props: ChatProps) {
           return html`
             <div class="${className} ${item.streaming ? "is-running" : ""}">
               ${unsafeHTML(toSanitizedMarkdownHtml(item.text))}
-              ${
-                item.streaming
-                  ? html`
-                      <span class="chat-flow-loader" aria-hidden="true"></span>
-                    `
-                  : nothing
-              }
             </div>
           `;
         },
       )}
+      ${
+        showLiveThinking
+          ? html`
+              <div class="chat-flow-item chat-flow-item--thinking-live">
+                <span class="chat-flow-thinking-live">${thinkingLiveText}</span>
+              </div>
+            `
+          : nothing
+      }
     </div>
   `;
 
@@ -626,13 +629,17 @@ function buildTimelineNodes(props: ChatProps): TimelineNode[] {
         timestamp,
       );
     }
-    const toolNode = toToolNode(msg, key, timestamp);
-    if (toolNode) {
+    const toolNodes = toToolNodes(msg, key, timestamp);
+    for (const toolNode of toolNodes) {
       upsertToolNode(toolNode, timestamp);
-      continue;
     }
+
+    const isToolRole = (() => {
+      const lower = role.toLowerCase();
+      return lower === "toolresult" || lower === "tool_result" || lower === "tool";
+    })();
     const text = extractTextCached(msg);
-    if (!text?.trim()) {
+    if (!text?.trim() || isToolRole) {
       continue;
     }
     pushNode(
@@ -655,30 +662,34 @@ function buildTimelineNodes(props: ChatProps): TimelineNode[] {
       continue;
     }
     const timestamp = resolveMessageTimestamp(msg, envelope, fallbackBaseTs + history.length + i);
-    const toolNode = toToolNode(msg, key, timestamp);
-    if (!toolNode) {
+    const toolNodes = toToolNodes(msg, key, timestamp);
+    if (toolNodes.length === 0) {
       continue;
     }
-    upsertToolNode(toolNode, timestamp);
+    for (const toolNode of toolNodes) {
+      upsertToolNode(toolNode, timestamp);
+    }
   }
 
   if (props.stream !== null) {
-    const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}:text`;
     const streamTimestamp =
       props.streamUpdatedAt ??
       props.streamStartedAt ??
       fallbackBaseTs + history.length + tools.length;
-    pushNode(
-      {
-        kind: "text",
-        key,
-        timestamp: streamTimestamp,
-        text: props.stream.trim().length > 0 ? props.stream : "Thinking…",
-        tone: "assistant",
-        streaming: true,
-      },
-      streamTimestamp,
-    );
+    if (props.stream.trim().length > 0) {
+      const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}:text`;
+      pushNode(
+        {
+          kind: "text",
+          key,
+          timestamp: streamTimestamp,
+          text: props.stream,
+          tone: "assistant",
+          streaming: true,
+        },
+        streamTimestamp,
+      );
+    }
   }
 
   return nodes
@@ -699,76 +710,117 @@ function resolveActiveRunningToolKey(nodes: TimelineNode[]): string | null {
   return running[running.length - 1].key;
 }
 
-function toToolNode(message: unknown, key: string, timestamp: number): TimelineNode | null {
+function toToolNodes(
+  message: unknown,
+  key: string,
+  timestamp: number,
+): Array<Extract<TimelineNode, { kind: "tool" }>> {
   const m = message as Record<string, unknown>;
   const content = Array.isArray(m.content) ? (m.content as Array<Record<string, unknown>>) : [];
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
   const hasToolId = typeof m.toolCallId === "string" || typeof m.tool_call_id === "string";
   const hasToolRole =
     role === "toolresult" || role === "tool_result" || role === "tool" || role === "function";
-  const callItem = content.find((entry) => {
+  const callItems = content.filter((entry) => {
     const type = (typeof entry.type === "string" ? entry.type : "").toLowerCase();
     return type === "toolcall" || type === "tool_call" || type === "tooluse" || type === "tool_use";
   });
-  const resultItem = content.find((entry) => {
+  const resultItems = content.filter((entry) => {
     const type = (typeof entry.type === "string" ? entry.type : "").toLowerCase();
     return type === "toolresult" || type === "tool_result";
   });
-  if (!hasToolId && !hasToolRole && !callItem && !resultItem) {
-    return null;
+  if (!hasToolId && !hasToolRole && callItems.length === 0 && resultItems.length === 0) {
+    return [];
   }
 
-  const name =
-    (typeof callItem?.name === "string" ? callItem.name : undefined) ??
-    (typeof resultItem?.name === "string" ? resultItem.name : undefined) ??
-    (typeof m.toolName === "string" ? m.toolName : undefined) ??
-    (typeof m.tool_name === "string" ? m.tool_name : undefined) ??
-    "tool";
-  const args = callItem?.arguments ?? callItem?.args;
-  const output =
-    extractToolResultText(resultItem) ??
-    extractTextCached(message) ??
-    (typeof m.text === "string" ? m.text : "");
-  const isReadTool = name.toLowerCase() === "read";
-  const hasResultSignal =
-    Boolean(resultItem) ||
-    role === "toolresult" ||
-    role === "tool_result" ||
-    role === "tool" ||
-    role === "function";
-  const hasOutput = !isReadTool && output.trim().length > 0;
-  const completed = hasResultSignal || hasOutput;
-  const running = !completed;
-  const display = resolveToolDisplay({ name, args });
-  const detail = formatToolDetail(display);
-  const summary = detail ? `${display.name || name} ${detail}` : display.name || name;
-  const rawToolCallId =
-    (typeof m.toolCallId === "string" ? m.toolCallId : undefined) ??
-    (typeof m.tool_call_id === "string" ? m.tool_call_id : undefined) ??
-    (typeof callItem?.id === "string" ? callItem.id : undefined);
-  const mergeKey = rawToolCallId
-    ? `tool:${rawToolCallId}`
-    : `sig:${display.name || name}:${safeJson(args ?? null)}`;
-  const detailText = [
-    `Tool: ${display.label}`,
-    detail ? `Detail: ${detail}` : null,
-    args != null ? `Args:\n${safeJson(args)}` : null,
-    hasOutput ? `Output:\n${output.trim()}` : null,
-  ]
-    .filter((part): part is string => Boolean(part))
-    .join("\n\n");
-
-  return {
-    kind: "tool",
-    key: `tool-node:${key}`,
-    timestamp,
-    mergeKey,
-    summary,
-    hasOutput,
-    completed,
-    detail: detailText,
-    running,
+  const buildNode = (params: {
+    name: string;
+    args: unknown;
+    output: string;
+    hasResultSignal: boolean;
+    rawToolCallId?: string;
+    keySuffix: string;
+  }): Extract<TimelineNode, { kind: "tool" }> => {
+    const isReadTool = params.name.toLowerCase() === "read";
+    const hasOutput = !isReadTool && params.output.trim().length > 0;
+    const completed = params.hasResultSignal || hasOutput;
+    const running = !completed;
+    const display = resolveToolDisplay({ name: params.name, args: params.args });
+    const detail = formatToolDetail(display);
+    const summary = detail
+      ? `${display.name || params.name} ${detail}`
+      : display.name || params.name;
+    const mergeKey = params.rawToolCallId
+      ? `tool:${params.rawToolCallId}`
+      : `sig:${display.name || params.name}:${safeJson(params.args ?? null)}`;
+    const detailText = [
+      `Tool: ${display.label}`,
+      detail ? `Detail: ${detail}` : null,
+      params.args != null ? `Args:\n${safeJson(params.args)}` : null,
+      hasOutput ? `Output:\n${params.output.trim()}` : null,
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join("\n\n");
+    return {
+      kind: "tool",
+      key: `tool-node:${key}:${params.keySuffix}`,
+      timestamp,
+      mergeKey,
+      summary,
+      hasOutput,
+      completed,
+      detail: detailText,
+      running,
+    };
   };
+
+  const nodes: Array<Extract<TimelineNode, { kind: "tool" }>> = [];
+  for (let idx = 0; idx < callItems.length; idx++) {
+    const callItem = callItems[idx];
+    const name = typeof callItem.name === "string" ? callItem.name : "tool";
+    const args = callItem.arguments ?? callItem.args;
+    const rawToolCallId = typeof callItem.id === "string" ? callItem.id : undefined;
+    nodes.push(
+      buildNode({
+        name,
+        args,
+        output: "",
+        hasResultSignal: false,
+        rawToolCallId,
+        keySuffix: `call:${idx}`,
+      }),
+    );
+  }
+
+  if (hasToolId || hasToolRole || resultItems.length > 0) {
+    const name =
+      (typeof resultItems[0]?.name === "string" ? resultItems[0]?.name : undefined) ??
+      (typeof m.toolName === "string" ? m.toolName : undefined) ??
+      (typeof m.tool_name === "string" ? m.tool_name : undefined) ??
+      (typeof callItems[0]?.name === "string" ? callItems[0]?.name : undefined) ??
+      "tool";
+    const args = callItems[0]?.arguments ?? callItems[0]?.args;
+    const output =
+      extractToolResultText(resultItems[0]) ??
+      extractTextCached(message) ??
+      (typeof m.text === "string" ? m.text : "");
+    const rawToolCallId =
+      (typeof m.toolCallId === "string" ? m.toolCallId : undefined) ??
+      (typeof m.tool_call_id === "string" ? m.tool_call_id : undefined) ??
+      (typeof callItems[0]?.id === "string" ? callItems[0]?.id : undefined);
+    nodes.push(
+      buildNode({
+        name,
+        args,
+        output,
+        hasResultSignal: true,
+        rawToolCallId,
+        keySuffix: "result",
+      }),
+    );
+  }
+
+  return nodes;
 }
 
 function extractToolResultText(item: Record<string, unknown> | undefined): string | null {

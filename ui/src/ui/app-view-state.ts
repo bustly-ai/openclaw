@@ -68,6 +68,7 @@ export type AppViewState = {
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStream: string | null;
+  chatThinkingStream: string | null;
   chatStreamStartedAt: number | null;
   chatStreamUpdatedAt: number | null;
   chatRunId: string | null;

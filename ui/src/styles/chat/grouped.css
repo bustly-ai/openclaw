@@ -415,13 +415,21 @@ img.chat-avatar {
 
 .chat-flow-tool-summary--running {
   color: var(--text);
-  background-image: linear-gradient(90deg, var(--muted) 0%, var(--text) 45%, var(--muted) 90%);
-  background-size: 220% 100%;
-  background-position: 0% 50%;
+  /* Sweep a narrow highlight band across the text from left to right */
+  background-image: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--text) 80%, transparent) 0%,
+    color-mix(in srgb, var(--text) 80%, transparent) 38%,
+    color-mix(in srgb, var(--text) 35%, white) 50%,
+    color-mix(in srgb, var(--text) 80%, transparent) 62%,
+    color-mix(in srgb, var(--text) 80%, transparent) 100%
+  );
+  background-size: 240% 100%;
+  background-position: -140% 50%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: chat-flow-tool-shimmer 1.4s linear infinite;
+  animation: chat-flow-tool-shimmer 1.8s linear infinite;
 }
 
 .chat-flow-item--tool summary::-webkit-details-marker {
@@ -454,6 +462,29 @@ img.chat-avatar {
   background: var(--muted);
   animation: chat-flow-pulse 1s ease-in-out infinite;
   vertical-align: middle;
+}
+
+.chat-flow-item--thinking-live {
+  max-width: 70%;
+}
+
+.chat-flow-thinking-live {
+  display: inline-block;
+  color: var(--text);
+  background-image: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--text) 80%, transparent) 0%,
+    color-mix(in srgb, var(--text) 80%, transparent) 38%,
+    color-mix(in srgb, var(--text) 35%, white) 50%,
+    color-mix(in srgb, var(--text) 80%, transparent) 62%,
+    color-mix(in srgb, var(--text) 80%, transparent) 100%
+  );
+  background-size: 240% 100%;
+  background-position: 140% 50%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: chat-flow-tool-shimmer 1.8s linear infinite;
 }
 
 .chat-flow-item.is-running {
@@ -494,11 +525,11 @@ img.chat-avatar {
 
 @keyframes chat-flow-tool-shimmer {
   0% {
-    background-position: 120% 50%;
+    background-position: 140% 50%;
   }
 
   100% {
-    background-position: -120% 50%;
+    background-position: -140% 50%;
   }
 }
 
