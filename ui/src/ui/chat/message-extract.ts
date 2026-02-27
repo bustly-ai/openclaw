@@ -96,21 +96,41 @@ export function extractTextCached(message: unknown): string | null {
 
 export function extractThinking(message: unknown): string | null {
   const m = message as Record<string, unknown>;
+  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
   const content = m.content;
   const parts: string[] = [];
   if (Array.isArray(content)) {
     for (const p of content) {
       const item = p as Record<string, unknown>;
-      if (item.type === "thinking" && typeof item.thinking === "string") {
-        const cleaned = item.thinking.trim();
-        if (cleaned) {
-          parts.push(cleaned);
-        }
+      const type = typeof item.type === "string" ? item.type.toLowerCase() : "";
+      const isThinkingType = type === "thinking" || type === "reasoning";
+      if (!isThinkingType) {
+        continue;
+      }
+      const candidate =
+        typeof item.thinking === "string"
+          ? item.thinking
+          : typeof item.text === "string"
+            ? item.text
+            : typeof item.content === "string"
+              ? item.content
+              : "";
+      const cleaned = candidate.trim();
+      if (cleaned) {
+        parts.push(cleaned);
       }
     }
   }
   if (parts.length > 0) {
     return parts.join("\n");
+  }
+
+  // Some providers emit standalone thinking messages with role=thinking.
+  if (role === "thinking") {
+    const raw = extractRawText(message);
+    if (raw?.trim()) {
+      return raw.trim();
+    }
   }
 
   // Back-compat: older logs may still have <think> tags inside text blocks.

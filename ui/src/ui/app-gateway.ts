@@ -87,11 +87,14 @@ type SessionDefaultsSnapshot = {
 
 const chatHistoryReloadTimers = new WeakMap<object, number>();
 
-function scheduleChatHistoryReload(host: GatewayHost, delayMs: number) {
+function scheduleChatHistoryReload(host: GatewayHost, delayMs: number, opts?: { force?: boolean }) {
   const key = host as unknown as object;
   const existing = chatHistoryReloadTimers.get(key);
-  if (existing != null) {
+  if (existing != null && opts?.force) {
     window.clearTimeout(existing);
+  }
+  if (existing != null && !opts?.force) {
+    return;
   }
   const timer = window.setTimeout(
     () => {
@@ -254,7 +257,7 @@ function handleTerminalChatEvent(
   void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
   // Force transcript resync after terminal events so UI reflects persisted state
   // even if websocket event ordering/fields vary across runs.
-  scheduleChatHistoryReload(host, 120);
+  scheduleChatHistoryReload(host, 120, { force: true });
   const runId = payload?.runId;
   if (!runId || !host.refreshSessionsAfterChat.has(runId)) {
     return;
@@ -298,10 +301,37 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     if (host.onboarding) {
       return;
     }
-    handleAgentEvent(
-      host as unknown as Parameters<typeof handleAgentEvent>[0],
-      evt.payload as AgentEventPayload | undefined,
-    );
+    const payload = evt.payload as AgentEventPayload | undefined;
+    if (payload?.stream === "thinking") {
+      const thinkingText =
+        typeof payload.data?.text === "string"
+          ? payload.data.text
+          : typeof payload.data?.delta === "string"
+            ? (() => {
+                const current = (host as unknown as { chatThinkingStream: string | null })
+                  .chatThinkingStream;
+                return `${current ?? ""}${payload.data.delta}`;
+              })()
+            : null;
+      const runMatches =
+        !host.chatRunId || !payload.runId || String(payload.runId) === String(host.chatRunId);
+      if (thinkingText && runMatches) {
+        (host as unknown as { chatThinkingStream: string | null }).chatThinkingStream =
+          thinkingText;
+      }
+    }
+    handleAgentEvent(host as unknown as Parameters<typeof handleAgentEvent>[0], payload);
+    const stream = typeof payload?.stream === "string" ? payload.stream : "";
+    if (
+      stream === "assistant" ||
+      stream === "thinking" ||
+      stream === "tool" ||
+      stream === "lifecycle"
+    ) {
+      // Keep transcript-driven nodes (thinking/toolCall records) fresh even when
+      // chat.delta carries only plain assistant text.
+      scheduleChatHistoryReload(host, 450);
+    }
     return;
   }
 

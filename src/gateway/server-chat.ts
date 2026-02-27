@@ -277,6 +277,8 @@ export function createAgentEventHandler({
   clearAgentRunContext,
   toolEventRecipients,
 }: AgentEventHandlerOptions) {
+  const CHAT_DELTA_THROTTLE_MS = 60;
+
   const emitChatDelta = (
     sessionKey: string,
     clientRunId: string,
@@ -297,7 +299,7 @@ export function createAgentEventHandler({
     }
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
-    if (now - last < 150) {
+    if (now - last < CHAT_DELTA_THROTTLE_MS) {
       return;
     }
     chatRunState.deltaSentAt.set(clientRunId, now);

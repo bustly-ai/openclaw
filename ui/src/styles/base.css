@@ -2,25 +2,25 @@
 
 :root {
   /* Background - Warmer dark with depth */
-  --bg: #12141a;
-  --bg-accent: #14161d;
-  --bg-elevated: #1a1d25;
-  --bg-hover: #262a35;
-  --bg-muted: #262a35;
+  --bg: #171b23;
+  --bg-accent: #1b202a;
+  --bg-elevated: #222836;
+  --bg-hover: #2d3545;
+  --bg-muted: #2d3545;
 
   /* Card / Surface - More contrast between levels */
-  --card: #181b22;
+  --card: #1f2531;
   --card-foreground: #f4f4f5;
   --card-highlight: rgba(255, 255, 255, 0.05);
   --popover: #181b22;
   --popover-foreground: #f4f4f5;
 
   /* Panel */
-  --panel: #12141a;
-  --panel-strong: #1a1d25;
-  --panel-hover: #262a35;
-  --chrome: rgba(18, 20, 26, 0.95);
-  --chrome-strong: rgba(18, 20, 26, 0.98);
+  --panel: #171b23;
+  --panel-strong: #222836;
+  --panel-hover: #2d3545;
+  --chrome: rgba(23, 27, 35, 0.95);
+  --chrome-strong: rgba(23, 27, 35, 0.98);
 
   /* Text - Slightly warmer */
   --text: #e4e4e7;
@@ -31,24 +31,24 @@
   --muted-foreground: #71717a;
 
   /* Border - Subtle but defined */
-  --border: #27272a;
-  --border-strong: #3f3f46;
-  --border-hover: #52525b;
-  --input: #27272a;
+  --border: #353c4b;
+  --border-strong: #4b5568;
+  --border-hover: #64748b;
+  --input: #353c4b;
   --ring: #1a162f;
 
   /* Accent - Custom primary */
-  --accent: #1a162f;
-  --accent-hover: #241f3f;
-  --accent-muted: #1a162f;
-  --accent-subtle: rgba(26, 22, 47, 0.15);
+  --accent: #5b6ee1;
+  --accent-hover: #6f7ff0;
+  --accent-muted: #4e61d1;
+  --accent-subtle: rgba(91, 110, 225, 0.24);
   --accent-foreground: #fafafa;
-  --accent-glow: rgba(26, 22, 47, 0.25);
-  --primary: #1a162f;
+  --accent-glow: rgba(91, 110, 225, 0.35);
+  --primary: #5b6ee1;
   --primary-foreground: #ffffff;
 
   /* Secondary - Teal accent for variety */
-  --secondary: #1e2028;
+  --secondary: #252d3b;
   --secondary-foreground: #f4f4f5;
   --accent-2: #14b8a6;
   --accent-2-muted: rgba(20, 184, 166, 0.7);
@@ -69,7 +69,7 @@
   --info: #3b82f6;
 
   /* Focus - With glow */
-  --focus: rgba(26, 22, 47, 0.25);
+  --focus: rgba(91, 110, 225, 0.3);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring), 0 0 20px var(--accent-glow);
 
@@ -213,6 +213,7 @@ body {
   0% {
     clip-path: circle(0% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%));
   }
+
   100% {
     clip-path: circle(150% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%));
   }
@@ -235,6 +236,7 @@ html.theme-transition::view-transition-new(theme) {
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   html.theme-transition::view-transition-old(theme),
   html.theme-transition::view-transition-new(theme) {
     animation: none !important;
@@ -249,7 +251,7 @@ openclaw-app {
 }
 
 a {
-  color: var(--accent);
+  color: var(--info);
   text-decoration: none;
 }
 
@@ -295,6 +297,7 @@ select {
     opacity: 0;
     transform: translateY(8px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -305,6 +308,7 @@ select {
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }
@@ -315,6 +319,7 @@ select {
     opacity: 0;
     transform: scale(0.95);
   }
+
   to {
     opacity: 1;
     transform: scale(1);
@@ -326,6 +331,7 @@ select {
     opacity: 0;
     transform: translateY(12px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -336,26 +342,31 @@ select {
   0% {
     background-position: -200% 0;
   }
+
   100% {
     background-position: 200% 0;
   }
 }
 
 @keyframes pulse-subtle {
+
   0%,
   100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.7;
   }
 }
 
 @keyframes glow-pulse {
+
   0%,
   100% {
     box-shadow: 0 0 0 rgba(255, 92, 92, 0);
   }
+
   50% {
     box-shadow: 0 0 20px var(--accent-glow);
   }
@@ -365,18 +376,23 @@ select {
 .stagger-1 {
   animation-delay: 0ms;
 }
+
 .stagger-2 {
   animation-delay: 50ms;
 }
+
 .stagger-3 {
   animation-delay: 100ms;
 }
+
 .stagger-4 {
   animation-delay: 150ms;
 }
+
 .stagger-5 {
   animation-delay: 200ms;
 }
+
 .stagger-6 {
   animation-delay: 250ms;
 }

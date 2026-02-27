@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { renderCopyAsMarkdownButton } from "../chat/copy-as-markdown.ts";
 import { extractTextCached, extractThinkingCached } from "../chat/message-extract.ts";
 import { normalizeMessage } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
@@ -330,7 +331,8 @@ export function renderChat(props: ChatProps) {
           if (item.tone === "user") {
             return html`
               <div class="chat-flow-item chat-flow-item--user-bubble">
-                <div class="chat-flow-user-bubble">
+                <div class="chat-flow-user-bubble has-copy">
+                  ${renderCopyAsMarkdownButton(item.text)}
                   ${unsafeHTML(toSanitizedMarkdownHtml(item.text))}
                 </div>
               </div>
@@ -340,8 +342,9 @@ export function renderChat(props: ChatProps) {
             item.tone === "thinking"
               ? "chat-flow-item chat-flow-item--thinking"
               : "chat-flow-item chat-flow-item--text";
+          const isErrorText = item.tone !== "user" && /^(error:|err:)/i.test(item.text.trim());
           return html`
-            <div class="${className} ${item.streaming ? "is-running" : ""}">
+            <div class="${className} ${item.streaming ? "is-running" : ""} ${isErrorText ? "chat-flow-item--error" : ""}">
               ${unsafeHTML(toSanitizedMarkdownHtml(item.text))}
             </div>
           `;
@@ -540,7 +543,7 @@ function buildTimelineNodes(props: ChatProps): TimelineNode[] {
       pushNode(toolNode, timestamp);
       return;
     }
-    const current = existing.node;
+    const current = existing.node as Extract<TimelineNode, { kind: "tool" }>;
     const completed = current.completed || toolNode.completed;
     const summary =
       toolNode.summary.length > current.summary.length ? toolNode.summary : current.summary;
@@ -638,8 +641,23 @@ function buildTimelineNodes(props: ChatProps): TimelineNode[] {
       const lower = role.toLowerCase();
       return lower === "toolresult" || lower === "tool_result" || lower === "tool";
     })();
-    const text = extractTextCached(msg);
+    const text = extractTextCached(msg) ?? extractAssistantErrorFallback(msg);
     if (!text?.trim() || isToolRole) {
+      continue;
+    }
+    if (role === "thinking") {
+      if (!thinking) {
+        pushNode(
+          {
+            kind: "text",
+            key: `thinking:${key}:fallback`,
+            timestamp,
+            text,
+            tone: "thinking",
+          },
+          timestamp,
+        );
+      }
       continue;
     }
     pushNode(
@@ -692,11 +710,12 @@ function buildTimelineNodes(props: ChatProps): TimelineNode[] {
     }
   }
 
-  return nodes
+  const ordered = nodes
     .toSorted((a, b) =>
       a.timestamp === b.timestamp ? a.order - b.order : a.timestamp - b.timestamp,
     )
     .map((entry) => entry.node);
+  return moveActiveRunningToolToEnd(ordered);
 }
 
 function resolveActiveRunningToolKey(nodes: TimelineNode[]): string | null {
@@ -708,6 +727,44 @@ function resolveActiveRunningToolKey(nodes: TimelineNode[]): string | null {
     return null;
   }
   return running[running.length - 1].key;
+}
+
+function moveActiveRunningToolToEnd(nodes: TimelineNode[]): TimelineNode[] {
+  const activeKey = resolveActiveRunningToolKey(nodes);
+  if (!activeKey) {
+    return nodes;
+  }
+  const idx = nodes.findIndex((node) => node.kind === "tool" && node.key === activeKey);
+  if (idx < 0 || idx === nodes.length - 1) {
+    return nodes;
+  }
+  const next = [...nodes];
+  const [activeNode] = next.splice(idx, 1);
+  next.push(activeNode);
+  return next;
+}
+
+function extractAssistantErrorFallback(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const m = message as Record<string, unknown>;
+  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
+  if (role !== "assistant") {
+    return null;
+  }
+  const stopReason = typeof m.stopReason === "string" ? m.stopReason.toLowerCase() : "";
+  const rawError =
+    (typeof m.errorMessage === "string" ? m.errorMessage : undefined) ??
+    (typeof m.error_message === "string" ? m.error_message : undefined);
+  const error = rawError?.trim();
+  if (!error) {
+    return null;
+  }
+  if (stopReason && stopReason !== "error") {
+    return null;
+  }
+  return /^(error:|err:)/i.test(error) ? error : `Error: ${error}`;
 }
 
 function toToolNodes(

@@ -89,6 +89,24 @@ describe("agent event handler", () => {
     return harness;
   }
 
+  function emitRun1ThinkingText(
+    harness: ReturnType<typeof createHarness>,
+    text: string,
+  ): ReturnType<typeof createHarness> {
+    harness.chatRunState.registry.add("run-1", {
+      sessionKey: "session-1",
+      clientRunId: "client-1",
+    });
+    harness.handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text },
+    });
+    return harness;
+  }
+
   function chatBroadcastCalls(broadcast: ReturnType<typeof vi.fn>) {
     return broadcast.mock.calls.filter(([event]) => event === "chat");
   }
@@ -171,6 +189,17 @@ describe("agent event handler", () => {
     expect(payload.state).toBe("delta");
     expect(payload.message?.content?.[0]?.text).toBe("Hello world");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("does not emit chat delta for thinking stream events", () => {
+    const { broadcast, nodeSendToSession, nowSpy } = emitRun1ThinkingText(
+      createHarness({ now: 1_000 }),
+      "Analyzing request",
+    );
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(0);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy?.mockRestore();
   });
 

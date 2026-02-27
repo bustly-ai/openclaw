@@ -79,6 +79,27 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamUpdatedAt).toBe(321);
   });
 
+  it("updates thinking stream on delta thinking content", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatThinkingStream: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Plan first" }],
+      },
+    };
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatThinkingStream).toBe("Plan first");
+    expect(state.chatStream).toBe("");
+  });
+
   it("appends final payload from another run without clearing active stream", () => {
     const state = createState({
       sessionKey: "main",

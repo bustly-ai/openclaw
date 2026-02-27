@@ -201,7 +201,8 @@ img.chat-avatar {
   opacity: 1;
 }
 
-.chat-bubble:hover .chat-copy-btn {
+.chat-bubble:hover .chat-copy-btn,
+.chat-flow-user-bubble:hover .chat-copy-btn {
   opacity: 1;
   pointer-events: auto;
 }
@@ -276,6 +277,7 @@ img.chat-avatar {
 }
 
 @keyframes pulsing-border {
+
   0%,
   100% {
     border-color: var(--border);
@@ -320,21 +322,21 @@ img.chat-avatar {
 }
 
 .chat-flow-user-bubble {
+  position: relative;
   max-width: min(760px, 92%);
   border-radius: 16px;
-  padding: 0px 14px;
-  background: var(--accent-subtle);
+  padding: 10px 14px;
+  background: var(--bg-muted);
   border: 1px solid transparent;
   color: var(--text);
 }
 
-:root[data-theme="light"] .chat-flow-user-bubble {
-  border-color: rgba(234, 88, 12, 0.2);
-  background: rgba(251, 146, 60, 0.12);
+.chat-flow-user-bubble.has-copy {
+  padding-right: 36px;
 }
 
 .chat-flow-item--thinking {
-  color: var(--text);
+  color: var(--muted);
 }
 
 .chat-flow-item--tool {
@@ -416,14 +418,12 @@ img.chat-avatar {
 .chat-flow-tool-summary--running {
   color: var(--text);
   /* Sweep a narrow highlight band across the text from left to right */
-  background-image: linear-gradient(
-    100deg,
-    color-mix(in srgb, var(--text) 80%, transparent) 0%,
-    color-mix(in srgb, var(--text) 80%, transparent) 38%,
-    color-mix(in srgb, var(--text) 35%, white) 50%,
-    color-mix(in srgb, var(--text) 80%, transparent) 62%,
-    color-mix(in srgb, var(--text) 80%, transparent) 100%
-  );
+  background-image: linear-gradient(100deg,
+      color-mix(in srgb, var(--text) 80%, transparent) 0%,
+      color-mix(in srgb, var(--text) 80%, transparent) 38%,
+      color-mix(in srgb, var(--text) 35%, white) 50%,
+      color-mix(in srgb, var(--text) 80%, transparent) 62%,
+      color-mix(in srgb, var(--text) 80%, transparent) 100%);
   background-size: 240% 100%;
   background-position: -140% 50%;
   -webkit-background-clip: text;
@@ -470,15 +470,13 @@ img.chat-avatar {
 
 .chat-flow-thinking-live {
   display: inline-block;
-  color: var(--text);
-  background-image: linear-gradient(
-    100deg,
-    color-mix(in srgb, var(--text) 80%, transparent) 0%,
-    color-mix(in srgb, var(--text) 80%, transparent) 38%,
-    color-mix(in srgb, var(--text) 35%, white) 50%,
-    color-mix(in srgb, var(--text) 80%, transparent) 62%,
-    color-mix(in srgb, var(--text) 80%, transparent) 100%
-  );
+  color: var(--muted);
+  background-image: linear-gradient(100deg,
+      color-mix(in srgb, var(--muted) 88%, transparent) 0%,
+      color-mix(in srgb, var(--muted) 88%, transparent) 38%,
+      color-mix(in srgb, var(--text) 28%, var(--muted) 72%) 50%,
+      color-mix(in srgb, var(--muted) 88%, transparent) 62%,
+      color-mix(in srgb, var(--muted) 88%, transparent) 100%);
   background-size: 240% 100%;
   background-position: 140% 50%;
   -webkit-background-clip: text;
@@ -496,11 +494,37 @@ img.chat-avatar {
   max-width: 70%;
 }
 
+.chat-flow-item--text {
+  color: var(--text-strong);
+}
+
+.chat-flow-item--error {
+  color: var(--danger);
+}
+
+.chat-flow-item--text :where(p, h1, h2, h3, h4, h5, h6, ul, ol, pre, blockquote, hr, table),
+.chat-flow-item--thinking :where(p, h1, h2, h3, h4, h5, h6, ul, ol, pre, blockquote, hr, table),
+.chat-flow-user-bubble :where(p, h1, h2, h3, h4, h5, h6, ul, ol, pre, blockquote, hr, table) {
+  margin-block: 0.5em;
+}
+
+.chat-flow-item--text :where(li),
+.chat-flow-item--thinking :where(li),
+.chat-flow-user-bubble :where(li) {
+  margin-block: 0.12em;
+}
+
+.chat-flow-item--text :where(ul, ol),
+.chat-flow-item--thinking :where(ul, ol),
+.chat-flow-user-bubble :where(ul, ol) {
+  padding-inline-start: 1.25em;
+}
+
 /* Markdown table styles for linear flow nodes */
 .chat-flow-item--text :where(table),
 .chat-flow-item--thinking :where(table),
 .chat-flow-user-bubble :where(table) {
-  margin-top: 0.5em;
+  margin: 1em 0;
   border-collapse: collapse;
   width: 100%;
   font-size: 13px;
@@ -523,6 +547,24 @@ img.chat-avatar {
   background: var(--secondary);
 }
 
+.chat-flow-item--text :where(img),
+.chat-flow-item--thinking :where(img),
+.chat-flow-user-bubble :where(img) {
+  display: block;
+  max-width: min(100%, 360px);
+  max-height: 280px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.chat-flow-item--text :where(a),
+.chat-flow-item--thinking :where(a),
+.chat-flow-user-bubble :where(a) {
+  color: inherit;
+}
+
 @keyframes chat-flow-tool-shimmer {
   0% {
     background-position: 140% 50%;
@@ -534,6 +576,7 @@ img.chat-avatar {
 }
 
 @keyframes chat-flow-pulse {
+
   0%,
   100% {
     opacity: 0.25;
