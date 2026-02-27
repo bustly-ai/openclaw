@@ -309,6 +309,11 @@ export function renderChat(props: ChatProps) {
                   <span class="chat-flow-tool-summary ${running ? "chat-flow-tool-summary--running" : "chat-flow-tool-summary--done"}">
                     ${running ? `Running ${item.summary}` : `Completed ${item.summary}`}
                   </span>
+                  <span class="chat-flow-tool-chevron" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <path d="m9 6 6 6-6 6" />
+                    </svg>
+                  </span>
                   ${
                     running
                       ? html`

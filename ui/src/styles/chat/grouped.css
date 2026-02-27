@@ -276,7 +276,6 @@ img.chat-avatar {
 }
 
 @keyframes pulsing-border {
-
   0%,
   100% {
     border-color: var(--border);
@@ -309,7 +308,7 @@ img.chat-avatar {
    ============================================= */
 
 .chat-flow-item {
-  margin: 0 8px 10px;
+  margin: 0 8px;
   color: var(--text);
   font-size: 15px;
   line-height: 1.55;
@@ -339,10 +338,10 @@ img.chat-avatar {
 }
 
 .chat-flow-item--tool {
-  margin: 0 8px 8px;
+  margin: 0 8px;
   color: var(--muted);
   border-radius: 8px;
-  max-width: 70%;
+  max-width: 40%;
 }
 
 .chat-flow-item--tool summary {
@@ -352,17 +351,77 @@ img.chat-avatar {
   font-size: 14px;
   line-height: 1.45;
   user-select: none;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  max-width: 100%;
+  transition: color 160ms ease;
 }
 
 .chat-flow-tool-summary {
-  flex: 1 1 auto;
-  min-width: 0;
+  display: inline-block;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-flow-tool-chevron {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  color: currentColor;
+  opacity: 0;
+  transform: translateX(-2px) rotate(0deg);
+  transition:
+    opacity 160ms ease,
+    transform 180ms ease;
+}
+
+.chat-flow-tool-chevron svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-flow-item--tool:hover summary {
+  color: var(--text);
+}
+
+.chat-flow-item--tool:hover .chat-flow-tool-chevron,
+.chat-flow-item--tool[open] .chat-flow-tool-chevron {
+  opacity: 1;
+  transform: translateX(0) rotate(0deg);
+}
+
+.chat-flow-item--tool[open] .chat-flow-tool-chevron {
+  transform: translateX(0) rotate(90deg);
+}
+
+.chat-flow-tool-summary--done {
+  color: var(--muted);
+  transition: color 160ms ease;
+}
+
+.chat-flow-item--tool:hover .chat-flow-tool-summary--done,
+.chat-flow-item--tool[open] .chat-flow-tool-summary--done {
+  color: var(--text);
+}
+
+.chat-flow-tool-summary--running {
+  color: var(--text);
+  background-image: linear-gradient(90deg, var(--muted) 0%, var(--text) 45%, var(--muted) 90%);
+  background-size: 220% 100%;
+  background-position: 0% 50%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: chat-flow-tool-shimmer 1.4s linear infinite;
 }
 
 .chat-flow-item--tool summary::-webkit-details-marker {
@@ -374,7 +433,7 @@ img.chat-avatar {
 }
 
 .chat-flow-tool-detail {
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   padding: 10px 12px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -406,8 +465,44 @@ img.chat-avatar {
   max-width: 70%;
 }
 
-@keyframes chat-flow-pulse {
+/* Markdown table styles for linear flow nodes */
+.chat-flow-item--text :where(table),
+.chat-flow-item--thinking :where(table),
+.chat-flow-user-bubble :where(table) {
+  margin-top: 0.5em;
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
 
+.chat-flow-item--text :where(th, td),
+.chat-flow-item--thinking :where(th, td),
+.chat-flow-user-bubble :where(th, td) {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  vertical-align: top;
+}
+
+.chat-flow-item--text :where(th),
+.chat-flow-item--thinking :where(th),
+.chat-flow-user-bubble :where(th) {
+  font-family: var(--mono);
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--secondary);
+}
+
+@keyframes chat-flow-tool-shimmer {
+  0% {
+    background-position: 120% 50%;
+  }
+
+  100% {
+    background-position: -120% 50%;
+  }
+}
+
+@keyframes chat-flow-pulse {
   0%,
   100% {
     opacity: 0.25;
