@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
-import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import {
@@ -36,6 +36,12 @@ export async function prependSystemEvents(params: {
     }
     // Also filter heartbeat poll/wake noise
     if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) {
+      return null;
+    }
+    if (
+      lower.startsWith("whatsapp gateway connected") ||
+      lower.startsWith("whatsapp gateway disconnected")
+    ) {
       return null;
     }
     if (trimmed.startsWith("Node:")) {

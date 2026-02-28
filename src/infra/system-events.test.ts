@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { prependSystemEvents } from "../auto-reply/reply/session-updates.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
 import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
@@ -45,6 +45,25 @@ describe("system events (session routing)", () => {
 
   it("requires an explicit session key", () => {
     expect(() => enqueueSystemEvent("Node: Mac Studio", { sessionKey: " " })).toThrow("sessionKey");
+  });
+
+  it("filters whatsapp gateway connectivity noise from prompt prefix", async () => {
+    enqueueSystemEvent("WhatsApp gateway disconnected (status 440)", {
+      sessionKey: mainKey,
+    });
+    enqueueSystemEvent("WhatsApp gateway connected.", {
+      sessionKey: mainKey,
+    });
+
+    const result = await prependSystemEvents({
+      cfg,
+      sessionKey: mainKey,
+      isMainSession: true,
+      isNewSession: false,
+      prefixedBodyBase: "hello",
+    });
+
+    expect(result).toBe("hello");
   });
 });
 

@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { Socket } from "node:net";
+import { Socket, createServer } from "node:net";
 import updater from "electron-updater";
 import {
   initializeOpenClaw,
@@ -403,6 +403,61 @@ function loadGatewayConfig(): { port: number; bind: string; token?: string } | n
   }
 }
 
+function resolveGatewayProbeHost(bind: string): string {
+  return bind === "loopback" ? "127.0.0.1" : "0.0.0.0";
+}
+
+async function isGatewayPortAvailable(port: number, bind: string): Promise<boolean> {
+  const host = resolveGatewayProbeHost(bind);
+  return await new Promise<boolean>((resolve) => {
+    const server = createServer();
+    let settled = false;
+    const finish = (available: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      try {
+        server.close(() => resolve(available));
+      } catch {
+        resolve(available);
+      }
+    };
+    server.once("error", (error) => {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EADDRINUSE" || code === "EACCES") {
+        finish(false);
+        return;
+      }
+      writeMainLog(
+        `Gateway port probe failed for ${host}:${port}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      finish(false);
+    });
+    server.once("listening", () => finish(true));
+    server.listen(port, host);
+  });
+}
+
+async function resolveGatewayStartupPort(
+  preferredPort: number,
+  bind: string,
+  maxAttempts = 20,
+): Promise<{ port: number; switched: boolean }> {
+  if (await isGatewayPortAvailable(preferredPort, bind)) {
+    return { port: preferredPort, switched: false };
+  }
+  for (let offset = 1; offset <= maxAttempts; offset += 1) {
+    const candidate = preferredPort + offset;
+    if (await isGatewayPortAvailable(candidate, bind)) {
+      return { port: candidate, switched: true };
+    }
+  }
+  throw new Error(
+    `Gateway startup aborted: port ${preferredPort} is occupied and no fallback port in ${preferredPort + 1}-${preferredPort + maxAttempts} is available.`,
+  );
+}
+
 /**
  * Start the OpenClaw Gateway process
  */
@@ -410,43 +465,53 @@ async function startGateway(): Promise<boolean> {
   const oauthCallbackPort = await startOAuthCallbackServer();
   console.log("[Bustly] OAuth callback server started on port", oauthCallbackPort);
 
-  return new Promise((resolvePromise, reject) => {
-    const startAt = Date.now();
-    if (gatewayProcess) {
-      console.log("Gateway already running");
-      writeMainLog("Gateway already running");
-      resolvePromise(true);
-      return;
+  const startAt = Date.now();
+  if (gatewayProcess) {
+    console.log("Gateway already running");
+    writeMainLog("Gateway already running");
+    return true;
+  }
+
+  const cliPath = resolveOpenClawCliPath({
+    info: (message) => console.log(message),
+    error: (message) => console.error(message),
+  });
+  if (!cliPath) {
+    throw new Error("OpenClaw CLI not found");
+  }
+
+  console.log(`Starting gateway with CLI: ${cliPath}`);
+
+  // Try to load config first, otherwise use initialization result or defaults
+  const loadedConfig = loadGatewayConfig();
+  if (loadedConfig) {
+    gatewayPort = loadedConfig.port;
+    gatewayBind = loadedConfig.bind;
+    // Ensure token is loaded
+    if (loadedConfig.token) {
+      gatewayToken = loadedConfig.token;
     }
-
-    const cliPath = resolveOpenClawCliPath({
-      info: (message) => console.log(message),
-      error: (message) => console.error(message),
-    });
-    if (!cliPath) {
-      reject(new Error("OpenClaw CLI not found"));
-      return;
+  } else if (initResult) {
+    gatewayPort = initResult.gatewayPort;
+    gatewayBind = initResult.gatewayBind;
+    if (initResult.gatewayToken) {
+      gatewayToken = initResult.gatewayToken;
     }
+  }
 
-    console.log(`Starting gateway with CLI: ${cliPath}`);
+  const preferredGatewayPort = gatewayPort;
+  const { port: selectedGatewayPort, switched } = await resolveGatewayStartupPort(
+    preferredGatewayPort,
+    gatewayBind,
+  );
+  if (switched) {
+    const warning = `Preferred gateway port ${preferredGatewayPort} is occupied; switching to ${selectedGatewayPort}.`;
+    console.warn(`[Gateway] ${warning}`);
+    writeMainLog(`[Gateway] ${warning}`);
+  }
+  gatewayPort = selectedGatewayPort;
 
-    // Try to load config first, otherwise use initialization result or defaults
-    const loadedConfig = loadGatewayConfig();
-    if (loadedConfig) {
-      gatewayPort = loadedConfig.port;
-      gatewayBind = loadedConfig.bind;
-      // Ensure token is loaded
-      if (loadedConfig.token) {
-        gatewayToken = loadedConfig.token;
-      }
-    } else if (initResult) {
-      gatewayPort = initResult.gatewayPort;
-      gatewayBind = initResult.gatewayBind;
-      if (initResult.gatewayToken) {
-        gatewayToken = initResult.gatewayToken;
-      }
-    }
-
+  return await new Promise((resolvePromise, reject) => {
     console.log(`Starting gateway on port ${gatewayPort} with bind=${gatewayBind}`);
     console.log(`Authentication: ${loadedConfig?.token ? "token" : "none (local development mode)"}`);
 

@@ -483,8 +483,7 @@ export function renderChat(props: ChatProps) {
   );
   const thinkingLiveText = hasThinkingStream ? props.thinkingStream.trim() : "Thinking…";
   const hasInFlightTurn = Boolean(props.canAbort) || props.sending || props.streamStartedAt != null;
-  const showLiveThinking =
-    (hasInFlightTurn || hasThinkingStream) && !hasStreamingText && !hasRunningTool;
+  const showLiveThinking = hasInFlightTurn && !hasStreamingText && !hasRunningTool;
   const thread = html`
     <div
       class="chat-thread"
@@ -773,8 +772,7 @@ function buildTimelineNodes(props: ChatProps): TimelineNode[] {
     const key = messageKey(rawEntry, i);
     seenMessageKeys.add(key);
     const role = normalized.role.toLowerCase();
-    const stopReason =
-      typeof msg?.stopReason === "string" ? (msg.stopReason as string).toLowerCase() : "";
+    const stopReason = typeof msg?.stopReason === "string" ? msg.stopReason.toLowerCase() : "";
     const isFinalMessage = role === "assistant" && stopReason === "stop";
     const thinking = extractThinkingCached(msg);
     if (thinking) {
