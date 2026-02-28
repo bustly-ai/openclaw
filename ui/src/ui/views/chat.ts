@@ -281,6 +281,35 @@ function formatProcessedDuration(durationMs: number | null | undefined): string 
   return `${minutes}m ${seconds}s`;
 }
 
+function formatUserBubbleTimestamp(timestamp: number): string {
+  if (!Number.isFinite(timestamp)) {
+    return "";
+  }
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const now = new Date();
+  const isToday =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  if (isToday) {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(date);
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
 function renderTimelineNode(item: TimelineNode, activeRunningToolKey: string | null) {
   if (item.kind === "divider") {
     return html`
@@ -335,12 +364,16 @@ function renderTimelineNode(item: TimelineNode, activeRunningToolKey: string | n
     `;
   }
   if (item.tone === "user") {
+    const timeLabel = formatUserBubbleTimestamp(item.timestamp);
     return html`
       <div class="chat-flow-item chat-flow-item--user-bubble">
         <div class="chat-flow-user-bubble has-copy">
           ${renderCopyAsMarkdownButton(item.text)}
           ${unsafeHTML(toSanitizedMarkdownHtml(item.text))}
         </div>
+        ${timeLabel
+          ? html`<div class="chat-flow-user-time" aria-label="Message time">${timeLabel}</div>`
+          : nothing}
       </div>
     `;
   }
@@ -443,11 +476,16 @@ export function renderChat(props: ChatProps) {
   const activeRunningToolKey = resolveActiveRunningToolKey(timeline);
   const hasRunningTool = timeline.some((item) => item.kind === "tool" && item.running);
   const hasStreamingText = props.stream !== null && props.stream.trim().length > 0;
+  const hasThinkingStream = Boolean(
+    typeof props.thinkingStream === "string" && props.thinkingStream.trim().length > 0,
+  );
   const thinkingLiveText =
-    typeof props.thinkingStream === "string" && props.thinkingStream.trim().length > 0
+    hasThinkingStream
       ? props.thinkingStream.trim()
       : "Thinking…";
-  const showLiveThinking = Boolean(props.canAbort) && !hasStreamingText && !hasRunningTool;
+  const hasInFlightTurn = Boolean(props.canAbort) || props.sending;
+  const showLiveThinking =
+    (hasInFlightTurn || hasThinkingStream) && !hasStreamingText && !hasRunningTool;
   const thread = html`
     <div
       class="chat-thread"
@@ -898,7 +936,10 @@ function toToolNodes(
   const m = message as Record<string, unknown>;
   const content = Array.isArray(m.content) ? (m.content as Array<Record<string, unknown>>) : [];
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
-  const hasToolId = typeof m.toolCallId === "string" || typeof m.tool_call_id === "string";
+  const messageToolCallId =
+    (typeof m.toolCallId === "string" ? m.toolCallId : undefined) ??
+    (typeof m.tool_call_id === "string" ? m.tool_call_id : undefined);
+  const hasToolId = Boolean(messageToolCallId);
   const hasToolRole =
     role === "toolresult" || role === "tool_result" || role === "tool" || role === "function";
   const callItems = content.filter((entry) => {
@@ -959,7 +1000,8 @@ function toToolNodes(
     const callItem = callItems[idx];
     const name = typeof callItem.name === "string" ? callItem.name : "tool";
     const args = callItem.arguments ?? callItem.args;
-    const rawToolCallId = typeof callItem.id === "string" ? callItem.id : undefined;
+    const rawToolCallId =
+      (typeof callItem.id === "string" ? callItem.id : undefined) ?? messageToolCallId;
     nodes.push(
       buildNode({
         name,
@@ -985,8 +1027,7 @@ function toToolNodes(
       extractTextCached(message) ??
       (typeof m.text === "string" ? m.text : "");
     const rawToolCallId =
-      (typeof m.toolCallId === "string" ? m.toolCallId : undefined) ??
-      (typeof m.tool_call_id === "string" ? m.tool_call_id : undefined) ??
+      messageToolCallId ??
       (typeof callItems[0]?.id === "string" ? callItems[0]?.id : undefined);
     nodes.push(
       buildNode({

@@ -172,12 +172,14 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
   const content: Array<Record<string, unknown>> = [];
   content.push({
     type: "toolcall",
+    id: entry.toolCallId,
     name: entry.name,
     arguments: entry.args ?? {},
   });
   if (entry.output) {
     content.push({
       type: "toolresult",
+      toolCallId: entry.toolCallId,
       name: entry.name,
       text: entry.output,
     });
@@ -398,9 +400,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
-  if (payload.stream !== "tool") {
-    return;
-  }
   const accepted = resolveAcceptedSession(host, payload);
   if (!accepted.accepted) {
     return;

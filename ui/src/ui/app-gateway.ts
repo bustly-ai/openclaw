@@ -302,11 +302,15 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       return;
     }
     const payload = evt.payload as AgentEventPayload | undefined;
-    if (payload?.stream === "thinking") {
+    if (payload) {
       const thinkingText =
-        typeof payload.data?.text === "string"
-          ? payload.data.text
-          : typeof payload.data?.delta === "string"
+        typeof payload.data?.thinking === "string"
+          ? payload.data.thinking
+          : typeof payload.data?.reasoning === "string"
+            ? payload.data.reasoning
+            : typeof payload.data?.text === "string"
+              ? payload.data.text
+              : typeof payload.data?.delta === "string"
             ? (() => {
                 const current = (host as unknown as { chatThinkingStream: string | null })
                   .chatThinkingStream;
@@ -315,23 +319,19 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
             : null;
       const runMatches =
         !host.chatRunId || !payload.runId || String(payload.runId) === String(host.chatRunId);
-      if (thinkingText && runMatches) {
+      const hasExplicitReasoningField =
+        typeof payload.data?.thinking === "string" || typeof payload.data?.reasoning === "string";
+      if (thinkingText && runMatches && (payload.stream === "thinking" || hasExplicitReasoningField)) {
         (host as unknown as { chatThinkingStream: string | null }).chatThinkingStream =
           thinkingText;
       }
     }
     handleAgentEvent(host as unknown as Parameters<typeof handleAgentEvent>[0], payload);
-    const stream = typeof payload?.stream === "string" ? payload.stream : "";
-    if (
-      stream === "assistant" ||
-      stream === "thinking" ||
-      stream === "tool" ||
-      stream === "lifecycle"
-    ) {
-      // Keep transcript-driven nodes (thinking/toolCall records) fresh even when
-      // chat.delta carries only plain assistant text.
-      scheduleChatHistoryReload(host, 450);
-    }
+    // Keep transcript-driven nodes (thinking/toolCall records) fresh even when
+    // chat.delta carries only plain assistant text.
+    // Fallback: sync on any agent event so providers with different stream shapes
+    // (e.g. non-continuous thinking/tool deltas) still appear promptly.
+    scheduleChatHistoryReload(host, 300);
     return;
   }
 
