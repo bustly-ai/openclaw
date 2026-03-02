@@ -194,16 +194,16 @@ export function handleMessageUpdate(
     const hasAudio = Boolean(parsedDelta?.audioAsVoice);
     const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
 
-    let shouldEmit = false;
     let deltaText = "";
     if (!cleanedText && !hasMedia && !hasAudio) {
-      shouldEmit = false;
-    } else if (previousCleaned && !cleanedText.startsWith(previousCleaned)) {
-      shouldEmit = false;
-    } else {
+      deltaText = "";
+    } else if (previousCleaned && cleanedText.startsWith(previousCleaned)) {
       deltaText = cleanedText.slice(previousCleaned.length);
-      shouldEmit = Boolean(deltaText || hasMedia || hasAudio);
+    } else {
+      // Do not suppress non-prefix updates; emit full current text so clients stay in sync.
+      deltaText = cleanedText;
     }
+    const shouldEmit = Boolean(deltaText || hasMedia || hasAudio);
 
     ctx.state.lastStreamedAssistant = next;
     ctx.state.lastStreamedAssistantCleaned = cleanedText;

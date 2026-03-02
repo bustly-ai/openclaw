@@ -1,7 +1,6 @@
 import { truncateText } from "./format.ts";
 
 const TOOL_STREAM_LIMIT = 50;
-const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
 
 export type AgentEventPayload = {
@@ -225,13 +224,7 @@ export function scheduleToolStreamSync(host: ToolStreamHost, force = false) {
     flushToolStreamSync(host);
     return;
   }
-  if (host.toolStreamSyncTimer != null) {
-    return;
-  }
-  host.toolStreamSyncTimer = window.setTimeout(
-    () => flushToolStreamSync(host),
-    TOOL_STREAM_THROTTLE_MS,
-  );
+  flushToolStreamSync(host);
 }
 
 export function resetToolStream(host: ToolStreamHost) {

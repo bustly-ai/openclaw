@@ -18,7 +18,7 @@ import type {
 } from "./pi-embedded-subscribe.handlers.types.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
-import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
+import { stripDowngradedToolCallText } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
@@ -542,18 +542,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const emitReasoningStream = (text: string) => {
-    const formatted = formatReasoningMessage(text);
-    if (!formatted) {
+    const normalized = text.trim();
+    if (!normalized) {
       return;
     }
-    if (formatted === state.lastStreamedReasoning) {
+    if (normalized === state.lastStreamedReasoning) {
       return;
     }
     // Compute delta: new text since the last emitted reasoning.
     // Guard against non-prefix changes (e.g. trim/format altering earlier content).
     const prior = state.lastStreamedReasoning ?? "";
-    const delta = formatted.startsWith(prior) ? formatted.slice(prior.length) : formatted;
-    state.lastStreamedReasoning = formatted;
+    const delta = normalized.startsWith(prior) ? normalized.slice(prior.length) : normalized;
+    state.lastStreamedReasoning = normalized;
 
     if (state.emitReasoningAgentEvents) {
       // Broadcast thinking event to WebSocket clients in real-time when explicitly enabled.
@@ -561,7 +561,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         runId: params.runId,
         stream: "thinking",
         data: {
-          text: formatted,
+          text: normalized,
           delta,
         },
       });
@@ -569,7 +569,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
     if (state.streamReasoning) {
       void params.onReasoningStream?.({
-        text: formatted,
+        text: normalized,
       });
     }
   };

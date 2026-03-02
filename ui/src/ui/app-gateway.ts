@@ -248,8 +248,6 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       return;
     }
     const payload = evt.payload as AgentEventPayload | undefined;
-    const normalizeThinkingText = (value: string): string =>
-      value.replace(/^Reasoning:\s*\n?/i, "").trimStart();
     const mergeMonotonicStream = (params: {
       current: string;
       text: string | null;
@@ -372,8 +370,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
           (host as unknown as { chatThinkingStream: string | null }).chatThinkingStream ?? "";
         const next = mergeMonotonicStream({ current, text, delta });
         if (next != null) {
-          (host as unknown as { chatThinkingStream: string | null }).chatThinkingStream =
-            normalizeThinkingText(next);
+          (host as unknown as { chatThinkingStream: string | null }).chatThinkingStream = next;
           (host as unknown as { chatThinkingStreamSeq: number | null }).chatThinkingStreamSeq =
             typeof payload.seq === "number" ? payload.seq : null;
           if (
