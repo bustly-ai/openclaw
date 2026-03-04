@@ -7,7 +7,7 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "
 import { resolve } from "node:path";
 import * as os from "node:os";
 import type { BustlyOAuthState, BustlySearchDataConfig } from "../../../../src/config/types.base.js";
-import { verifyBustlyAuth } from "./api/bustly.js";
+import { verifySupabaseAuth } from "./api/bustly.js";
 
 function resolveUserPath(input: string, homeDir: string): string {
   const trimmed = input.trim();
@@ -124,29 +124,26 @@ export async function getBustlyUserInfo(): Promise<BustlyOAuthState["user"] | nu
  */
 export async function verifyBustlyLoginStatus(): Promise<boolean> {
   const state = readBustlyOAuthState();
+  const supabaseUrl = state?.bustlySearchData?.SEARCH_DATA_SUPABASE_URL?.trim() ?? "";
+  const supabaseAnonKey = state?.bustlySearchData?.SEARCH_DATA_SUPABASE_ANON_KEY?.trim() ?? "";
   const accessToken = state?.bustlySearchData?.SEARCH_DATA_SUPABASE_ACCESS_TOKEN?.trim() ?? "";
   if (!accessToken) {
     console.log("[BustlyOAuth] Verify skipped (no access token)");
     return false;
   }
-
-  const workspaceId =
-    state?.bustlySearchData?.SEARCH_DATA_WORKSPACE_ID?.trim() ??
-    state?.user?.workspaceId?.trim() ??
-    "";
-
-  if (!workspaceId) {
-    console.warn("[BustlyOAuth] Missing workspaceId; skipping verify check");
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.warn("[BustlyOAuth] Missing Supabase URL or anon key; skipping verify check");
     return true;
   }
 
   try {
-    const verifyResult = await verifyBustlyAuth({
+    const verifyResult = await verifySupabaseAuth({
       accessToken,
-      workspaceId,
+      supabaseUrl,
+      supabaseAnonKey,
     });
 
-    if (verifyResult.status >= 400 && verifyResult.status < 500) {
+    if (verifyResult.status === 400 || verifyResult.status === 401 || verifyResult.status === 403) {
       console.warn(
         `[BustlyOAuth] Token expired/invalid (status=${verifyResult.status}); clearing user/token`,
       );

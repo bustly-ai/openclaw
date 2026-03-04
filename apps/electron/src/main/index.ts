@@ -1077,9 +1077,12 @@ function createWindow(): void {
       return;
     }
     void (async () => {
-      await BustlyOAuth.verifyBustlyLoginStatus();
+      const loggedIn = await BustlyOAuth.verifyBustlyLoginStatus();
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;
+      }
+      if (!loggedIn) {
+        openBustlyLoginInMainWindow();
       }
       mainWindow.webContents.send("bustly-login-refresh");
     })();
