@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   gatewayStart: (apiKey?: string) => ipcRenderer.invoke("gateway-start", apiKey),
   gatewayStop: () => ipcRenderer.invoke("gateway-stop"),
   gatewayStatus: () => ipcRenderer.invoke("gateway-status"),
+  gatewayConnectConfig: () => ipcRenderer.invoke("gateway-connect-config"),
 
   // App info
   getAppInfo: () => ipcRenderer.invoke("get-app-info"),

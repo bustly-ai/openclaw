@@ -929,6 +929,22 @@ function resolveOpenClawConfigPath(): string {
   return getConfigPath() ?? resolveElectronConfigPath();
 }
 
+function readGatewayTokenFromConfig(): string | null {
+  try {
+    const configPath = resolveOpenClawConfigPath();
+    if (!existsSync(configPath)) {
+      return null;
+    }
+    const raw = JSON.parse(readFileSync(configPath, "utf-8")) as {
+      gateway?: { auth?: { token?: unknown } };
+    };
+    const token = raw?.gateway?.auth?.token;
+    return typeof token === "string" && token.trim() ? token.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 function readOpenClawConfigFile(): OpenClawConfig {
   const configPath = resolveOpenClawConfigPath();
   return JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
@@ -1317,6 +1333,20 @@ function setupIpcHandlers(): void {
       bind: gatewayBind,
       wsUrl,
       initialized: isFullyInitialized(),
+    };
+  });
+
+  ipcMain.handle("gateway-connect-config", () => {
+    const configToken = readGatewayTokenFromConfig();
+    const token = configToken ?? gatewayToken;
+    const wsUrl = token
+      ? `ws://${GATEWAY_HOST}:${gatewayPort}?token=${token}`
+      : `ws://${GATEWAY_HOST}:${gatewayPort}`;
+    return {
+      wsUrl,
+      token,
+      host: GATEWAY_HOST,
+      port: gatewayPort,
     };
   });
 
@@ -1780,7 +1810,7 @@ function setupIpcHandlers(): void {
 
       try {
         await startGateway();
-        if (options?.openControlUi !== false) {
+        if (options?.openControlUi === true) {
           openControlUiInMainWindow();
         }
       } catch (error) {
@@ -2069,7 +2099,6 @@ void app.whenReady().then(async () => {
       await startGateway();
       console.log("[Gateway] ✓ Gateway started successfully");
       writeMainLog("Gateway started successfully");
-      openControlUiInMainWindow();
     } catch (error) {
       console.error("[Gateway] ✗ Failed to start gateway:", error);
       writeMainLog(`Gateway failed to start: ${error instanceof Error ? error.message : String(error)}`);

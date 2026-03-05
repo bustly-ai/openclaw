@@ -6,6 +6,7 @@ import Onboard from "./components/Onboard";
 import BustlyLoginPage from "./components/Onboard/BustlyLoginPage";
 import ProviderSetupPage from "./components/Onboard/ProviderSetupPage";
 import DevPanel from "./components/DevPanel";
+import ChatPage from "./components/ChatPage";
 
 interface LogEntry {
   id: number;
@@ -30,6 +31,7 @@ function AppShell() {
   const isDevPanelWindow = pathname === "/devpanel";
   const isBustlyLoginWindow = pathname === "/bustly-login";
   const isProviderSetupWindow = pathname === "/provider-setup";
+  const isChatWindow = pathname === "/chat";
 
   const handleDeepLink = useCallback(
     (data: { url: string; route: string | null } | null) => {
@@ -68,7 +70,7 @@ function AppShell() {
         // Show onboarding only when needed and not already initialized
         if (needsOnboard && !initialized) {
           setShowOnboard(true);
-        } else if (!isDevPanelWindow && !isBustlyLoginWindow && !isProviderSetupWindow) {
+        } else if (!isDevPanelWindow && !isBustlyLoginWindow && !isProviderSetupWindow && !isChatWindow) {
           setShowOnboardLoading(true);
         }
       } catch (err) {
@@ -78,33 +80,23 @@ function AppShell() {
     };
 
     void loadInitialData();
-  }, []);
+  }, [isBustlyLoginWindow, isChatWindow, isDevPanelWindow, isProviderSetupWindow]);
 
   // When onboarding is complete, ensure the Control UI is loaded into the main window.
   useEffect(() => {
-    if (
-      !showOnboardLoading ||
-      isDevPanelWindow ||
-      isBustlyLoginWindow ||
-      isProviderSetupWindow
-    ) {
+    if (!showOnboardLoading || isDevPanelWindow || isBustlyLoginWindow || isProviderSetupWindow) {
       return;
     }
     if (controlUiRequestedRef.current) {
       return;
     }
     controlUiRequestedRef.current = true;
-    void window.electronAPI?.onboardOpenControlUi?.();
-  }, [showOnboardLoading, isDevPanelWindow, isBustlyLoginWindow, isProviderSetupWindow]);
+    void navigate("/chat", { replace: true });
+  }, [showOnboardLoading, isDevPanelWindow, isBustlyLoginWindow, isProviderSetupWindow, navigate]);
 
   // If gateway becomes ready after reopening, trigger Control UI load.
   useEffect(() => {
-    if (
-      !showOnboardLoading ||
-      isDevPanelWindow ||
-      isBustlyLoginWindow ||
-      isProviderSetupWindow
-    ) {
+    if (!showOnboardLoading || isDevPanelWindow || isBustlyLoginWindow || isProviderSetupWindow) {
       return;
     }
     if (!gatewayStatus?.running) {
@@ -115,13 +107,14 @@ function AppShell() {
       return;
     }
     controlUiRequestedRef.current = true;
-    void window.electronAPI?.onboardOpenControlUi?.();
+    void navigate("/chat", { replace: true });
   }, [
     gatewayStatus?.running,
     showOnboardLoading,
     isDevPanelWindow,
     isBustlyLoginWindow,
     isProviderSetupWindow,
+    navigate,
   ]);
 
   // Refresh gateway status periodically (handles auto-start and external changes)
@@ -277,7 +270,6 @@ function AppShell() {
       setError(result.error ?? "Failed to reset onboarding");
       return;
     }
-    setIsInitialized(false);
     setShowOnboard(true);
     setShowOnboardLoading(false);
   }, []);
@@ -286,7 +278,6 @@ function AppShell() {
   const handleOnboardComplete = useCallback(async () => {
     setShowOnboard(false);
     setShowOnboardLoading(true);
-    setIsInitialized(true);
     // Refresh status after onboarding
     if (window.electronAPI) {
       const status = await window.electronAPI.gatewayStatus();
@@ -319,7 +310,7 @@ function AppShell() {
         </div>
       );
     }
-    return <></>;
+    return <Navigate to="/chat" replace />;
   };
 
   return (
@@ -345,7 +336,7 @@ function AppShell() {
         element={
           <BustlyLoginPage
             onContinue={() => {
-              void window.electronAPI?.onboardOpenControlUi?.();
+              void navigate("/chat", { replace: true });
             }}
             autoContinue
             showSignOut={false}
@@ -358,11 +349,12 @@ function AppShell() {
         element={
           <ProviderSetupPage
             onDone={() => {
-              void window.electronAPI?.onboardOpenControlUi?.();
+              void navigate("/chat", { replace: true });
             }}
           />
         }
       />
+      <Route path="/chat" element={<ChatPage />} />
       <Route
         path="/onboard"
         element={<Onboard onComplete={handleOnboardComplete} onCancel={handleOnboardCancel} />}

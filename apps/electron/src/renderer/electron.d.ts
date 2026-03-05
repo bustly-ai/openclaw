@@ -34,6 +34,13 @@ interface GatewayStatus {
   initialized: boolean;
 }
 
+interface GatewayConnectConfig {
+  wsUrl: string;
+  token: string | null;
+  host: string;
+  port: number;
+}
+
 interface AppInfo {
   version: string;
   name: string;
@@ -141,6 +148,7 @@ interface ElectronAPI {
   gatewayStart: (apiKey?: string) => Promise<{ success: boolean; error?: string }>;
   gatewayStop: () => Promise<{ success: boolean; error?: string }>;
   gatewayStatus: () => Promise<GatewayStatus>;
+  gatewayConnectConfig: () => Promise<GatewayConnectConfig>;
   getAppInfo: () => Promise<AppInfo>;
 
   // Onboarding
