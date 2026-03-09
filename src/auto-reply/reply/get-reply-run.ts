@@ -45,7 +45,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
 import { BARE_SESSION_RESET_PROMPT } from "./session-reset-prompt.js";
-import { ensureSkillSnapshot, prependSystemEvents } from "./session-updates.js";
+import { buildQueuedSystemEventBlock, ensureSkillSnapshot } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
 
@@ -258,7 +258,7 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
-  const extraSystemPrompt = [inboundMetaPrompt, groupChatContext, groupIntro, groupSystemPrompt]
+  let extraSystemPrompt = [inboundMetaPrompt, groupChatContext, groupIntro, groupSystemPrompt]
     .filter(Boolean)
     .join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
@@ -320,13 +320,15 @@ export async function runPreparedReply(
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
-  prefixedBodyBase = await prependSystemEvents({
+  const queuedSystemEventBlock = await buildQueuedSystemEventBlock({
     cfg,
     sessionKey,
     isMainSession,
     isNewSession,
-    prefixedBodyBase,
   });
+  if (queuedSystemEventBlock) {
+    extraSystemPrompt = [extraSystemPrompt, queuedSystemEventBlock].filter(Boolean).join("\n\n");
+  }
   prefixedBodyBase = appendUntrustedContext(prefixedBodyBase, sessionCtx.UntrustedContext);
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
   const threadHistoryBody = ctx.ThreadHistoryBody?.trim();

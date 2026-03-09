@@ -7,6 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import type { PendingAbortedPartial } from "./server-methods/types.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { DedupeEntry } from "./server-shared.js";
@@ -68,6 +69,7 @@ export async function createGatewayRuntimeState(params: {
   agentRunSeq: Map<string, number>;
   dedupe: Map<string, DedupeEntry>;
   chatRunState: ReturnType<typeof createChatRunState>;
+  chatPendingAbortedPartials: Map<string, PendingAbortedPartial>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   addChatRun: (sessionId: string, entry: ChatRunEntry) => void;
@@ -177,6 +179,7 @@ export async function createGatewayRuntimeState(params: {
   const dedupe = new Map<string, DedupeEntry>();
   const chatRunState = createChatRunState();
   const chatRunRegistry = chatRunState.registry;
+  const chatPendingAbortedPartials = new Map<string, PendingAbortedPartial>();
   const chatRunBuffers = chatRunState.buffers;
   const chatDeltaSentAt = chatRunState.deltaSentAt;
   const addChatRun = chatRunRegistry.add;
@@ -196,6 +199,7 @@ export async function createGatewayRuntimeState(params: {
     agentRunSeq,
     dedupe,
     chatRunState,
+    chatPendingAbortedPartials,
     chatRunBuffers,
     chatDeltaSentAt,
     addChatRun,

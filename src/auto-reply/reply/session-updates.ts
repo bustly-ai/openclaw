@@ -13,83 +13,82 @@ import {
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
 
-export async function prependSystemEvents(params: {
+function compactSystemEvent(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const lower = trimmed.toLowerCase();
+  if (lower.includes("reason periodic")) {
+    return null;
+  }
+  // Filter out the actual heartbeat prompt, but not cron jobs that mention "heartbeat"
+  // The heartbeat prompt starts with "Read HEARTBEAT.md" - cron payloads won't match this
+  if (lower.startsWith("read heartbeat.md")) {
+    return null;
+  }
+  // Also filter heartbeat poll/wake noise
+  if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) {
+    return null;
+  }
+  if (
+    lower.startsWith("whatsapp gateway connected") ||
+    lower.startsWith("whatsapp gateway disconnected")
+  ) {
+    return null;
+  }
+  if (trimmed.startsWith("Node:")) {
+    return trimmed.replace(/ · last input [^·]+/i, "").trim();
+  }
+  return trimmed;
+}
+
+function resolveSystemEventTimezone(cfg: OpenClawConfig) {
+  const raw = cfg.agents?.defaults?.envelopeTimezone?.trim();
+  if (!raw) {
+    return { mode: "local" as const };
+  }
+  const lowered = raw.toLowerCase();
+  if (lowered === "utc" || lowered === "gmt") {
+    return { mode: "utc" as const };
+  }
+  if (lowered === "local" || lowered === "host") {
+    return { mode: "local" as const };
+  }
+  if (lowered === "user") {
+    return {
+      mode: "iana" as const,
+      timeZone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
+    };
+  }
+  const explicit = resolveTimezone(raw);
+  return explicit ? { mode: "iana" as const, timeZone: explicit } : { mode: "local" as const };
+}
+
+function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) {
+    return "unknown-time";
+  }
+  const zone = resolveSystemEventTimezone(cfg);
+  if (zone.mode === "utc") {
+    return formatUtcTimestamp(date, { displaySeconds: true });
+  }
+  if (zone.mode === "local") {
+    return formatZonedTimestamp(date, { displaySeconds: true }) ?? "unknown-time";
+  }
+  return (
+    formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true }) ??
+    "unknown-time"
+  );
+}
+
+export async function buildQueuedSystemEventBlock(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
-  prefixedBodyBase: string;
-}): Promise<string> {
-  const compactSystemEvent = (line: string): string | null => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return null;
-    }
-    const lower = trimmed.toLowerCase();
-    if (lower.includes("reason periodic")) {
-      return null;
-    }
-    // Filter out the actual heartbeat prompt, but not cron jobs that mention "heartbeat"
-    // The heartbeat prompt starts with "Read HEARTBEAT.md" - cron payloads won't match this
-    if (lower.startsWith("read heartbeat.md")) {
-      return null;
-    }
-    // Also filter heartbeat poll/wake noise
-    if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) {
-      return null;
-    }
-    if (
-      lower.startsWith("whatsapp gateway connected") ||
-      lower.startsWith("whatsapp gateway disconnected")
-    ) {
-      return null;
-    }
-    if (trimmed.startsWith("Node:")) {
-      return trimmed.replace(/ · last input [^·]+/i, "").trim();
-    }
-    return trimmed;
-  };
-
-  const resolveSystemEventTimezone = (cfg: OpenClawConfig) => {
-    const raw = cfg.agents?.defaults?.envelopeTimezone?.trim();
-    if (!raw) {
-      return { mode: "local" as const };
-    }
-    const lowered = raw.toLowerCase();
-    if (lowered === "utc" || lowered === "gmt") {
-      return { mode: "utc" as const };
-    }
-    if (lowered === "local" || lowered === "host") {
-      return { mode: "local" as const };
-    }
-    if (lowered === "user") {
-      return {
-        mode: "iana" as const,
-        timeZone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
-      };
-    }
-    const explicit = resolveTimezone(raw);
-    return explicit ? { mode: "iana" as const, timeZone: explicit } : { mode: "local" as const };
-  };
-
-  const formatSystemEventTimestamp = (ts: number, cfg: OpenClawConfig) => {
-    const date = new Date(ts);
-    if (Number.isNaN(date.getTime())) {
-      return "unknown-time";
-    }
-    const zone = resolveSystemEventTimezone(cfg);
-    if (zone.mode === "utc") {
-      return formatUtcTimestamp(date, { displaySeconds: true });
-    }
-    if (zone.mode === "local") {
-      return formatZonedTimestamp(date, { displaySeconds: true }) ?? "unknown-time";
-    }
-    return (
-      formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true }) ??
-      "unknown-time"
-    );
-  };
-
+}): Promise<string | null> {
   const systemLines: string[] = [];
   const queued = drainSystemEventEntries(params.sessionKey);
   systemLines.push(
@@ -110,10 +109,27 @@ export async function prependSystemEvents(params: {
     }
   }
   if (systemLines.length === 0) {
+    return null;
+  }
+  return systemLines.map((line) => `System: ${line}`).join("\n");
+}
+
+export async function prependSystemEvents(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  isMainSession: boolean;
+  isNewSession: boolean;
+  prefixedBodyBase: string;
+}): Promise<string> {
+  const block = await buildQueuedSystemEventBlock({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    isMainSession: params.isMainSession,
+    isNewSession: params.isNewSession,
+  });
+  if (!block) {
     return params.prefixedBodyBase;
   }
-
-  const block = systemLines.map((l) => `System: ${l}`).join("\n");
   return `${block}\n\n${params.prefixedBodyBase}`;
 }
 

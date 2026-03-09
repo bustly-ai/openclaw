@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { GatewayBrowserClient, type GatewayEventFrame } from "../../lib/gateway-client";
 import { extractText, extractThinking } from "../../lib/chat-extract";
 import { ChatTimeline } from "./ChatTimeline";
@@ -42,11 +43,32 @@ type ToolItem = {
 
 type TimelineItem = TextItem | ToolItem;
 
+type SessionUsageSummary = {
+  totalTokens: number | null;
+  contextTokens: number | null;
+  remainingTokens: number | null;
+};
+
+type RunTerminalState = "final" | "aborted" | "error";
+
 const DEFAULT_SESSION_KEY = "agent:main:main";
 const TOOL_RUNNING_MIN_VISIBLE_MS = 600;
+const SIDEBAR_TASKS_REFRESH_EVENT = "openclaw:sidebar-refresh-tasks";
 
 function nextId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function notifySidebarTasksRefresh() {
+  window.dispatchEvent(new Event(SIDEBAR_TASKS_REFRESH_EVENT));
+}
+
+function resolveThreadBaseSessionKey(sessionKey: string) {
+  return sessionKey.replace(/:(thread|topic):[^:]+$/i, "");
+}
+
+function buildThreadSessionKey(sessionKey: string) {
+  return `${resolveThreadBaseSessionKey(sessionKey)}:thread:${globalThis.crypto.randomUUID()}`;
 }
 
 function normalizeTextDelta(current: string, text?: string, delta?: string): string {
@@ -60,6 +82,44 @@ function normalizeTextDelta(current: string, text?: string, delta?: string): str
     return `${current}${delta}`;
   }
   return current;
+}
+
+function formatTokenCount(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "?";
+  }
+  if (value >= 1_000_000) {
+    return `${Math.round(value / 100_000) / 10}M`;
+  }
+  if (value >= 1_000) {
+    return `${Math.round(value / 100) / 10}k`;
+  }
+  return String(Math.round(value));
+}
+
+function resolveChatTerminalState(payload: {
+  state?: string;
+}): RunTerminalState | null {
+  if (payload.state === "final" || payload.state === "aborted" || payload.state === "error") {
+    return payload.state;
+  }
+  return null;
+}
+
+function resolveAgentTerminalState(payload: {
+  stream?: string;
+  data?: Record<string, unknown>;
+}): RunTerminalState | null {
+  if (payload.stream === "error") {
+    return "error";
+  }
+  if (payload.stream !== "lifecycle") {
+    return null;
+  }
+  if (payload.data?.phase !== "end") {
+    return null;
+  }
+  return payload.data?.aborted === true ? "aborted" : "final";
 }
 
 function extractToolText(value: unknown): string {
@@ -140,6 +200,30 @@ function readThinkingText(message: unknown): string | null {
   }
   const trimmed = text.trim();
   return trimmed ? text : null;
+}
+
+function isCommandMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  return (message as Record<string, unknown>).command === true;
+}
+
+function readMessageRole(message: unknown): ChatRole {
+  if (!message || typeof message !== "object") {
+    return "assistant";
+  }
+  const role =
+    typeof (message as Record<string, unknown>).role === "string"
+      ? (message as Record<string, unknown>).role.toLowerCase()
+      : "";
+  if (role === "user") {
+    return "user";
+  }
+  if (role === "system") {
+    return "system";
+  }
+  return "assistant";
 }
 
 function parseToolBlocks(message: unknown): Array<{ toolCallId: string; name: string; args?: unknown; output?: string }> {
@@ -227,6 +311,8 @@ function parseToolBlocks(message: unknown): Array<{ toolCallId: string; name: st
 }
 
 export default function ChatPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [gateway, setGateway] = useState<GatewayStatus | null>(null);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -236,6 +322,12 @@ export default function ChatPage() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [compactingRunId, setCompactingRunId] = useState<string | null>(null);
+  const [sessionUsage, setSessionUsage] = useState<SessionUsageSummary>({
+    totalTokens: null,
+    contextTokens: null,
+    remainingTokens: null,
+  });
   const [streamUpdatedAt, setStreamUpdatedAt] = useState<number | null>(null);
 
   const clientRef = useRef<GatewayBrowserClient | null>(null);
@@ -254,12 +346,51 @@ export default function ChatPage() {
     >
   >(new Map());
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const currentSessionKey = useMemo(() => {
+    const searchParams = new URLSearchParams(location.search);
+    return searchParams.get("session") ?? DEFAULT_SESSION_KEY;
+  }, [location.search]);
 
   const loadGatewayStatus = useCallback(async () => {
     const status = await window.electronAPI.gatewayStatus();
     setGateway(status);
     return status;
   }, []);
+
+  const loadSessionUsage = useCallback(async (client: GatewayBrowserClient, sessionKey: string) => {
+    const res = await client.request<{
+      defaults?: { contextTokens?: number | null };
+      sessions?: Array<{
+        key: string;
+        totalTokens?: number;
+        contextTokens?: number;
+      }>;
+    }>("sessions.list", {});
+    const row = Array.isArray(res.sessions)
+      ? res.sessions.find((entry) => entry?.key === sessionKey)
+      : undefined;
+    const totalTokens = typeof row?.totalTokens === "number" ? row.totalTokens : null;
+    const contextTokens =
+      typeof row?.contextTokens === "number"
+        ? row.contextTokens
+        : typeof res.defaults?.contextTokens === "number"
+          ? res.defaults.contextTokens
+          : null;
+    const remainingTokens =
+      typeof totalTokens === "number" && typeof contextTokens === "number"
+        ? Math.max(0, contextTokens - totalTokens)
+        : null;
+    setSessionUsage({ totalTokens, contextTokens, remainingTokens });
+  }, []);
+
+  const refreshSessionUsage = useCallback(
+    (client: GatewayBrowserClient, sessionKey: string) => {
+      void loadSessionUsage(client, sessionKey).catch((err) => {
+        setError(err instanceof Error ? err.message : String(err));
+      });
+    },
+    [loadSessionUsage],
+  );
 
   const appendOrUpdateText = useCallback((params: {
     key: string;
@@ -377,6 +508,16 @@ export default function ChatPage() {
     });
   }, []);
 
+  const finalizeRunState = useCallback((runId: string | null) => {
+    markRunFinished(runId);
+    setActiveRunId((prev) => (prev === runId ? null : prev));
+    setCompactingRunId((prev) => (prev === runId ? null : prev));
+    if (runId) {
+      runSeqBaseRef.current.delete(runId);
+    }
+    streamSegmentsRef.current.delete(runId ?? "__unknown__");
+  }, [markRunFinished]);
+
   const upsertTool = useCallback((params: {
     toolCallId: string;
     seq: number;
@@ -488,13 +629,35 @@ export default function ChatPage() {
     }
   }, []);
 
-  const loadHistory = useCallback(async (client: GatewayBrowserClient) => {
+  const resetSessionView = useCallback(() => {
+    setTimeline([]);
+    setDraft("");
+    setAttachments([]);
+    setActiveRunId(null);
+    setCompactingRunId(null);
+    setSessionUsage({
+      totalTokens: null,
+      contextTokens: null,
+      remainingTokens: null,
+    });
+    setStreamUpdatedAt(null);
+    setError(null);
+    seqCounterRef.current = 1_000_000_000;
+    streamSegmentsRef.current.clear();
+    runSeqBaseRef.current.clear();
+    for (const timer of toolTimersRef.current.values()) {
+      window.clearTimeout(timer);
+    }
+    toolTimersRef.current.clear();
+  }, []);
+
+  const loadHistory = useCallback(async (client: GatewayBrowserClient, sessionKey: string) => {
     const res = await client.request<{ messages?: unknown[] }>("chat.history", {
-      sessionKey: DEFAULT_SESSION_KEY,
+      sessionKey,
       limit: 200,
     });
     const history = Array.isArray(res.messages) ? res.messages : [];
-    console.log("[electron-chat] chat.history loaded", { count: history.length, sessionKey: DEFAULT_SESSION_KEY });
+    console.log("[electron-chat] chat.history loaded", { count: history.length, sessionKey });
     const items: TimelineItem[] = [];
     const toolsByCallId = new Map<string, ToolItem>();
     let fallbackSeq = 1;
@@ -586,19 +749,7 @@ export default function ChatPage() {
     }
 
     items.push(...toolsByCallId.values());
-    setTimeline((prev) => {
-      if (prev.length === 0) {
-        return items.toSorted(compareTimeline);
-      }
-      const merged = new Map<string, TimelineItem>();
-      for (const item of items) {
-        merged.set(item.id, item);
-      }
-      for (const item of prev) {
-        merged.set(item.id, item);
-      }
-      return [...merged.values()].toSorted(compareTimeline);
-    });
+    setTimeline(items.toSorted(compareTimeline));
   }, []);
 
   const connectGateway = useCallback(
@@ -630,7 +781,10 @@ export default function ChatPage() {
         onHello: () => {
           setConnected(true);
           setError(null);
-          void loadHistory(client).catch((err) => {
+          void loadHistory(client, currentSessionKey).catch((err) => {
+            setError(err instanceof Error ? err.message : String(err));
+          });
+          void loadSessionUsage(client, currentSessionKey).catch((err) => {
             setError(err instanceof Error ? err.message : String(err));
           });
         },
@@ -644,6 +798,107 @@ export default function ChatPage() {
             return;
           }
           console.log("[electron-chat] received event", evt.event, evt.payload);
+          if (evt.event === "chat") {
+            const payload = evt.payload as {
+              runId?: string;
+              state?: string;
+              sessionKey?: string;
+              message?: unknown;
+              errorMessage?: string;
+            };
+            if (!payload || payload.sessionKey !== currentSessionKey) {
+              return;
+            }
+            const runId = typeof payload.runId === "string" ? payload.runId : null;
+            const terminalState = resolveChatTerminalState(payload);
+            if (payload.state === "delta") {
+              return;
+            }
+            if (terminalState === "final") {
+              finalizeRunState(runId);
+              if (!payload.message) {
+                return;
+              }
+              const messageText = readContentText(payload.message);
+              if (!messageText) {
+                return;
+              }
+              const timestamp =
+                payload.message &&
+                typeof payload.message === "object" &&
+                typeof (payload.message as { timestamp?: unknown }).timestamp === "number"
+                  ? (payload.message as { timestamp: number }).timestamp
+                  : Date.now();
+              const command = isCommandMessage(payload.message);
+              const role = command ? "system" : readMessageRole(payload.message);
+              appendOrUpdateText({
+                key: command && runId ? `run:${runId}:command:status` : `chat:${runId ?? nextId("final")}`,
+                role,
+                runId: runId ?? undefined,
+                seq: seqCounterRef.current++,
+                text: messageText,
+                timestamp,
+                streaming: false,
+                final: role === "assistant",
+              });
+              if (role === "assistant") {
+                markLastAssistantAsFinal(runId);
+              }
+              if (command) {
+                void loadHistory(client, currentSessionKey).catch((err) => {
+                  setError(err instanceof Error ? err.message : String(err));
+                });
+                refreshSessionUsage(client, currentSessionKey);
+              }
+              notifySidebarTasksRefresh();
+              return;
+            }
+            if (terminalState === "aborted" || terminalState === "error") {
+              finalizeRunState(runId);
+              const statusText =
+                terminalState === "aborted"
+                  ? "Request aborted."
+                  : `Run error: ${payload.errorMessage ?? "unknown error"}`;
+              const statusKey = runId ? `run:${runId}:command:status` : nextId("chat-status");
+              setTimeline((prev) => {
+                const idx = prev.findIndex((item) => item.kind === "text" && item.id === statusKey);
+                if (idx === -1) {
+                  if (terminalState === "aborted" && runId) {
+                    return prev;
+                  }
+                  const next: TextItem = {
+                    kind: "text",
+                    id: statusKey,
+                    sortSeq: seqCounterRef.current++,
+                    timestamp: Date.now(),
+                    role: "system",
+                    text: statusText,
+                    runId: runId ?? undefined,
+                    streaming: false,
+                  };
+                  return [...prev, next].toSorted(compareTimeline);
+                }
+                const current = prev[idx] as TextItem;
+                if (current.text === statusText && current.streaming === false) {
+                  return prev;
+                }
+                const next = [...prev];
+                next[idx] = {
+                  ...current,
+                  text: statusText,
+                  streaming: false,
+                };
+                return next;
+              });
+              void loadHistory(client, currentSessionKey).catch((err) => {
+                setError(err instanceof Error ? err.message : String(err));
+              });
+              refreshSessionUsage(client, currentSessionKey);
+              notifySidebarTasksRefresh();
+              return;
+            }
+            return;
+          }
           if (evt.event === "agent") {
             const payload = evt.payload as {
               runId?: string;
@@ -653,7 +908,7 @@ export default function ChatPage() {
               sessionKey?: string;
               data?: Record<string, unknown>;
             };
-            if (!payload || payload.sessionKey !== DEFAULT_SESSION_KEY) {
+            if (!payload || payload.sessionKey !== currentSessionKey) {
               return;
             }
             const runId = typeof payload.runId === "string" ? payload.runId : null;
@@ -681,7 +936,11 @@ export default function ChatPage() {
               streamSegmentsRef.current.get(runKey) ??
               { assistant: 0, assistantClosed: true, thinking: 0, thinkingOpen: false };
 
-            if (runId) {
+            if (
+              runId &&
+              stream !== "lifecycle" &&
+              stream !== "error"
+            ) {
               setActiveRunId(runId);
             }
 
@@ -754,43 +1013,44 @@ export default function ChatPage() {
               return;
             }
 
-            if (stream === "lifecycle") {
+            if (stream === "compaction") {
               const phase = typeof data.phase === "string" ? data.phase : "";
-              if (phase === "end") {
-                const aborted = data.aborted === true;
-                markRunFinished(runId);
-                if (!aborted) {
-                  markLastAssistantAsFinal(runId);
-                }
-                setActiveRunId((prev) => (prev === runId ? null : prev));
-                streamSegmentsRef.current.delete(runKey);
-                if (runId) {
-                  runSeqBaseRef.current.delete(runId);
-                }
-                if (aborted) {
-                  const stopReason = typeof data.stopReason === "string" ? data.stopReason : "aborted";
-                  setTimeline((prev) => {
-                    const next: TextItem = {
-                      kind: "text",
-                      id: nextId("aborted"),
-                      sortSeq: seq,
-                      timestamp: ts,
-                      role: "system",
-                      text: `Request aborted (${stopReason}).`,
-                      runId: runId ?? undefined,
-                      streaming: false,
-                    };
-                    return [...prev, next].toSorted(compareTimeline);
-                  });
-                }
+              if (phase === "start" && runId) {
+                setCompactingRunId(runId);
               }
+              if (phase === "end" || phase === "error") {
+                setCompactingRunId((prev) => (prev === runId ? null : prev));
+                refreshSessionUsage(client, currentSessionKey);
+              }
+              return;
             }
-            return;
-          }
 
-          if (evt.event === "chat") {
-            // Realtime timeline is intentionally single-channel: only `agent` stream events.
-            // `chat` frames are ignored here to prevent duplicate rendering.
+            const terminalState = resolveAgentTerminalState({ stream, data });
+            if (terminalState) {
+              finalizeRunState(runId);
+              if (terminalState === "final") {
+                markLastAssistantAsFinal(runId);
+              }
+              if (terminalState === "aborted") {
+                const stopReason = typeof data.stopReason === "string" ? data.stopReason : "aborted";
+                setTimeline((prev) => {
+                  const next: TextItem = {
+                    kind: "text",
+                    id: nextId("aborted"),
+                    sortSeq: seq,
+                    timestamp: ts,
+                    role: "system",
+                    text: `Request aborted (${stopReason}).`,
+                    runId: runId ?? undefined,
+                    streaming: false,
+                  };
+                  return [...prev, next].toSorted(compareTimeline);
+                });
+              }
+              refreshSessionUsage(client, currentSessionKey);
+              notifySidebarTasksRefresh();
+              return;
+            }
             return;
           }
         },
@@ -799,7 +1059,15 @@ export default function ChatPage() {
       clientRef.current = client;
       client.start();
     },
-    [appendOrUpdateText, loadHistory, markLastAssistantAsFinal, markRunFinished, upsertTool],
+    [
+      appendOrUpdateText,
+      currentSessionKey,
+      finalizeRunState,
+      loadHistory,
+      refreshSessionUsage,
+      markLastAssistantAsFinal,
+      upsertTool,
+    ],
   );
 
   useEffect(() => {
@@ -846,6 +1114,26 @@ export default function ChatPage() {
   }, [connectGateway, loadGatewayStatus]);
 
   useEffect(() => {
+    resetSessionView();
+    setLoading(true);
+    const client = clientRef.current;
+    if (!connected || !client) {
+      setLoading(false);
+      return;
+    }
+    void loadHistory(client, currentSessionKey)
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+    void loadSessionUsage(client, currentSessionKey).catch((err) => {
+      setError(err instanceof Error ? err.message : String(err));
+    });
+  }, [connected, currentSessionKey, loadHistory, loadSessionUsage, resetSessionView]);
+
+  useEffect(() => {
     if (!scrollRef.current) {
       return;
     }
@@ -887,6 +1175,7 @@ export default function ChatPage() {
 
     const idempotencyKey = nextId("run");
     setActiveRunId(idempotencyKey);
+    setCompactingRunId(null);
 
     try {
       const apiAttachments = attachments
@@ -904,19 +1193,22 @@ export default function ChatPage() {
         .filter((att): att is { type: "image"; mimeType: string; content: string } => Boolean(att));
 
       await clientRef.current.request("chat.send", {
-        sessionKey: DEFAULT_SESSION_KEY,
+        sessionKey: currentSessionKey,
         message: msg,
         deliver: false,
         idempotencyKey,
         attachments: apiAttachments.length > 0 ? apiAttachments : undefined,
       });
+      notifySidebarTasksRefresh();
+      void loadSessionUsage(clientRef.current, currentSessionKey).catch(() => {});
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setActiveRunId(null);
+      setCompactingRunId(null);
     } finally {
       setSending(false);
     }
-  }, [attachments, connected, draft, sending]);
+  }, [attachments, connected, currentSessionKey, draft, sending]);
 
   const handleAbort = useCallback(async () => {
     if (!connected || !clientRef.current) {
@@ -924,13 +1216,18 @@ export default function ChatPage() {
     }
     try {
       await clientRef.current.request("chat.abort", {
-        sessionKey: DEFAULT_SESSION_KEY,
+        sessionKey: currentSessionKey,
         runId: activeRunId ?? undefined,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [activeRunId, connected]);
+  }, [activeRunId, connected, currentSessionKey]);
+
+  const handleNewThread = useCallback(async () => {
+    const nextSessionKey = buildThreadSessionKey(currentSessionKey);
+    void navigate(`/chat?session=${encodeURIComponent(nextSessionKey)}`);
+  }, [currentSessionKey, navigate]);
 
   const handleAttachmentFiles = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) {
@@ -1052,13 +1349,23 @@ export default function ChatPage() {
   }, [timeline]);
 
   const activeRunningToolKey = activeRunningToolId ? activeRunningToolId : null;
+  const contextUsageLabel = useMemo(() => {
+    if (sessionUsage.contextTokens == null) {
+      return "Context left: ?";
+    }
+    return `Context left: ${formatTokenCount(sessionUsage.remainingTokens)} / ${formatTokenCount(sessionUsage.contextTokens)}`;
+  }, [sessionUsage.contextTokens, sessionUsage.remainingTokens]);
 
   return (
     <div className="chat-page-shell">
       <div className="chat-page-header">
         <div className="chat-page-header-left">
           <h1 className="chat-page-title">Chat</h1>
-          <p className="chat-page-subtitle">Session: {DEFAULT_SESSION_KEY}</p>
+          <p className="chat-page-subtitle">
+            Session: {currentSessionKey}
+            {" · "}
+            {contextUsageLabel}
+          </p>
         </div>
         <div className="chat-page-header-right">
           <span className={`chat-page-badge ${connected ? "is-connected" : ""}`}>
@@ -1088,7 +1395,12 @@ export default function ChatPage() {
 
         <div className="chat-flow-list">
           <ChatTimeline timeline={processedTimeline} activeRunningToolKey={activeRunningToolKey} />
-          {activeRunId && !hasRecentTextStream && runningTools === 0 ? (
+          {compactingRunId ? (
+            <div className="chat-flow-item chat-flow-item--thinking-live">
+              <p className="chat-flow-thinking-live">Compacting conversation...</p>
+            </div>
+          ) : null}
+          {activeRunId && !compactingRunId && !hasRecentTextStream && runningTools === 0 ? (
             <div className="chat-flow-item chat-flow-item--thinking-live">
               <p className="chat-flow-thinking-live">Thinking...</p>
             </div>
@@ -1116,6 +1428,16 @@ export default function ChatPage() {
           </div>
         ) : null}
         <div className="chat-compose-row">
+          <button
+            type="button"
+            className="chat-btn chat-btn--secondary"
+            disabled={sending || Boolean(activeRunId)}
+            onClick={() => {
+              void handleNewThread();
+            }}
+          >
+            New thread
+          </button>
           <textarea
             className="chat-compose-input"
             rows={1}

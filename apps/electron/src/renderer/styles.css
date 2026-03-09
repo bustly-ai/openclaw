@@ -1214,6 +1214,13 @@
   background: #fff;
 }
 
+.chat-btn--secondary {
+  border: 1px solid #d1d5db;
+  color: #0f172a;
+  background: #fff;
+  white-space: nowrap;
+}
+
 .chat-btn--send {
   border: none;
   color: #fff;

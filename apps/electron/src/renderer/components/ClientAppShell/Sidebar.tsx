@@ -31,6 +31,19 @@ type SessionsListResult = {
 };
 
 const DEFAULT_SESSION_KEY = "agent:main:main";
+const SIDEBAR_TASKS_REFRESH_EVENT = "openclaw:sidebar-refresh-tasks";
+
+function isMainThreadSessionKey(sessionKey: string): boolean {
+  if (sessionKey === DEFAULT_SESSION_KEY) {
+    return true;
+  }
+  return sessionKey.startsWith(`${DEFAULT_SESSION_KEY}:thread:`);
+}
+
+function stripLeadingMessageTimestamp(text: string): string {
+  const cleaned = text.replace(/^\[[^\]]+\]\s*/, "").trim();
+  return cleaned || text.trim();
+}
 
 type IconProps = {
   className?: string;
@@ -479,6 +492,9 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     const clientRef: { current: GatewayBrowserClient | null } = { current: null };
 
     const loadTasks = async () => {
+      if (!disposed) {
+        setTasksLoading(true);
+      }
       try {
         const status = await window.electronAPI.gatewayStatus();
         if (!status.running) {
@@ -520,14 +536,18 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                   return;
                 }
                 setRecentTasks(
-                  result.sessions.map((session) => ({
-                    id: session.key,
-                    name:
-                      session.displayName?.trim() ||
-                      session.derivedTitle?.trim() ||
-                      session.label?.trim() ||
-                      session.key,
-                  })),
+                  result.sessions
+                    .filter((session) => isMainThreadSessionKey(session.key))
+                    .map((session) => ({
+                      id: session.key,
+                      name:
+                        session.displayName?.trim() ||
+                        (session.derivedTitle?.trim()
+                          ? stripLeadingMessageTimestamp(session.derivedTitle)
+                          : undefined) ||
+                        session.label?.trim() ||
+                        session.key,
+                    })),
                 );
                 setTasksLoading(false);
               })
@@ -557,12 +577,18 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
 
     void loadTasks();
 
+    const handleRefreshTasks = () => {
+      void loadTasks();
+    };
+    window.addEventListener(SIDEBAR_TASKS_REFRESH_EVENT, handleRefreshTasks);
+
     return () => {
       disposed = true;
+      window.removeEventListener(SIDEBAR_TASKS_REFRESH_EVENT, handleRefreshTasks);
       clientRef.current?.stop();
       clientRef.current = null;
     };
-  }, []);
+  }, [location.pathname, location.search]);
 
   return (
     <div

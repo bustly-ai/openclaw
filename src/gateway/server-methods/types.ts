@@ -14,6 +14,13 @@ import type { DedupeEntry } from "../server-shared.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
+export type PendingAbortedPartial = {
+  runId: string;
+  sessionId: string;
+  text: string;
+  abortOrigin: "rpc" | "stop-command";
+};
+
 export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
@@ -52,6 +59,7 @@ export type GatewayRequestContext = {
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatAbortedRuns: Map<string, number>;
+  chatPendingAbortedPartials: Map<string, PendingAbortedPartial>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;

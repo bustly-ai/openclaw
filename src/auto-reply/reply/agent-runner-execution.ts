@@ -429,6 +429,11 @@ export async function runAgentTurnWithFallback(params: {
             code: attempt.code ? String(attempt.code) : undefined,
           }))
         : [];
+      params.opts?.onAgentRunSettled?.({
+        runId,
+        aborted: runResult.meta?.aborted === true,
+        hasAssistantMessage: runResult.meta?.hasAssistantMessage === true,
+      });
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.

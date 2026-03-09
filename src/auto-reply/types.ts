@@ -46,6 +46,12 @@ export type GetReplyOptions = {
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
+  /** Called when an agent run has fully settled and transcript state is known. */
+  onAgentRunSettled?: (ctx: {
+    runId: string;
+    aborted: boolean;
+    hasAssistantMessage: boolean;
+  }) => void;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;

@@ -48,7 +48,11 @@ import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+  PendingAbortedPartial,
+} from "./types.js";
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -59,12 +63,7 @@ type TranscriptAppendResult = {
 
 type AbortOrigin = "rpc" | "stop-command";
 
-type AbortedPartialSnapshot = {
-  runId: string;
-  sessionId: string;
-  text: string;
-  abortOrigin: AbortOrigin;
-};
+type AbortedPartialSnapshot = PendingAbortedPartial;
 
 const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
@@ -444,6 +443,27 @@ function persistAbortedPartials(params: {
   }
 }
 
+function queueAbortedPartialsForPersistence(params: {
+  context: Pick<GatewayRequestContext, "chatPendingAbortedPartials">;
+  snapshots: AbortedPartialSnapshot[];
+}) {
+  for (const snapshot of params.snapshots) {
+    params.context.chatPendingAbortedPartials.set(snapshot.runId, snapshot);
+  }
+}
+
+function takeQueuedAbortedPartial(params: {
+  context: Pick<GatewayRequestContext, "chatPendingAbortedPartials">;
+  runId: string;
+}): AbortedPartialSnapshot | undefined {
+  const snapshot = params.context.chatPendingAbortedPartials.get(params.runId);
+  if (!snapshot) {
+    return undefined;
+  }
+  params.context.chatPendingAbortedPartials.delete(params.runId);
+  return snapshot;
+}
+
 function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
   return {
     chatAbortControllers: context.chatAbortControllers,
@@ -475,9 +495,8 @@ function abortChatRunsForSessionKeyWithPartials(params: {
     stopReason: params.stopReason,
   });
   if (res.aborted) {
-    persistAbortedPartials({
+    queueAbortedPartialsForPersistence({
       context: params.context,
-      sessionKey: params.sessionKey,
       snapshots,
     });
   }
@@ -665,9 +684,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       stopReason: "rpc",
     });
     if (res.aborted && partialText && partialText.trim()) {
-      persistAbortedPartials({
+      queueAbortedPartialsForPersistence({
         context,
-        sessionKey: rawSessionKey,
         snapshots: [
           {
             runId,
@@ -887,6 +905,36 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
 
       let agentRunStarted = false;
+      let startedAgentRunId: string | null = null;
+      let settledAgentRun:
+        | {
+            runId: string;
+            aborted: boolean;
+            hasAssistantMessage: boolean;
+          }
+        | null = null;
+      const finalizeAbortedPartialPersistence = () => {
+        const candidateRunIds = Array.from(
+          new Set([settledAgentRun?.runId, startedAgentRunId, clientRunId].filter(Boolean)),
+        ) as string[];
+        if (candidateRunIds.length === 0) {
+          return;
+        }
+        const queuedSnapshots = candidateRunIds
+          .map((runId) => takeQueuedAbortedPartial({ context, runId }))
+          .filter((snapshot): snapshot is AbortedPartialSnapshot => Boolean(snapshot));
+        if (queuedSnapshots.length === 0) {
+          return;
+        }
+        if (settledAgentRun && (!settledAgentRun.aborted || settledAgentRun.hasAssistantMessage)) {
+          return;
+        }
+        persistAbortedPartials({
+          context,
+          sessionKey: rawSessionKey,
+          snapshots: queuedSnapshots,
+        });
+      };
       void dispatchInboundMessage({
         ctx,
         cfg,
@@ -898,6 +946,17 @@ export const chatHandlers: GatewayRequestHandlers = {
           emitReasoningAgentEvents: true,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
+            startedAgentRunId = runId;
+            if (runId !== clientRunId) {
+              context.addChatRun(runId, {
+                sessionKey: rawSessionKey,
+                clientRunId,
+              });
+              const activeClientRun = context.chatAbortControllers.get(clientRunId);
+              if (activeClientRun && !context.chatAbortControllers.has(runId)) {
+                context.chatAbortControllers.set(runId, activeClientRun);
+              }
+            }
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(
               client?.connect?.caps,
@@ -915,10 +974,14 @@ export const chatHandlers: GatewayRequestHandlers = {
               }
             }
           },
+          onAgentRunSettled: (info) => {
+            settledAgentRun = info;
+          },
           onModelSelected,
         },
       })
         .then(() => {
+          finalizeAbortedPartialPersistence();
           if (!agentRunStarted) {
             const combinedReply = finalReplyParts
               .map((part) => part.trim())
@@ -970,6 +1033,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .catch((err) => {
+          finalizeAbortedPartialPersistence();
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
           context.dedupe.set(`chat:${clientRunId}`, {
             ts: Date.now(),
@@ -993,6 +1057,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         })
         .finally(() => {
           context.chatAbortControllers.delete(clientRunId);
+          if (startedAgentRunId) {
+            context.chatAbortControllers.delete(startedAgentRunId);
+          }
         });
     } catch (err) {
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
