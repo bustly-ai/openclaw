@@ -33,11 +33,11 @@ type SessionsListResult = {
 const DEFAULT_SESSION_KEY = "agent:main:main";
 const SIDEBAR_TASKS_REFRESH_EVENT = "openclaw:sidebar-refresh-tasks";
 
-function isMainThreadSessionKey(sessionKey: string): boolean {
+function isMainChannelSessionKey(sessionKey: string): boolean {
   if (sessionKey === DEFAULT_SESSION_KEY) {
     return true;
   }
-  return sessionKey.startsWith(`${DEFAULT_SESSION_KEY}:thread:`);
+  return sessionKey.startsWith(`${DEFAULT_SESSION_KEY}:channel:`);
 }
 
 function stripLeadingMessageTimestamp(text: string): string {
@@ -539,7 +539,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                 }
                 setRecentTasks(
                   result.sessions
-                    .filter((session) => isMainThreadSessionKey(session.key))
+                    .filter((session) => isMainChannelSessionKey(session.key))
                     .map((session) => ({
                       id: session.key,
                       name:

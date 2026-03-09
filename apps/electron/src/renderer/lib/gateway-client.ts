@@ -1,5 +1,5 @@
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity";
-import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth-store";
+import { clearDeviceAuthToken, storeDeviceAuthToken } from "./device-auth-store";
 
 export type GatewayEventFrame = {
   type: "event";
@@ -166,12 +166,6 @@ export class GatewayBrowserClient {
 
       if (hasWebCrypto) {
         deviceIdentity = await loadOrCreateDeviceIdentity();
-        const storedToken = loadDeviceAuthToken({
-          deviceId: deviceIdentity.deviceId,
-          role,
-        })?.token;
-        authToken = storedToken ?? this.options.token;
-        // canFallbackToShared = Boolean(storedToken && this.options.token);
       }
 
       let device:

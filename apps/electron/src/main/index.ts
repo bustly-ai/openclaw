@@ -36,6 +36,7 @@ import {
   type ProviderId,
 } from "./oauth-handler.js";
 import * as BustlyOAuth from "./bustly-oauth.js";
+import { resolveOpenClawAgentDir } from "../../../../src/agents/agent-paths";
 import { loadModelCatalog } from "../../../../src/agents/model-catalog";
 import { upsertAuthProfile } from "../../../../src/agents/auth-profiles";
 import { DEFAULT_PROVIDER } from "../../../../src/agents/defaults";
@@ -49,6 +50,7 @@ import { mergeWhatsAppConfig } from "../../../../src/config/merge-config";
 import type { DmPolicy, OpenClawConfig } from "../../../../src/config/types";
 import {
   applyAuthProfileConfig,
+  applyOpenrouterProviderConfig,
   setOpenrouterApiKey,
   writeOAuthCredentials,
 } from "../../../../src/commands/onboard-auth";
@@ -61,12 +63,16 @@ import {
 } from "../../../../src/web/accounts";
 import { startWebLoginWithQr, waitForWebLogin } from "../../../../src/web/login-qr";
 import { webAuthExists } from "../../../../src/web/session";
+import {
+  ELECTRON_DEFAULT_MODEL,
+  ELECTRON_OPENCLAW_PROFILE,
+  getElectronOpenrouterApiKey,
+} from "./defaults.js";
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 const autoUpdater = updater.autoUpdater;
 const APP_PROTOCOL = "bustly";
 const DEEP_LINK_CHANNEL = "deep-link";
-const ELECTRON_OPENCLAW_PROFILE = process.env.BUSTLY_OPENCLAW_PROFILE?.trim() || "bustly";
 
 let gatewayProcess: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
@@ -1242,6 +1248,72 @@ function ensureWindow(): void {
   app.once("ready", () => createWindow());
 }
 
+async function ensureElectronBootstrapModel(): Promise<void> {
+  const openrouterApiKey = getElectronOpenrouterApiKey();
+  if (!openrouterApiKey) {
+    return;
+  }
+
+  const configPath = resolveElectronConfigPath();
+  if (!existsSync(configPath)) {
+    return;
+  }
+
+  const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+  const currentModel = config.agents?.defaults?.model;
+  const primaryModel = typeof currentModel === "string" ? currentModel : currentModel?.primary;
+
+  await setOpenrouterApiKey(openrouterApiKey, resolveOpenClawAgentDir());
+  let nextConfig = applyOpenrouterProviderConfig(config);
+  nextConfig = applyAuthProfileConfig(nextConfig, {
+    profileId: "openrouter:default",
+    provider: "openrouter",
+    mode: "api_key",
+  });
+  if (!primaryModel?.trim() || primaryModel !== ELECTRON_DEFAULT_MODEL) {
+    nextConfig = applyPrimaryModel(nextConfig, ELECTRON_DEFAULT_MODEL);
+  }
+  if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
+    writeFileSync(configPath, JSON.stringify(nextConfig, null, 2));
+    writeMainLog(`[Init] Applied beta bootstrap model ${ELECTRON_DEFAULT_MODEL}`);
+  }
+}
+
+async function bootstrapDesktopSession(options?: {
+  forceInit?: boolean;
+  openControlUi?: boolean;
+}): Promise<void> {
+  const shouldInitialize = options?.forceInit === true || !isFullyInitialized();
+
+  if (shouldInitialize) {
+    const result = await initializeOpenClaw({
+      force: options?.forceInit === true,
+    });
+    if (!result.success) {
+      throw new Error(result.error ?? "Failed to initialize OpenClaw");
+    }
+    initResult = result;
+    gatewayPort = result.gatewayPort;
+    gatewayBind = result.gatewayBind;
+    gatewayToken = result.gatewayToken ?? null;
+    needsOnboardAtLaunch = false;
+  } else {
+    const existingConfig = loadGatewayConfig();
+    if (existingConfig) {
+      gatewayPort = existingConfig.port;
+      gatewayBind = existingConfig.bind;
+      gatewayToken = existingConfig.token ?? null;
+    }
+  }
+
+  await ensureElectronBootstrapModel();
+  await startGateway();
+
+  if (options?.openControlUi === true) {
+    openControlUiInMainWindow();
+  }
+}
+
 /**
  * Setup IPC handlers
  */
@@ -1254,6 +1326,8 @@ function setupIpcHandlers(): void {
         initResult = result;
         gatewayPort = result.gatewayPort;
         gatewayBind = result.gatewayBind;
+        gatewayToken = result.gatewayToken ?? null;
+        needsOnboardAtLaunch = false;
       }
       return result;
     } catch (error) {
@@ -1502,7 +1576,13 @@ function setupIpcHandlers(): void {
           // Stop OAuth callback server
           stopOAuthCallbackServer();
 
+          console.log("[Bustly Login] Bootstrapping local desktop session...");
+          await bootstrapDesktopSession();
+
           console.log("[Bustly Login] Login successful! Config stored in bustlyOauth.json");
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send("bustly-login-refresh");
+          }
           return { success: true };
         }
 
@@ -2080,10 +2160,11 @@ void app.whenReady().then(async () => {
   writeMainLog(`configPath=${configPath ?? "unresolved"}`);
   // Check if we need to initialize or re-initialize (fix broken config)
   const fullyInitialized = isFullyInitialized();
+  const bustlyLoggedIn = await BustlyOAuth.isBustlyLoggedIn();
   console.log(`[Init] fullyInitialized=${fullyInitialized}`);
-  writeMainLog(`fullyInitialized=${fullyInitialized}`);
+  writeMainLog(`fullyInitialized=${fullyInitialized} bustlyLoggedIn=${bustlyLoggedIn}`);
   const needsInit = !fullyInitialized;
-  needsOnboardAtLaunch = needsInit;
+  needsOnboardAtLaunch = needsInit && !bustlyLoggedIn;
 
   ensureWindow();
 
@@ -2099,8 +2180,21 @@ void app.whenReady().then(async () => {
   });
 
   if (needsInit) {
-    console.log("[Init] Skipping auto-initialization; waiting for onboarding.");
-    writeMainLog("Skipping auto-initialization; waiting for onboarding.");
+    if (bustlyLoggedIn) {
+      console.log("[Init] Bustly session found; bootstrapping desktop session.");
+      writeMainLog("Bustly session found; bootstrapping desktop session.");
+      try {
+        await bootstrapDesktopSession();
+        console.log("[Init] Desktop session bootstrap complete");
+        writeMainLog("Desktop session bootstrap complete");
+      } catch (error) {
+        console.error("[Init] Failed to bootstrap desktop session:", error);
+        writeMainLog(`Desktop session bootstrap failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else {
+      console.log("[Init] Skipping auto-initialization; waiting for login.");
+      writeMainLog("Skipping auto-initialization; waiting for login.");
+    }
   } else {
     console.log("[Init] Configuration already exists and is valid");
     writeMainLog("Configuration already exists and is valid");

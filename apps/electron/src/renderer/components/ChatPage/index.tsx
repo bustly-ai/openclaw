@@ -63,12 +63,12 @@ function notifySidebarTasksRefresh() {
   window.dispatchEvent(new Event(SIDEBAR_TASKS_REFRESH_EVENT));
 }
 
-function resolveThreadBaseSessionKey(sessionKey: string) {
-  return sessionKey.replace(/:(thread|topic):[^:]+$/i, "");
+function resolveChannelBaseSessionKey(sessionKey: string) {
+  return sessionKey.replace(/:(thread|topic|channel|group):[^:]+$/i, "");
 }
 
-function buildThreadSessionKey(sessionKey: string) {
-  return `${resolveThreadBaseSessionKey(sessionKey)}:thread:${globalThis.crypto.randomUUID()}`;
+function buildChannelSessionKey(sessionKey: string) {
+  return `${resolveChannelBaseSessionKey(sessionKey)}:channel:${globalThis.crypto.randomUUID()}`;
 }
 
 function normalizeTextDelta(current: string, text?: string, delta?: string): string {
@@ -1224,8 +1224,8 @@ export default function ChatPage() {
     }
   }, [activeRunId, connected, currentSessionKey]);
 
-  const handleNewThread = useCallback(async () => {
-    const nextSessionKey = buildThreadSessionKey(currentSessionKey);
+  const handleNewChannel = useCallback(async () => {
+    const nextSessionKey = buildChannelSessionKey(currentSessionKey);
     void navigate(`/chat?session=${encodeURIComponent(nextSessionKey)}`);
   }, [currentSessionKey, navigate]);
 
@@ -1433,10 +1433,10 @@ export default function ChatPage() {
             className="chat-btn chat-btn--secondary"
             disabled={sending || Boolean(activeRunId)}
             onClick={() => {
-              void handleNewThread();
+              void handleNewChannel();
             }}
           >
-            New thread
+            New channel
           </button>
           <textarea
             className="chat-compose-input"

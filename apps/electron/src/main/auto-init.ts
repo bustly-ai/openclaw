@@ -5,16 +5,67 @@
  */
 
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { execFile, execFileSync } from "node:child_process";
 import type { PresetConfigOptions } from "../config/default-config.js";
+import type { OpenClawConfig } from "../../../../src/config/types";
+import { ensureOpenClawAgentEnv, resolveOpenClawAgentDir } from "../../../../src/agents/agent-paths";
+import { ensureOpenClawModelsJson } from "../../../../src/agents/models-config";
+import { ensurePiAuthJsonFromAuthProfiles } from "../../../../src/agents/pi-auth-json";
 import { resolveConfigPath as resolveConfigPathFromSrc } from "../../../../src/config/paths";
+import {
+  applyAuthProfileConfig,
+  applyOpenrouterProviderConfig,
+  setOpenrouterApiKey,
+} from "../../../../src/commands/onboard-auth";
+import { applyPrimaryModel } from "../../../../src/commands/model-picker";
 import { resolveCliInvocation, resolveOpenClawCliPath } from "./cli-utils.js";
+import {
+  ELECTRON_DEFAULT_MODEL,
+  ELECTRON_OPENCLAW_PROFILE,
+  getElectronOpenrouterApiKey,
+} from "./defaults.js";
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
+
+async function ensureElectronDefaultConfig(configPath: string): Promise<OpenClawConfig> {
+  const openrouterApiKey = getElectronOpenrouterApiKey();
+  const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+  const currentModel = config.agents?.defaults?.model;
+  const primaryModel = typeof currentModel === "string" ? currentModel : currentModel?.primary;
+
+  if (!openrouterApiKey) {
+    return config;
+  }
+
+  await setOpenrouterApiKey(openrouterApiKey, resolveOpenClawAgentDir());
+
+  let nextConfig = applyOpenrouterProviderConfig(config);
+  nextConfig = applyAuthProfileConfig(nextConfig, {
+    profileId: "openrouter:default",
+    provider: "openrouter",
+    mode: "api_key",
+  });
+  if (!primaryModel?.trim() || primaryModel !== ELECTRON_DEFAULT_MODEL) {
+    nextConfig = applyPrimaryModel(nextConfig, ELECTRON_DEFAULT_MODEL);
+  }
+
+  if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
+    writeFileSync(configPath, JSON.stringify(nextConfig, null, 2));
+  }
+
+  return nextConfig;
+}
+
+async function ensureElectronAgentModelFiles(config: OpenClawConfig): Promise<void> {
+  ensureOpenClawAgentEnv();
+  const agentDir = resolveOpenClawAgentDir();
+  await ensureOpenClawModelsJson(config, agentDir);
+  await ensurePiAuthJsonFromAuthProfiles(agentDir);
+}
 
 function loadLoginShellEnvironment(): Record<string, string> {
   try {
@@ -131,7 +182,7 @@ async function runCliOnboard(options: InitializationOptions): Promise<void> {
     ...process.env,
     ...loginShellEnv,
     OPENCLAW_LOAD_SHELL_ENV: "1",
-    OPENCLAW_PROFILE: process.env.BUSTLY_OPENCLAW_PROFILE?.trim() || "bustly",
+    OPENCLAW_PROFILE: ELECTRON_OPENCLAW_PROFILE,
   };
 
   await new Promise<void>((resolvePromise, rejectPromise) => {
@@ -184,7 +235,8 @@ export async function initializeOpenClaw(
       }
     }
 
-  const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    const config = await ensureElectronDefaultConfig(configPath);
+    await ensureElectronAgentModelFiles(config);
     const workspaceDir =
       config.agents?.defaults?.workspace || resolveDefaultWorkspaceDir(options.workspace);
     const resolvedWorkspace = workspaceDir.startsWith("~")

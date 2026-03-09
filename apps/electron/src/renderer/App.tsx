@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 // Types are defined in electron.d.ts
-import Onboard from "./components/Onboard";
 import BustlyLoginPage from "./components/Onboard/BustlyLoginPage";
 import ProviderSetupPage from "./components/Onboard/ProviderSetupPage";
 import DevPanel from "./components/DevPanel";
@@ -22,8 +21,7 @@ function AppShell() {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [showOnboard, setShowOnboard] = useState(false);
-  const [showOnboardLoading, setShowOnboardLoading] = useState(false);
+  const [initialRoute, setInitialRoute] = useState<"/chat" | "/bustly-login" | null>(null);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
@@ -60,20 +58,16 @@ function AppShell() {
       }
 
       try {
-        const [status, info, initialized, needsOnboard] = await Promise.all([
+        const [status, info, initialized, loggedIn] = await Promise.all([
           window.electronAPI.gatewayStatus(),
           window.electronAPI.getAppInfo(),
           window.electronAPI.openclawIsInitialized(),
-          window.electronAPI.openclawNeedsOnboard(),
+          window.electronAPI.bustlyIsLoggedIn(),
         ]);
         setGatewayStatus(status);
         setAppInfo(info);
-
-        // Show onboarding only when needed and not already initialized
-        if (needsOnboard && !initialized) {
-          setShowOnboard(true);
-        } else if (!isDevPanelWindow && !isBustlyLoginWindow && !isProviderSetupWindow && !isChatWindow) {
-          setShowOnboardLoading(true);
+        if (!isDevPanelWindow && !isBustlyLoginWindow && !isProviderSetupWindow && !isChatWindow) {
+          setInitialRoute(initialized && status.running ? "/chat" : "/bustly-login");
         }
       } catch (err) {
         console.error("Failed to load initial data:", err);
@@ -84,21 +78,19 @@ function AppShell() {
     void loadInitialData();
   }, [isBustlyLoginWindow, isChatWindow, isDevPanelWindow, isProviderSetupWindow]);
 
-  // When onboarding is complete, ensure the Control UI is loaded into the main window.
   useEffect(() => {
-    if (!showOnboardLoading || isDevPanelWindow || isBustlyLoginWindow || isProviderSetupWindow) {
+    if (!initialRoute || isDevPanelWindow || isBustlyLoginWindow || isProviderSetupWindow) {
       return;
     }
     if (controlUiRequestedRef.current) {
       return;
     }
     controlUiRequestedRef.current = true;
-    void navigate("/chat", { replace: true });
-  }, [showOnboardLoading, isDevPanelWindow, isBustlyLoginWindow, isProviderSetupWindow, navigate]);
+    void navigate(initialRoute, { replace: true });
+  }, [initialRoute, isDevPanelWindow, isBustlyLoginWindow, isProviderSetupWindow, navigate]);
 
-  // If gateway becomes ready after reopening, trigger Control UI load.
   useEffect(() => {
-    if (!showOnboardLoading || isDevPanelWindow || isBustlyLoginWindow || isProviderSetupWindow) {
+    if (isDevPanelWindow || isBustlyLoginWindow || isProviderSetupWindow) {
       return;
     }
     if (!gatewayStatus?.running) {
@@ -112,7 +104,6 @@ function AppShell() {
     void navigate("/chat", { replace: true });
   }, [
     gatewayStatus?.running,
-    showOnboardLoading,
     isDevPanelWindow,
     isBustlyLoginWindow,
     isProviderSetupWindow,
@@ -272,38 +263,20 @@ function AppShell() {
       setError(result.error ?? "Failed to reset onboarding");
       return;
     }
-    setShowOnboard(true);
-    setShowOnboardLoading(false);
-  }, []);
-
-  // Onboard handlers
-  const handleOnboardComplete = useCallback(async () => {
-    setShowOnboard(false);
-    setShowOnboardLoading(true);
-    // Refresh status after onboarding
-    if (window.electronAPI) {
-      const status = await window.electronAPI.gatewayStatus();
-      setGatewayStatus(status);
-    }
-  }, []);
-
-  const handleOnboardCancel = useCallback(() => {
-    setShowOnboard(false);
-    setShowOnboardLoading(false);
+    controlUiRequestedRef.current = false;
+    setInitialRoute("/bustly-login");
+    void navigate("/bustly-login", { replace: true });
   }, []);
 
   const renderDefault = () => {
-    if (showOnboard) {
-      return <Onboard onComplete={handleOnboardComplete} onCancel={handleOnboardCancel} />;
-    }
-    if (showOnboardLoading) {
+    if (!initialRoute) {
       return (
         <div className="onboard-loading">
           <div className="onboard-loading-card">
             <div className="onboard-loading-spinner" />
-            <p className="onboard-loading-title">Welcome to Bustly</p>
+            <p className="onboard-loading-title">Starting Bustly</p>
             <p className="onboard-loading-subtitle">
-              Setting up the AI. This should only take a moment...
+              Checking your local session. This should only take a moment...
             </p>
             {updateMessage ? (
               <p className="onboard-loading-update">{updateMessage}</p>
@@ -312,7 +285,7 @@ function AppShell() {
         </div>
       );
     }
-    return <Navigate to="/chat" replace />;
+    return <Navigate to={initialRoute} replace />;
   };
 
   return (
@@ -371,10 +344,6 @@ function AppShell() {
             <SkillPage />
           </ClientAppShell>
         }
-      />
-      <Route
-        path="/onboard"
-        element={<Onboard onComplete={handleOnboardComplete} onCancel={handleOnboardCancel} />}
       />
       <Route path="/" element={renderDefault()} />
       <Route path="*" element={<Navigate to="/" replace />} />
