@@ -199,28 +199,6 @@ function AppShell() {
     loggedIn &&
     ((!initialized) || (!gatewayReady && gatewayPhase !== "error"));
 
-  useEffect(() => {
-    console.log("[App] showGatewayLoading", {
-      showGatewayLoading,
-      pathname,
-      loggedIn,
-      initialized,
-      checking,
-      gatewayReady,
-      gatewayPhase,
-      gatewayRunning: gatewayStatus?.running ?? null,
-    });
-  }, [
-    checking,
-    gatewayPhase,
-    gatewayReady,
-    gatewayStatus?.running,
-    initialized,
-    loggedIn,
-    pathname,
-    showGatewayLoading,
-  ]);
-
   return (
     <>
       <Routes>
