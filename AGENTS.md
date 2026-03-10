@@ -6,6 +6,30 @@
 - GitHub linking footgun: don’t wrap issue/PR refs like `#24643` in backticks when you want auto-linking. Use plain `#24643` (optionally add full URL).
 - Security advisory analysis: before triage/severity decisions, read `SECURITY.md` to align with OpenClaw's trust model and design boundaries.
 
+## Electron Client Override
+
+- For all work under `apps/electron/**`, the Electron client product/design rules take precedence over legacy OpenClaw repo conventions when they conflict.
+- The canonical design reference for the Electron chat input/execution area is the in-repo design project `bustly_admin_design/`.
+- The primary source of truth is the design project's source code, not `dist`.
+- The top-level client design surface is `bustly_admin_design/src/pages/ClientProduct/index.jsx`.
+- Inside that page, the shell to mirror is `ClientAppShell`, and the execution/chat target surface is `bustly_admin_design/src/client-app/pages/Execution.jsx`.
+- Treat `bustly_admin_design/src/pages/ClientProduct/index.jsx -> ClientAppShell -> client-app/pages/Execution.jsx` as the default design chain for Electron client restoration work.
+- Only use `bustly_admin_design/dist/assets/index-*.js` as a fallback for string search or recovery when the exact source implementation cannot be found in `src`.
+- When locating the exact design implementation, search the source tree first for strings from the UI such as `Ask for follow-up changes...`, `Add photos & files`, `Drop files here`, `paperclip`, and `ClientProduct`.
+- For Electron UI tasks, do not invent layouts or interactions when the design project already defines them. Match the design project first.
+- For Electron UI restoration work, call out when a screen is matched to the design project versus when a fallback interpretation was used.
+
+## Electron Design Rules
+
+- Default primary text color: `#1A162F`.
+- Default secondary text color: `#666F8D`.
+- All product UI icons must come from `@phosphor-icons/react`.
+- Every Phosphor icon usage must explicitly set `weight="bold"`.
+- Do not introduce or use other icon libraries in new Electron client UI code, including `lucide-react`.
+- Brand logos are exceptions: use product-provided image assets (`svg`/`png`/URL), not icon-library substitutes.
+- When a brand logo asset is needed and no local asset exists, source it from `https://brandfetch.com/`.
+- For Electron client surfaces, preserve the established Bustly design language from the design project rather than defaulting to upstream OpenClaw branding conventions.
+
 ## Project Structure & Module Organization
 
 - Source code: `src/` (CLI wiring in `src/cli`, commands in `src/commands`, web provider in `src/provider-web.ts`, infra in `src/infra`, media pipeline in `src/media`).
@@ -80,7 +104,7 @@
 - Add brief code comments for tricky or non-obvious logic.
 - Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
-- Naming: use **OpenClaw** for product/app/docs headings; use `openclaw` for CLI command, package/binary, and config keys. Default state paths live under `~/.bustly`.
+- Naming: use **OpenClaw** for upstream project/docs/CLI contexts, but preserve existing Electron client product wording and Bustly-facing UI copy where the client/design project already uses it. Use `openclaw` for CLI command, package/binary, and config keys. Default state paths live under `~/.bustly`.
 
 ## Release Channels (Naming)
 
