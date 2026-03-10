@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { GatewayBrowserClient, type GatewayEventFrame } from "../../lib/gateway-client";
 import { extractText, extractThinking } from "../../lib/chat-extract";
+import Skeleton from "../ui/Skeleton";
 import { ChatTimeline, ChatTimelineThinkingIndicator } from "./ChatTimeline";
 import {
   buildInputArtifactsMessage,
@@ -374,6 +375,15 @@ function ArrowUpIcon() {
   );
 }
 
+function ArrowDownIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-[14px] w-[14px]">
+      <path d="m12 5 0 14" strokeLinecap="round" />
+      <path d="m19 12-7 7-7-7" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function StopIcon() {
   return <div className="h-[9px] w-[9px] rounded-[1px] bg-white" />;
 }
@@ -492,6 +502,8 @@ export default function ChatPage() {
     remainingTokens: null,
   });
   const [modelLevelOpen, setModelLevelOpen] = useState(false);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const [composerAreaHeight, setComposerAreaHeight] = useState(176);
   const [modelMenuPos, setModelMenuPos] = useState<{
     top: number;
     left: number;
@@ -525,6 +537,8 @@ export default function ChatPage() {
   >(new Map());
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const composerAreaRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
   const currentSessionKey = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
     return searchParams.get("session") ?? DEFAULT_SESSION_KEY;
@@ -1352,11 +1366,66 @@ export default function ChatPage() {
   }, [connected, currentSessionKey, loadHistory, loadSessionUsage, resetSessionView]);
 
   useEffect(() => {
-    if (!scrollRef.current) {
+    const element = scrollRef.current;
+    if (!element) {
       return;
     }
-    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [timeline]);
+    const handleScroll = () => {
+      const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+      const isNotAtBottom = distanceFromBottom > 100;
+      const isOverOnePage = element.scrollHeight > element.clientHeight;
+      shouldStickToBottomRef.current = !isNotAtBottom;
+      setShowScrollBottom(isNotAtBottom && isOverOnePage);
+    };
+    handleScroll();
+    element.addEventListener("scroll", handleScroll);
+    return () => {
+      element.removeEventListener("scroll", handleScroll);
+    };
+  }, []);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const element = scrollRef.current;
+    if (!element) {
+      return;
+    }
+    element.scrollTo({
+      top: element.scrollHeight,
+      behavior,
+    });
+    shouldStickToBottomRef.current = true;
+    setShowScrollBottom(false);
+  }, []);
+
+  useEffect(() => {
+    if (!shouldStickToBottomRef.current) {
+      return;
+    }
+    scrollToBottom("auto");
+  }, [scrollToBottom, timeline]);
+
+  useEffect(() => {
+    const element = composerAreaRef.current;
+    if (!element) {
+      return;
+    }
+    const updateComposerAreaHeight = () => {
+      setComposerAreaHeight(element.offsetHeight);
+      if (shouldStickToBottomRef.current) {
+        window.requestAnimationFrame(() => {
+          scrollToBottom("auto");
+        });
+      }
+    };
+    updateComposerAreaHeight();
+    const observer = new ResizeObserver(() => {
+      updateComposerAreaHeight();
+    });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, [scrollToBottom]);
 
   useEffect(() => {
     const textarea = composerRef.current;
@@ -1576,14 +1645,27 @@ export default function ChatPage() {
   }, []);
 
   const runningTools = useMemo(
-    () => timeline.filter((item) => item.kind === "tool" && item.status === "running").length,
-    [timeline],
+    () =>
+      activeRunId
+        ? timeline.filter(
+            (item) =>
+              item.kind === "tool" &&
+              item.status === "running" &&
+              item.runId === activeRunId,
+          ).length
+        : 0,
+    [activeRunId, timeline],
   );
 
   const activeRunningToolId = useMemo(() => {
     let latest: ToolItem | null = null;
     for (const entry of timeline) {
-      if (entry.kind !== "tool" || entry.status !== "running") {
+      if (
+        entry.kind !== "tool" ||
+        entry.status !== "running" ||
+        !activeRunId ||
+        entry.runId !== activeRunId
+      ) {
         continue;
       }
       if (!latest || entry.sortSeq > latest.sortSeq) {
@@ -1591,7 +1673,7 @@ export default function ChatPage() {
       }
     }
     return latest?.id ?? null;
-  }, [timeline]);
+  }, [activeRunId, timeline]);
 
   const processedTimeline = useMemo(() => {
     const rawNodes: TimelineNode[] = timeline.map((item) => {
@@ -1714,9 +1796,9 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-white text-gray-900">
-      <div className="sticky top-0 z-20 flex h-14 flex-none items-center border-b border-gray-100 bg-white/80 backdrop-blur-sm">
+      <div className="sticky top-0 z-20 flex h-14 flex-none items-center border-b border-gray-100 bg-white/80 backdrop-blur-sm [-webkit-app-region:drag]">
         <div className="flex w-full items-center px-6">
-          <div className="relative">
+          <div className="relative [-webkit-app-region:no-drag]">
             <button
               ref={modelTriggerRef}
               type="button"
@@ -1781,10 +1863,32 @@ export default function ChatPage() {
 
       <div className="relative flex-1 overflow-hidden">
         <div ref={scrollRef} className="chat-page-timeline h-full">
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 pt-8 pb-48">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 pt-8" style={{ paddingBottom: composerAreaHeight + 16 }}>
             {loading ? (
-              <div className="rounded-2xl border border-gray-100 bg-white px-4 py-3 text-sm text-gray-500">
-                Loading chat history...
+              <div className="rounded-2xl border border-gray-100 bg-white px-5 py-5">
+                <div className="space-y-4">
+                  <div className="flex justify-start">
+                    <div className="w-full max-w-[70%] space-y-2 rounded-3xl bg-[#F6F7F9] px-5 py-4">
+                      <Skeleton className="h-4 w-28 rounded-md" />
+                      <Skeleton className="h-4 w-full rounded-md" />
+                      <Skeleton className="h-4 w-3/4 rounded-md" />
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <div className="w-full max-w-[62%] space-y-2 rounded-3xl bg-[#F6F7F9] px-5 py-4">
+                      <Skeleton className="h-4 w-20 rounded-md" />
+                      <Skeleton className="h-4 w-full rounded-md" />
+                    </div>
+                  </div>
+                    <div className="flex justify-start">
+                    <div className="w-full max-w-[76%] space-y-2 rounded-3xl bg-[#F6F7F9] px-5 py-4">
+                      <Skeleton className="h-4 w-24 rounded-md" />
+                      <Skeleton className="h-4 w-full rounded-md" />
+                      <Skeleton className="h-4 w-5/6 rounded-md" />
+                      <Skeleton className="h-4 w-2/3 rounded-md" />
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : null}
 
@@ -1802,7 +1906,19 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
+        {showScrollBottom ? (
+          <button
+            type="button"
+            onClick={() => scrollToBottom()}
+            className="absolute left-1/2 z-30 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-gray-200 bg-white text-text-main shadow-md transition-all duration-300 hover:border-gray-300 hover:bg-gray-50"
+            style={{ bottom: composerAreaHeight + 16 }}
+            aria-label="Scroll to bottom"
+          >
+            <ArrowDownIcon />
+          </button>
+        ) : null}
+
+        <div ref={composerAreaRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
           <div className="h-8 bg-gradient-to-t from-white via-white/80 to-transparent" />
           <div className="border-t border-white/40 bg-white px-6 pb-8 pointer-events-auto">
             <div className="mx-auto w-full max-w-3xl">
@@ -1901,7 +2017,7 @@ export default function ChatPage() {
                         connected &&
                         !sending &&
                         (draft.trim() || attachments.length > 0 || contextPaths.length > 0)
-                          ? "bg-text-main text-white hover:bg-text-main/90 hover:shadow-md"
+                          ? "bg-black text-white hover:bg-black/90 hover:shadow-md"
                           : "cursor-not-allowed bg-gray-100 text-gray-300"
                       }`}
                       disabled={

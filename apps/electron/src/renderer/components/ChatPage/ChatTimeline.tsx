@@ -538,7 +538,7 @@ function TimelineStack({
         const prev = index > 0 ? items[index - 1] : null;
         const needsLooseSpacing = spaced && index > 0 && !shouldTightJoin(prev, node);
         return (
-          <div key={node.key} className={cx(needsLooseSpacing && "mt-8")}>
+          <div key={node.key} className={cx(needsLooseSpacing && "mt-4")}>
             <TimelineItem
               node={node}
               activeRunningToolKey={activeRunningToolKey}
