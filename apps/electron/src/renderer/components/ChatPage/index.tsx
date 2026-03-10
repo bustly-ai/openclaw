@@ -5,6 +5,7 @@ import { extractText, extractThinking } from "../../lib/chat-extract";
 import { ChatTimeline, ChatTimelineThinkingIndicator } from "./ChatTimeline";
 import { collapseProcessedTurn, resolveToolDisplay, formatToolDetail } from "./utils";
 import type { TimelineNode } from "./types";
+import { useAppState } from "../../providers/AppStateProvider";
 
 type ChatRole = "user" | "assistant" | "thinking" | "system";
 
@@ -345,6 +346,7 @@ function CloseIcon() {
 }
 
 export default function ChatPage() {
+  const { gatewayReady } = useAppState();
   const location = useLocation();
   const navigate = useNavigate();
   const [gateway, setGateway] = useState<GatewayStatus | null>(null);
@@ -1107,6 +1109,12 @@ export default function ChatPage() {
   );
 
   useEffect(() => {
+    if (!gatewayReady) {
+      setConnected(false);
+      setLoading(true);
+      return;
+    }
+
     let cancelled = false;
     void (async () => {
       try {
@@ -1147,7 +1155,7 @@ export default function ChatPage() {
       }
       toolTimersRef.current.clear();
     };
-  }, [connectGateway, loadGatewayStatus]);
+  }, [connectGateway, gatewayReady, loadGatewayStatus]);
 
   useEffect(() => {
     resetSessionView();

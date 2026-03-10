@@ -1,4 +1,6 @@
 import React, { memo, useEffect, useState } from "react";
+import Lottie from "lottie-react";
+import loadingAnimation from "../../assets/lottie/thinking.json";
 import type { TimelineNode } from "./types";
 import { toSanitizedMarkdownHtml } from "./utils";
 
@@ -208,11 +210,24 @@ function markdownClassName(isErrorText: boolean) {
   );
 }
 
+function isProcessNode(node: TimelineNode | null): boolean {
+  if (!node) {
+    return false;
+  }
+  if (node.kind === "tool" || node.kind === "processed") {
+    return true;
+  }
+  return (
+    node.kind === "text" &&
+    (node.tone === "thinking" || (node.tone === "assistant" && (node.streaming || !node.final)))
+  );
+}
+
 function shouldTightJoin(prev: TimelineNode | null, next: TimelineNode | null): boolean {
   if (!prev || !next) {
     return false;
   }
-  return prev.kind === "text" && prev.tone === "thinking" && next.kind === "tool";
+  return isProcessNode(prev) && isProcessNode(next);
 }
 
 async function copyText(text: string, onCopyText?: (text: string) => void) {
@@ -340,7 +355,7 @@ const ToolNode = memo(function ToolNode({
       <div className="relative z-10 flex flex-col">
         <button
           type="button"
-          className="group mb-2 mt-2 flex items-center gap-3 text-left"
+          className="group mb-1 mt-1 flex items-center gap-3 text-left"
           onClick={() => {
             setExpanded((value) => !value);
           }}
@@ -446,10 +461,12 @@ function TimelineStack({
   spaced?: boolean;
 }) {
   return (
-    <div className={cx("flex flex-col", spaced && "gap-8")}>
-      {items.map((node) => {
+    <div className="flex flex-col">
+      {items.map((node, index) => {
+        const prev = index > 0 ? items[index - 1] : null;
+        const needsLooseSpacing = spaced && index > 0 && !shouldTightJoin(prev, node);
         return (
-          <div key={node.key}>
+          <div key={node.key} className={cx(needsLooseSpacing && "mt-8")}>
             <TimelineItem
               node={node}
               activeRunningToolKey={activeRunningToolKey}
@@ -489,7 +506,7 @@ function ThinkingLiveIndicator({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-1.5 animate-in fade-in duration-500">
       <div className="flex h-4 w-4 items-center justify-center overflow-hidden">
-        <div className="h-2.5 w-2.5 animate-pulse rounded-full bg-gray-400/60" />
+        <Lottie animationData={loadingAnimation} loop style={{ width: 20, height: 20 }} className="scale-[0.8]" />
       </div>
       <span className="text-[14px] font-medium tracking-tight text-gray-500">{label}</span>
     </div>

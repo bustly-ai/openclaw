@@ -1576,13 +1576,24 @@ function setupIpcHandlers(): void {
           // Stop OAuth callback server
           stopOAuthCallbackServer();
 
-          console.log("[Bustly Login] Bootstrapping local desktop session...");
-          await bootstrapDesktopSession();
-
-          console.log("[Bustly Login] Login successful! Config stored in bustlyOauth.json");
           if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send("bustly-login-refresh");
           }
+
+          console.log("[Bustly Login] Login successful! Config stored in bustlyOauth.json");
+          void (async () => {
+            try {
+              console.log("[Bustly Login] Bootstrapping local desktop session...");
+              await bootstrapDesktopSession();
+            } catch (bootstrapError) {
+              console.error("[Bustly Login] Bootstrap error:", bootstrapError);
+            } finally {
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send("bustly-login-refresh");
+              }
+            }
+          })();
+
           return { success: true };
         }
 

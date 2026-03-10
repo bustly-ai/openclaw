@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import OnboardContainer from "./OnboardContainer";
 import bustlyLogo from "../../../../assets/imgs/collapsed_logo_v2.svg";
+import { useAppState } from "../../providers/AppStateProvider";
 
 type BustlyLoginPageProps = {
   onContinue: () => void;
@@ -17,115 +18,21 @@ export default function BustlyLoginPage({
   showSignOut = true,
   onLoggedOut,
 }: BustlyLoginPageProps) {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [checkingLogin, setCheckingLogin] = useState(true);
+  const { loggedIn, checking, gatewayPhase } = useAppState();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const autoContinueFiredRef = useRef(false);
 
-  const waitForGatewayReady = useCallback(async () => {
-    if (!window.electronAPI?.gatewayStatus || !window.electronAPI.gatewayConnectConfig) {
-      throw new Error("Electron gateway APIs are unavailable");
-    }
-
-    const deadline = Date.now() + 30_000;
-    let lastError = "Gateway did not become reachable";
-
-    while (Date.now() < deadline) {
-      const status = await window.electronAPI.gatewayStatus();
-      if (status.running) {
-        try {
-          const connectConfig = await window.electronAPI.gatewayConnectConfig();
-          if (connectConfig.wsUrl) {
-            await new Promise<void>((resolve, reject) => {
-              const socket = new WebSocket(connectConfig.wsUrl);
-              const timeout = window.setTimeout(() => {
-                socket.close();
-                reject(new Error("Timed out while opening gateway WebSocket"));
-              }, 3_000);
-              const cleanup = () => {
-                window.clearTimeout(timeout);
-              };
-
-              socket.addEventListener("open", () => {
-                cleanup();
-                socket.close();
-                resolve();
-              });
-
-              socket.addEventListener("error", () => {
-                cleanup();
-                reject(new Error("Gateway WebSocket connection failed"));
-              });
-            });
-            return;
-          }
-        } catch (err) {
-          lastError = err instanceof Error ? err.message : String(err);
-        }
-      } else {
-        lastError = "Gateway is still starting";
-      }
-
-      await new Promise((resolve) => window.setTimeout(resolve, 500));
-    }
-
-    throw new Error(lastError);
-  }, []);
-
-  const continueWhenReady = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      await waitForGatewayReady();
-      onContinue();
-    } catch (err) {
-      autoContinueFiredRef.current = false;
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [onContinue, waitForGatewayReady]);
-
-  const checkLoginStatus = useCallback(async () => {
-    if (!window.electronAPI?.bustlyIsLoggedIn) {return;}
-
-    try {
-      setCheckingLogin(true);
-      const loggedIn = await window.electronAPI.bustlyIsLoggedIn();
-      setIsLoggedIn(loggedIn);
-    } catch (err) {
-      console.error("Failed to check login status:", err);
-      setIsLoggedIn(false);
-    } finally {
-      setCheckingLogin(false);
-    }
-  }, []);
-
   useEffect(() => {
-    checkLoginStatus();
-  }, [checkLoginStatus]);
-
-  useEffect(() => {
-    if (!autoContinue || !isLoggedIn || checkingLogin) {
+    if (!autoContinue || !loggedIn || checking) {
       return;
     }
     if (autoContinueFiredRef.current) {
       return;
     }
     autoContinueFiredRef.current = true;
-    void continueWhenReady();
-  }, [autoContinue, checkingLogin, continueWhenReady, isLoggedIn]);
-
-  useEffect(() => {
-    if (!window.electronAPI?.onBustlyLoginRefresh) {return;}
-    const unsubscribe = window.electronAPI.onBustlyLoginRefresh(() => {
-      void checkLoginStatus();
-    });
-    return () => {
-      unsubscribe?.();
-    };
-  }, [checkLoginStatus]);
+    onContinue();
+  }, [autoContinue, checking, loggedIn, onContinue]);
 
   const handleBustlyLogin = useCallback(async () => {
     if (!window.electronAPI) {return;}
@@ -135,7 +42,7 @@ export default function BustlyLoginPage({
     try {
       const result = await window.electronAPI.bustlyLogin();
       if (result.success) {
-        await checkLoginStatus();
+        onContinue();
       } else {
         setError(result.error || "Login failed");
       }
@@ -144,7 +51,7 @@ export default function BustlyLoginPage({
     } finally {
       setLoading(false);
     }
-  }, [checkLoginStatus]);
+  }, [onContinue]);
 
   const handleBustlyLogout = useCallback(async () => {
     if (!window.electronAPI) {return;}
@@ -154,7 +61,6 @@ export default function BustlyLoginPage({
     try {
       const result = await window.electronAPI.bustlyLogout();
       if (result.success) {
-        setIsLoggedIn(false);
         onLoggedOut?.();
       } else {
         setError(result.error || "Logout failed");
@@ -181,10 +87,10 @@ export default function BustlyLoginPage({
       )}
 
       <div className="space-y-4">
-        {!isLoggedIn || showContinueWhenLoggedIn ? (
+        {!loggedIn || showContinueWhenLoggedIn ? (
           <button
-            onClick={isLoggedIn ? () => void continueWhenReady() : handleBustlyLogin}
-            disabled={loading || checkingLogin}
+            onClick={loggedIn ? onContinue : handleBustlyLogin}
+            disabled={loading || checking}
             className="w-full py-4 bg-[#1A162F] text-white font-bold rounded-xl hover:bg-[#1A162F]/90 disabled:opacity-80 transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5 flex items-center justify-center gap-2 text-lg"
           >
             {loading ? (
@@ -192,7 +98,7 @@ export default function BustlyLoginPage({
                 <span className="inline-flex h-5 w-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
                 <span>{"Waiting"}</span>
               </>
-            ) : isLoggedIn ? (
+            ) : loggedIn ? (
               "Continue"
             ) : (
               "Sign in or Sign up"
@@ -200,10 +106,10 @@ export default function BustlyLoginPage({
           </button>
         ) : null}
 
-        {showSignOut && isLoggedIn && (
+        {showSignOut && loggedIn && (
           <button
             onClick={handleBustlyLogout}
-            disabled={loading || checkingLogin}
+            disabled={loading || checking || gatewayPhase === "starting" || gatewayPhase === "checking"}
             className="w-full py-4 bg-white border border-gray-200 text-[#1A162F] font-bold rounded-xl hover:bg-gray-50 disabled:opacity-50 transition-all shadow-sm hover:shadow-md hover:-translate-y-0.5 flex items-center justify-center gap-2 text-lg"
           >
             Sign out

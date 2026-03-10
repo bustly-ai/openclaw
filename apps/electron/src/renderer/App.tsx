@@ -8,6 +8,8 @@ import DevPanel from "./components/DevPanel";
 import ChatPage from "./components/ChatPage/index";
 import ClientAppShell from "./components/ClientAppShell";
 import SkillPage from "./components/SkillPage";
+import { AppStateProvider, useAppState } from "./providers/AppStateProvider";
+import GlobalLoading from "./components/ui/GlobalLoading";
 
 interface LogEntry {
   id: number;
@@ -17,12 +19,18 @@ interface LogEntry {
 }
 
 function AppShell() {
-  const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
-  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const {
+    gatewayStatus,
+    appInfo,
+    loggedIn,
+    initialized,
+    checking,
+    gatewayPhase,
+    gatewayReady,
+    error: sessionError,
+  } = useAppState();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [initialRoute, setInitialRoute] = useState<"/chat" | "/bustly-login" | null>(null);
-  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
   const pathname = location.pathname || "/";
@@ -48,87 +56,9 @@ function AppShell() {
     [navigate],
   );
 
-  // Load initial data
   useEffect(() => {
-    const loadInitialData = async () => {
-      if (!window.electronAPI) {
-        console.warn("Electron API not available");
-        setError("Electron API not available. Are you running in a browser?");
-        return;
-      }
-
-      try {
-        const [status, info, initialized, loggedIn] = await Promise.all([
-          window.electronAPI.gatewayStatus(),
-          window.electronAPI.getAppInfo(),
-          window.electronAPI.openclawIsInitialized(),
-          window.electronAPI.bustlyIsLoggedIn(),
-        ]);
-        setGatewayStatus(status);
-        setAppInfo(info);
-        if (!isDevPanelWindow && !isBustlyLoginWindow && !isProviderSetupWindow && !isChatWindow) {
-          setInitialRoute(initialized && status.running ? "/chat" : "/bustly-login");
-        }
-      } catch (err) {
-        console.error("Failed to load initial data:", err);
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    };
-
-    void loadInitialData();
-  }, [isBustlyLoginWindow, isChatWindow, isDevPanelWindow, isProviderSetupWindow]);
-
-  useEffect(() => {
-    if (!initialRoute || isDevPanelWindow || isBustlyLoginWindow || isProviderSetupWindow) {
-      return;
-    }
-    if (controlUiRequestedRef.current) {
-      return;
-    }
-    controlUiRequestedRef.current = true;
-    void navigate(initialRoute, { replace: true });
-  }, [initialRoute, isDevPanelWindow, isBustlyLoginWindow, isProviderSetupWindow, navigate]);
-
-  useEffect(() => {
-    if (isDevPanelWindow || isBustlyLoginWindow || isProviderSetupWindow) {
-      return;
-    }
-    if (!gatewayStatus?.running) {
-      controlUiRequestedRef.current = false;
-      return;
-    }
-    if (controlUiRequestedRef.current) {
-      return;
-    }
-    controlUiRequestedRef.current = true;
-    void navigate("/chat", { replace: true });
-  }, [
-    gatewayStatus?.running,
-    isDevPanelWindow,
-    isBustlyLoginWindow,
-    isProviderSetupWindow,
-    navigate,
-  ]);
-
-  // Refresh gateway status periodically (handles auto-start and external changes)
-  useEffect(() => {
-    if (!window.electronAPI) {return;}
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const status = await window.electronAPI.gatewayStatus();
-        if (!cancelled) {
-          setGatewayStatus(status);
-        }
-      } catch {}
-    };
-    void tick();
-    const interval = setInterval(tick, 2000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, []);
+    setError(sessionError);
+  }, [sessionError]);
 
   // Setup gateway log listeners
   useEffect(() => {
@@ -185,15 +115,7 @@ function AppShell() {
     if (!window.electronAPI?.onUpdateStatus) {
       return;
     }
-    const unsubscribe = window.electronAPI.onUpdateStatus((data) => {
-      if (data.event === "available" || data.event === "download-progress") {
-        setUpdateMessage("A new version was found. Updating now...");
-      } else if (data.event === "downloaded") {
-        setUpdateMessage("Find new version available.");
-      } else if (data.event === "error") {
-        setUpdateMessage(null);
-      }
-    });
+    const unsubscribe = window.electronAPI.onUpdateStatus(() => {});
     return () => {
       unsubscribe();
     };
@@ -224,8 +146,6 @@ function AppShell() {
       return;
     }
     // Refresh status
-    const status = await window.electronAPI.gatewayStatus();
-    setGatewayStatus(status);
   }, []);
 
   const handleStopGateway = useCallback(async () => {
@@ -237,8 +157,6 @@ function AppShell() {
       return;
     }
     // Refresh status
-    const status = await window.electronAPI.gatewayStatus();
-    setGatewayStatus(status);
   }, []);
 
   // Open Control UI in browser
@@ -263,98 +181,121 @@ function AppShell() {
       setError(result.error ?? "Failed to reset onboarding");
       return;
     }
-    controlUiRequestedRef.current = false;
-    setInitialRoute("/bustly-login");
     void navigate("/bustly-login", { replace: true });
   }, []);
 
   const renderDefault = () => {
-    if (!initialRoute) {
-      return (
-        <div className="onboard-loading">
-          <div className="onboard-loading-card">
-            <div className="onboard-loading-spinner" />
-            <p className="onboard-loading-title">Starting Bustly</p>
-            <p className="onboard-loading-subtitle">
-              Checking your local session. This should only take a moment...
-            </p>
-            {updateMessage ? (
-              <p className="onboard-loading-update">{updateMessage}</p>
-            ) : null}
-          </div>
-        </div>
-      );
+    if (checking) {
+      return <GlobalLoading />;
     }
-    return <Navigate to={initialRoute} replace />;
+    if (!loggedIn) {
+      return <Navigate to="/bustly-login" replace />;
+    }
+    return <Navigate to="/chat" replace />;
   };
 
+  const showGatewayLoading =
+    !isDevPanelWindow &&
+    loggedIn &&
+    ((!initialized) || (!gatewayReady && gatewayPhase !== "error"));
+
+  useEffect(() => {
+    console.log("[App] showGatewayLoading", {
+      showGatewayLoading,
+      pathname,
+      loggedIn,
+      initialized,
+      checking,
+      gatewayReady,
+      gatewayPhase,
+      gatewayRunning: gatewayStatus?.running ?? null,
+    });
+  }, [
+    checking,
+    gatewayPhase,
+    gatewayReady,
+    gatewayStatus?.running,
+    initialized,
+    loggedIn,
+    pathname,
+    showGatewayLoading,
+  ]);
+
   return (
-    <Routes>
-      <Route
-        path="/devpanel"
-        element={
-          <DevPanel
-            appInfo={appInfo}
-            gatewayStatus={gatewayStatus}
-            logs={logs}
-            error={error}
-            onStartGateway={handleStartGateway}
-            onStopGateway={handleStopGateway}
-            onReOnboard={handleReOnboard}
-            onOpenControlUI={handleOpenControlUI}
-            onClearLogs={handleClearLogs}
-          />
-        }
-      />
-      <Route
-        path="/bustly-login"
-        element={
-          <BustlyLoginPage
-            onContinue={() => {
-              void navigate("/chat", { replace: true });
-            }}
-            autoContinue
-            showSignOut={false}
-            showContinueWhenLoggedIn={false}
-          />
-        }
-      />
-      <Route
-        path="/provider-setup"
-        element={
-          <ProviderSetupPage
-            onDone={() => {
-              void navigate("/chat", { replace: true });
-            }}
-          />
-        }
-      />
-      <Route
-        path="/chat"
-        element={
-          <ClientAppShell>
-            <ChatPage />
-          </ClientAppShell>
-        }
-      />
-      <Route
-        path="/skill"
-        element={
-          <ClientAppShell>
-            <SkillPage />
-          </ClientAppShell>
-        }
-      />
-      <Route path="/" element={renderDefault()} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <>
+      <Routes>
+        <Route
+          path="/devpanel"
+          element={
+            <DevPanel
+              appInfo={appInfo}
+              gatewayStatus={gatewayStatus}
+              logs={logs}
+              error={error}
+              onStartGateway={handleStartGateway}
+              onStopGateway={handleStopGateway}
+              onReOnboard={handleReOnboard}
+              onOpenControlUI={handleOpenControlUI}
+              onClearLogs={handleClearLogs}
+            />
+          }
+        />
+        <Route
+          path="/bustly-login"
+          element={
+            <BustlyLoginPage
+              onContinue={() => {
+                void navigate("/", { replace: true });
+              }}
+              autoContinue
+              showSignOut={false}
+              showContinueWhenLoggedIn={false}
+            />
+          }
+        />
+        <Route
+          path="/provider-setup"
+          element={
+            <ProviderSetupPage
+              onDone={() => {
+                void navigate("/", { replace: true });
+              }}
+            />
+          }
+        />
+        <Route
+          path="/chat"
+          element={
+            <ClientAppShell>
+              <ChatPage />
+            </ClientAppShell>
+          }
+        />
+        <Route
+          path="/skill"
+          element={
+            <ClientAppShell>
+              <SkillPage />
+            </ClientAppShell>
+          }
+        />
+        <Route path="/" element={renderDefault()} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+
+      {showGatewayLoading ? (
+        <GlobalLoading />
+      ) : null}
+    </>
   );
 }
 
 export default function App() {
   return (
     <HashRouter>
-      <AppShell />
+      <AppStateProvider>
+        <AppShell />
+      </AppStateProvider>
     </HashRouter>
   );
 }
