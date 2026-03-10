@@ -4,6 +4,12 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { GatewayBrowserClient, type GatewayEventFrame } from "../../lib/gateway-client";
 import { extractText, extractThinking } from "../../lib/chat-extract";
 import { ChatTimeline, ChatTimelineThinkingIndicator } from "./ChatTimeline";
+import {
+  buildInputArtifactsMessage,
+  inferInputArtifactKind,
+  type ChatInputArtifact,
+  type InputArtifactKind,
+} from "./input-artifacts";
 import { collapseProcessedTurn, resolveToolDisplay, formatToolDetail } from "./utils";
 import type { TimelineNode } from "./types";
 import { useAppState } from "../../providers/AppStateProvider";
@@ -15,6 +21,13 @@ type Attachment = {
   dataUrl: string;
   mimeType: string;
   name: string;
+};
+
+type ContextPath = {
+  id: string;
+  path: string;
+  name: string;
+  kind: InputArtifactKind;
 };
 
 type TextItem = {
@@ -224,10 +237,8 @@ function readMessageRole(message: unknown): ChatRole {
   if (!message || typeof message !== "object") {
     return "assistant";
   }
-  const role =
-    typeof (message as Record<string, unknown>).role === "string"
-      ? (message as Record<string, unknown>).role.toLowerCase()
-      : "";
+  const roleValue = (message as Record<string, unknown>).role;
+  const role = typeof roleValue === "string" ? roleValue.toLowerCase() : "";
   if (role === "user") {
     return "user";
   }
@@ -235,6 +246,26 @@ function readMessageRole(message: unknown): ChatRole {
     return "system";
   }
   return "assistant";
+}
+
+function isCompactionSystemMessage(message: unknown, text: string | null): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const rec = message as Record<string, unknown>;
+  const role = typeof rec.role === "string" ? rec.role.toLowerCase() : "";
+  if (role !== "system") {
+    return false;
+  }
+  const meta =
+    rec.__openclaw && typeof rec.__openclaw === "object"
+      ? (rec.__openclaw as Record<string, unknown>)
+      : null;
+  const kind = typeof meta?.kind === "string" ? meta.kind.toLowerCase() : "";
+  if (kind === "compaction") {
+    return true;
+  }
+  return text?.trim() === "Compaction";
 }
 
 function parseToolBlocks(message: unknown): Array<{ toolCallId: string; name: string; args?: unknown; output?: string }> {
@@ -355,6 +386,75 @@ function CloseIcon() {
   );
 }
 
+function ImageIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <circle cx="9" cy="10" r="1.5" />
+      <path d="m21 15-4.5-4.5L8 19" />
+    </svg>
+  );
+}
+
+function FileIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 3v5h5" />
+      <path d="M9 13h6" />
+      <path d="M9 17h4" />
+    </svg>
+  );
+}
+
+function DirectoryIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+      <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" />
+    </svg>
+  );
+}
+
+function InputArtifactCard({
+  kind,
+  title,
+  subtitle,
+  imageUrl,
+  onRemove,
+}: {
+  kind: InputArtifactKind;
+  title: string;
+  subtitle?: string;
+  imageUrl?: string;
+  onRemove: () => void;
+}) {
+  const Icon = kind === "directory" ? DirectoryIcon : kind === "image" ? ImageIcon : FileIcon;
+
+  return (
+    <div
+      className="group/input flex max-w-full items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-100 py-1 pr-1 pl-2 text-xs font-medium text-text-main"
+      title={subtitle ?? title}
+    >
+      {imageUrl ? (
+        <img src={imageUrl} alt="" className="h-5 w-5 shrink-0 rounded-md border border-gray-200 object-cover" />
+      ) : (
+        <div className="flex h-5 w-5 shrink-0 items-center justify-center text-text-sub">
+          <Icon />
+        </div>
+      )}
+      <div className="min-w-0 max-w-[220px] truncate">{title}</div>
+      <button
+        type="button"
+        className="rounded text-text-sub transition-colors hover:bg-gray-200 hover:text-text-main"
+        onClick={onRemove}
+        aria-label={`Remove ${title}`}
+      >
+        <CloseIcon />
+      </button>
+    </div>
+  );
+}
+
 function CaretDownIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
@@ -375,13 +475,13 @@ export default function ChatPage() {
   const { gatewayReady } = useAppState();
   const location = useLocation();
   const navigate = useNavigate();
-  const [gateway, setGateway] = useState<GatewayStatus | null>(null);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [contextPaths, setContextPaths] = useState<ContextPath[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [compactingRunId, setCompactingRunId] = useState<string | null>(null);
@@ -425,7 +525,6 @@ export default function ChatPage() {
   >(new Map());
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const currentSessionKey = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
     return searchParams.get("session") ?? DEFAULT_SESSION_KEY;
@@ -433,7 +532,6 @@ export default function ChatPage() {
 
   const loadGatewayStatus = useCallback(async () => {
     const status = await window.electronAPI.gatewayStatus();
-    setGateway(status);
     return status;
   }, []);
 
@@ -713,6 +811,7 @@ export default function ChatPage() {
     setTimeline([]);
     setDraft("");
     setAttachments([]);
+    setContextPaths([]);
     setActiveRunId(null);
     setCompactingRunId(null);
     setSessionUsage({
@@ -778,6 +877,9 @@ export default function ChatPage() {
       }
 
       const text = readContentText(message);
+      if (isCompactionSystemMessage(message, text)) {
+        continue;
+      }
       if (text) {
         const textRole: ChatRole =
           role === "user"
@@ -1179,7 +1281,6 @@ export default function ChatPage() {
     const interval = window.setInterval(() => {
       void loadGatewayStatus()
         .then((status) => {
-          setGateway(status);
           if (!status.running) {
             setConnected(false);
           }
@@ -1235,22 +1336,28 @@ export default function ChatPage() {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
   }, [draft]);
 
-  const handleStartGateway = useCallback(async () => {
-    setError(null);
-    const result = await window.electronAPI.gatewayStart();
-    if (!result.success) {
-      setError(result.error ?? "Failed to start gateway");
-      return;
-    }
-    const status = await loadGatewayStatus();
-    await connectGateway(status);
-  }, [connectGateway, loadGatewayStatus]);
-
   const handleSend = useCallback(async () => {
     const msg = draft.trim();
-    if (!connected || (!msg && attachments.length === 0) || sending || !clientRef.current) {
+    if (
+      !connected ||
+      (!msg && attachments.length === 0 && contextPaths.length === 0) ||
+      sending ||
+      !clientRef.current
+    ) {
       return;
     }
+    const outgoingArtifacts: ChatInputArtifact[] = [
+      ...attachments.map((attachment) => ({
+        kind: "image" as const,
+        name: attachment.name,
+      })),
+      ...contextPaths.map((entry) => ({
+        kind: entry.kind,
+        name: entry.name,
+        path: entry.path,
+      })),
+    ];
+    const outgoingMessage = buildInputArtifactsMessage(draft, outgoingArtifacts);
 
     const localSeq = seqCounterRef.current++;
     const userItem: TextItem = {
@@ -1259,12 +1366,13 @@ export default function ChatPage() {
       sortSeq: localSeq,
       timestamp: Date.now(),
       role: "user",
-      text: draft,
+      text: outgoingMessage,
       streaming: false,
     };
     setTimeline((prev) => [...prev, userItem].sort(compareTimeline));
     setDraft("");
     setAttachments([]);
+    setContextPaths([]);
     setSending(true);
     setError(null);
 
@@ -1289,7 +1397,7 @@ export default function ChatPage() {
 
       await clientRef.current.request("chat.send", {
         sessionKey: currentSessionKey,
-        message: msg,
+        message: outgoingMessage,
         deliver: false,
         idempotencyKey,
         attachments: apiAttachments.length > 0 ? apiAttachments : undefined,
@@ -1303,7 +1411,7 @@ export default function ChatPage() {
     } finally {
       setSending(false);
     }
-  }, [attachments, connected, currentSessionKey, draft, sending]);
+  }, [attachments, connected, contextPaths, currentSessionKey, draft, sending]);
 
   const handleAbort = useCallback(async () => {
     if (!connected || !clientRef.current) {
@@ -1367,6 +1475,36 @@ export default function ChatPage() {
     }
     if (next.length > 0) {
       setAttachments((prev) => [...prev, ...next]);
+    }
+  }, []);
+
+  const handleSelectContextPaths = useCallback(async () => {
+    try {
+      const selected = await window.electronAPI.selectChatContextPaths();
+      if (!Array.isArray(selected) || selected.length === 0) {
+        return;
+      }
+      setContextPaths((prev) => {
+        const seen = new Set(prev.map((entry) => entry.path));
+        const nextEntries = selected
+          .filter((entry): entry is ChatContextPathSelection => Boolean(entry?.path && entry?.name))
+          .filter((entry) => {
+            if (seen.has(entry.path)) {
+              return false;
+            }
+            seen.add(entry.path);
+            return true;
+          })
+          .map((entry) => ({
+            id: nextId("ctx"),
+            path: entry.path,
+            name: entry.name,
+            kind: inferInputArtifactKind(entry),
+          }));
+        return nextEntries.length > 0 ? [...prev, ...nextEntries] : prev;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   }, []);
 
@@ -1517,7 +1655,7 @@ export default function ChatPage() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-white text-gray-900">
       <div className="sticky top-0 z-20 flex h-14 flex-none items-center border-b border-gray-100 bg-white/80 backdrop-blur-sm">
-        <div className="flex w-full items-center justify-between px-6">
+        <div className="flex w-full items-center px-6">
           <div className="relative">
             <button
               ref={modelTriggerRef}
@@ -1532,29 +1670,6 @@ export default function ChatPage() {
               <span className="text-gray-900">{selectedModelLevel.label}</span>
               <CaretDownIcon className={`h-3.5 w-3.5 text-gray-500 transition-transform ${modelLevelOpen ? "rotate-180" : ""}`} />
             </button>
-          </div>
-          <div className="flex items-center gap-2">
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                connected ? "bg-green-50 text-green-700" : "bg-gray-100 text-gray-500"
-              }`}
-            >
-              {connected ? "Connected" : "Disconnected"}
-            </span>
-            <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-500">
-              Port {gateway?.port ?? "-"}
-            </span>
-            {!gateway?.running ? (
-              <button
-                type="button"
-                className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm transition-all hover:bg-gray-50 hover:shadow-md"
-                onClick={() => {
-                  void handleStartGateway();
-                }}
-              >
-                Start Gateway
-              </button>
-            ) : null}
           </div>
         </div>
       </div>
@@ -1629,39 +1744,33 @@ export default function ChatPage() {
 
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
           <div className="h-8 bg-gradient-to-t from-white via-white/80 to-transparent" />
-          <div className="bg-white px-6 pb-8 pointer-events-auto">
+          <div className="border-t border-white/40 bg-white px-6 pb-8 pointer-events-auto">
             <div className="mx-auto w-full max-w-3xl">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  void handleAttachmentFiles(e.target.files);
-                  e.currentTarget.value = "";
-                }}
-              />
-              <div className="group relative rounded-[32px] border border-gray-200 bg-white p-4 shadow-sm transition-all hover:border-gray-300 focus-within:border-gray-400 focus-within:shadow-md">
-                {attachments.length > 0 ? (
-                  <div className="relative z-10 mb-2 flex flex-wrap gap-2">
+              <div className="group relative rounded-[28px] border border-gray-200 bg-white p-4 shadow-sm transition-all duration-300 hover:border-gray-300 focus-within:border-gray-400 focus-within:shadow-md">
+                {attachments.length > 0 || contextPaths.length > 0 ? (
+                  <div className="relative z-10 mb-3 flex flex-wrap gap-2">
                     {attachments.map((att) => (
-                      <div
+                      <InputArtifactCard
                         key={att.id}
-                        className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-100 py-1 pl-2 pr-1 text-xs font-medium text-gray-900"
-                      >
-                        <img src={att.dataUrl} alt="" className="h-5 w-5 rounded object-cover" />
-                        <span className="max-w-[120px] truncate">{att.name}</span>
-                        <button
-                          type="button"
-                          className="rounded p-0.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900"
-                          onClick={() => {
-                            setAttachments((prev) => prev.filter((p) => p.id !== att.id));
-                          }}
-                        >
-                          <CloseIcon />
-                        </button>
-                      </div>
+                        kind="image"
+                        title={att.name}
+                        subtitle={att.mimeType}
+                        imageUrl={att.dataUrl}
+                        onRemove={() => {
+                          setAttachments((prev) => prev.filter((p) => p.id !== att.id));
+                        }}
+                      />
+                    ))}
+                    {contextPaths.map((entry) => (
+                      <InputArtifactCard
+                        key={entry.id}
+                        kind={entry.kind}
+                        title={entry.name}
+                        subtitle={entry.path}
+                        onRemove={() => {
+                          setContextPaths((prev) => prev.filter((p) => p.id !== entry.id));
+                        }}
+                      />
                     ))}
                   </div>
                 ) : null}
@@ -1674,7 +1783,7 @@ export default function ChatPage() {
                   placeholder={
                     connected ? "Ask for follow-up changes..." : "Connect to gateway to chat..."
                   }
-                  className="relative z-10 min-h-[44px] max-h-[200px] w-full resize-none border-none bg-transparent px-1 pr-14 text-base font-normal text-gray-900 outline-none placeholder:text-gray-400 disabled:cursor-not-allowed disabled:text-gray-400"
+                  className="relative z-10 min-h-[44px] max-h-[200px] w-full resize-none border-none bg-transparent px-1 pr-14 text-base font-light text-text-main outline-none placeholder:text-text-sub/70 disabled:cursor-not-allowed disabled:text-gray-400"
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
@@ -1703,10 +1812,11 @@ export default function ChatPage() {
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 transition-all duration-200 hover:bg-gray-100 hover:text-gray-900 active:bg-gray-200"
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-text-sub transition-all duration-200 hover:bg-gray-100 hover:text-text-main active:bg-gray-200"
                       onClick={() => {
-                        fileInputRef.current?.click();
+                        void handleSelectContextPaths();
                       }}
+                      title="Add photos & files"
                     >
                       <PaperclipIcon />
                     </button>
@@ -1728,11 +1838,17 @@ export default function ChatPage() {
                     <button
                       type="button"
                       className={`flex h-7 w-7 items-center justify-center rounded-lg shadow-sm transition-all active:scale-95 ${
-                        connected && !sending && (draft.trim() || attachments.length > 0)
+                        connected &&
+                        !sending &&
+                        (draft.trim() || attachments.length > 0 || contextPaths.length > 0)
                           ? "bg-text-main text-white hover:bg-text-main/90 hover:shadow-md"
                           : "cursor-not-allowed bg-gray-100 text-gray-300"
                       }`}
-                      disabled={!connected || sending || (!draft.trim() && attachments.length === 0)}
+                      disabled={
+                        !connected ||
+                        sending ||
+                        (!draft.trim() && attachments.length === 0 && contextPaths.length === 0)
+                      }
                       onClick={() => {
                         void handleSend();
                       }}

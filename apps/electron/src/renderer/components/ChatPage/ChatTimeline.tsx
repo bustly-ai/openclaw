@@ -1,6 +1,10 @@
 import React, { memo, useEffect, useState } from "react";
 import Lottie from "lottie-react";
 import loadingAnimation from "../../assets/lottie/thinking.json";
+import {
+  parseInputArtifactsFromMessage,
+  type ChatInputArtifact,
+} from "./input-artifacts";
 import type { TimelineNode } from "./types";
 import { toSanitizedMarkdownHtml } from "./utils";
 
@@ -84,6 +88,61 @@ function SpinnerIcon({ className }: { className?: string }) {
     >
       <path d="M21 12a9 9 0 1 1-6.2-8.56" />
     </svg>
+  );
+}
+
+function UserImageIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <circle cx="9" cy="10" r="1.5" />
+      <path d="m21 15-4.5-4.5L8 19" />
+    </svg>
+  );
+}
+
+function UserFileIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 3v5h5" />
+      <path d="M9 13h6" />
+      <path d="M9 17h4" />
+    </svg>
+  );
+}
+
+function UserFolderIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+      <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" />
+    </svg>
+  );
+}
+
+function UserArtifactCard({ artifact }: { artifact: ChatInputArtifact }) {
+  const Icon =
+    artifact.kind === "directory"
+      ? UserFolderIcon
+      : artifact.kind === "image"
+        ? UserImageIcon
+        : UserFileIcon;
+
+  return (
+    <div className="flex max-w-full items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-100 py-1 pr-1 pl-2 text-xs font-medium text-text-main">
+      {artifact.kind === "image" ? (
+        <div className="flex h-5 w-5 shrink-0 items-center justify-center text-text-sub">
+          <Icon />
+        </div>
+      ) : (
+        <div className="flex h-5 w-5 shrink-0 items-center justify-center text-text-sub">
+          <Icon />
+        </div>
+      )}
+      <div className="min-w-0 max-w-[220px] truncate" title={artifact.path ?? artifact.name}>
+        {artifact.name}
+      </div>
+    </div>
   );
 }
 
@@ -268,12 +327,25 @@ const TextNode = memo(function TextNode({
 
   if (node.tone === "user") {
     const timeLabel = formatUserTime(node.timestamp);
+    const parsed = parseInputArtifactsFromMessage(node.text);
     return (
       <div className="group/user flex flex-col items-end">
-        <div className="max-w-[85%] rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3">
-          <div className="whitespace-pre-wrap text-sm leading-relaxed text-gray-900" dir="auto">
-            {node.text}
-          </div>
+        <div className="flex max-w-[85%] flex-col gap-2 rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3">
+          {parsed.text ? (
+            <div className="whitespace-pre-wrap text-sm leading-relaxed text-gray-900" dir="auto">
+              {parsed.text}
+            </div>
+          ) : null}
+          {parsed.artifacts.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {parsed.artifacts.map((artifact, index) => (
+                <UserArtifactCard
+                  key={`${artifact.kind}:${artifact.name}:${artifact.path ?? index}`}
+                  artifact={artifact}
+                />
+              ))}
+            </div>
+          ) : null}
         </div>
         <div className="mt-1.5 flex min-h-[24px] items-center gap-2 px-1">
           <button

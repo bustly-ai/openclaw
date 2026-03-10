@@ -1,5 +1,14 @@
-import { app, BrowserWindow, ipcMain, shell, globalShortcut, powerSaveBlocker } from "electron";
-import { resolve, dirname } from "node:path";
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  shell,
+  globalShortcut,
+  powerSaveBlocker,
+  dialog,
+  type OpenDialogOptions,
+} from "electron";
+import { resolve, dirname, basename } from "node:path";
 import { spawn, spawnSync, ChildProcess } from "node:child_process";
 import {
   existsSync,
@@ -9,6 +18,7 @@ import {
   rmSync,
   appendFileSync,
   cpSync,
+  statSync,
 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -1457,6 +1467,32 @@ function setupIpcHandlers(): void {
       host: GATEWAY_HOST,
       port: gatewayPort,
     };
+  });
+
+  ipcMain.handle("dialog-select-chat-context-paths", async () => {
+    const dialogOptions: OpenDialogOptions = {
+      title: "Select files or folders",
+      properties: ["openFile", "openDirectory", "multiSelections"],
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+    if (result.canceled || result.filePaths.length === 0) {
+      return [];
+    }
+    return result.filePaths.map((selectedPath) => {
+      let isDirectory = false;
+      try {
+        isDirectory = statSync(selectedPath).isDirectory();
+      } catch {
+        isDirectory = false;
+      }
+      return {
+        path: selectedPath,
+        name: basename(selectedPath) || selectedPath,
+        kind: isDirectory ? ("directory" as const) : ("file" as const),
+      };
+    });
   });
 
   // Get app info

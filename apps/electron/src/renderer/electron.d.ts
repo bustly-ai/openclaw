@@ -41,6 +41,12 @@ interface GatewayConnectConfig {
   port: number;
 }
 
+interface ChatContextPathSelection {
+  path: string;
+  name: string;
+  kind: "file" | "directory";
+}
+
 interface AppInfo {
   version: string;
   name: string;
@@ -159,6 +165,7 @@ interface ElectronAPI {
   gatewayStop: () => Promise<{ success: boolean; error?: string }>;
   gatewayStatus: () => Promise<GatewayStatus>;
   gatewayConnectConfig: () => Promise<GatewayConnectConfig>;
+  selectChatContextPaths: () => Promise<ChatContextPathSelection[]>;
   getAppInfo: () => Promise<AppInfo>;
   getNativeFullscreenStatus: () => Promise<{ isNativeFullscreen: boolean }>;
 
