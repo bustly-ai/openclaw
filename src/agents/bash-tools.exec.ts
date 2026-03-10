@@ -148,6 +148,17 @@ async function validateScriptFileForShellBleed(params: {
   }
 }
 
+function resolveHostExecPathPrependFromEnv(): string[] {
+  const raw = process.env.OPENCLAW_EXEC_PATH_PREPEND?.trim();
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 export function createExecTool(
   defaults?: ExecToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -164,6 +175,7 @@ export function createExecTool(
       ? defaults.timeoutSec
       : 1800;
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
+  const envPathPrepend = normalizePathPrepend(resolveHostExecPathPrependFromEnv());
   const {
     safeBins,
     safeBinProfiles,
@@ -386,6 +398,10 @@ export function createExecTool(
           timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
         });
         applyShellPath(env, shellPath);
+      }
+
+      if (!sandbox && envPathPrepend.length > 0) {
+        applyPathPrepend(env, envPathPrepend);
       }
 
       // `tools.exec.pathPrepend` is only meaningful when exec runs locally (gateway) or in the sandbox.

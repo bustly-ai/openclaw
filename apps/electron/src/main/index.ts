@@ -30,7 +30,11 @@ import {
   isFullyInitialized,
   type InitializationResult,
 } from "./auto-init.js";
-import { resolveCliInvocation, resolveOpenClawCliPath } from "./cli-utils.js";
+import {
+  ensureBundledOpenClawShim,
+  resolveCliInvocation,
+  resolveOpenClawCliPath,
+} from "./cli-utils.js";
 import {
   listProviders,
   authenticateWithApiKey,
@@ -295,6 +299,22 @@ function resolveElectronConfigPath(): string {
     return resolveUserPath(override, homeDir);
   }
   return resolve(resolveElectronStateDir(), "openclaw.json");
+}
+
+function prependPathEntry(pathValue: string, entry: string): string {
+  const delimiter = process.platform === "win32" ? ";" : ":";
+  const parts = pathValue
+    .split(delimiter)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (!parts.includes(entry)) {
+    parts.unshift(entry);
+  }
+  return parts.join(delimiter);
+}
+
+function getPathDelimiter(): string {
+  return process.platform === "win32" ? ";" : ":";
 }
 
 function ensureMainLogPath(): string {
@@ -660,6 +680,8 @@ async function startGateway(): Promise<boolean> {
       loginShellEnv.PATH?.trim() ||
       process.env.PATH?.trim() ||
       "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+    const bundledCliShim = ensureBundledOpenClawShim(cliPath, stateDir, { includeBundledNode: true });
+    const effectivePath = bundledCliShim ? prependPathEntry(fixedPath, bundledCliShim.shimDir) : fixedPath;
     const bunInstall =
       process.env.BUN_INSTALL?.trim() || resolve(app.getPath("home"), ".bun");
     const homebrewPrefix = process.env.HOMEBREW_PREFIX?.trim() || "/opt/homebrew";
@@ -736,13 +758,14 @@ async function startGateway(): Promise<boolean> {
       USERPROFILE: homeDir,
       OPENCLAW_LOAD_SHELL_ENV: "1",
       SHELL: shellPath,
-      PATH: fixedPath,
+      PATH: effectivePath,
       BUN_INSTALL: bunInstall,
       HOMEBREW_PREFIX: homebrewPrefix,
       TERM: process.env.TERM?.trim() || "xterm-256color",
       COLORTERM: process.env.COLORTERM?.trim() || "truecolor",
       TERM_PROGRAM: process.env.TERM_PROGRAM?.trim() || "OpenClaw",
       NODE_PATH: effectiveNodePath,
+      ...(bundledCliShim ? { OPENCLAW_EXEC_PATH_PREPEND: bundledCliShim.shimDir } : {}),
       OPENCLAW_OAUTH_CALLBACK_PORT: String(oauthCallbackPort),
       ...(bundledVersion ? { OPENCLAW_BUNDLED_VERSION: bundledVersion } : {}),
     };
@@ -750,7 +773,7 @@ async function startGateway(): Promise<boolean> {
       spawnEnv.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
     }
     writeMainLog(
-      `Gateway env: SHELL=${shellPath} OPENCLAW_LOAD_SHELL_ENV=1 NODE_PATH=${effectiveNodePath || "(empty)"} appPath=${appPath} resourcesPath=${resourcesPath} candidates=${nodePathStatus || "(none)"} rawOpenClawNodeModules=${openclawNodeModules} rawResourcesNodeModules=${resourcesNodeModules} rawAppNodeModules=${appNodeModules} inheritedNodePath=${inheritedNodePath ?? "(none)"}`,
+      `Gateway env: SHELL=${shellPath} OPENCLAW_LOAD_SHELL_ENV=1 NODE_PATH=${effectiveNodePath || "(empty)"} PATH_HEAD=${effectivePath.split(getPathDelimiter())[0] ?? "(empty)"} cliShim=${bundledCliShim?.shimPath ?? "(none)"} appPath=${appPath} resourcesPath=${resourcesPath} candidates=${nodePathStatus || "(none)"} rawOpenClawNodeModules=${openclawNodeModules} rawResourcesNodeModules=${resourcesNodeModules} rawAppNodeModules=${appNodeModules} inheritedNodePath=${inheritedNodePath ?? "(none)"}`,
     );
 
     writeMainLog(

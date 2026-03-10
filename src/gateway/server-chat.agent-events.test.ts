@@ -323,7 +323,7 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
-  it("strips tool output when verbose is on", () => {
+  it("strips structured tool output when verbose is on but keeps text output", () => {
     const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
@@ -349,10 +349,11 @@ describe("agent event handler", () => {
     const payload = broadcastToConnIds.mock.calls[0]?.[1] as { data?: Record<string, unknown> };
     expect(payload.data?.result).toBeUndefined();
     expect(payload.data?.partialResult).toBeUndefined();
+    expect(payload.data?.output).toBe("secret");
     resetAgentRunContextForTest();
   });
 
-  it("keeps tool output when verbose is full", () => {
+  it("keeps tool output and exposes text output when verbose is full", () => {
     const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
@@ -377,6 +378,35 @@ describe("agent event handler", () => {
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
     const payload = broadcastToConnIds.mock.calls[0]?.[1] as { data?: Record<string, unknown> };
     expect(payload.data?.result).toEqual(result);
+    expect(payload.data?.output).toBe("secret");
+    resetAgentRunContextForTest();
+  });
+
+  it("maps partial tool output to output when only partialResult exists", () => {
+    const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-1",
+    });
+
+    registerAgentRunContext("run-tool-partial", { sessionKey: "session-1", verboseLevel: "on" });
+    toolEventRecipients.add("run-tool-partial", "conn-1");
+
+    handler({
+      runId: "run-tool-partial",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: {
+        phase: "update",
+        name: "exec",
+        toolCallId: "t4b",
+        partialResult: { content: [{ type: "text", text: "partial" }] },
+      },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    const payload = broadcastToConnIds.mock.calls[0]?.[1] as { data?: Record<string, unknown> };
+    expect(payload.data?.partialResult).toBeUndefined();
+    expect(payload.data?.output).toBe("partial");
     resetAgentRunContextForTest();
   });
 

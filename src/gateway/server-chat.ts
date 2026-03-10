@@ -1,4 +1,5 @@
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { extractToolResultText } from "../agents/pi-embedded-subscribe.tools.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
@@ -407,13 +408,23 @@ export function createAgentEventHandler({
     const last = agentRunSeq.get(evt.runId) ?? 0;
     const isToolEvent = evt.stream === "tool";
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
-    // Build tool payload: strip result/partialResult unless verbose=full
+    // Build tool payload: always include a text `output` preview for UI consumption,
+    // while still stripping structured results unless verbose=full.
     const toolPayload =
-      isToolEvent && toolVerbose !== "full"
+      isToolEvent
         ? (() => {
             const data = evt.data ? { ...evt.data } : {};
-            delete data.result;
-            delete data.partialResult;
+            const resultText = extractToolResultText(data.result);
+            const partialResultText = extractToolResultText(data.partialResult);
+            if (resultText) {
+              data.output = resultText;
+            } else if (partialResultText) {
+              data.output = partialResultText;
+            }
+            if (toolVerbose !== "full") {
+              delete data.result;
+              delete data.partialResult;
+            }
             return sessionKey
               ? { ...eventForClients, sessionKey, data }
               : { ...eventForClients, data };

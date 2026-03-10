@@ -262,9 +262,15 @@ function markdownClassName(isErrorText: boolean) {
     "[&_li]:my-1",
     "[&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6",
     "[&_p]:my-3 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0",
-    "[&_table]:my-4 [&_table]:w-full [&_table]:border-collapse [&_table]:overflow-hidden [&_table]:rounded-xl",
-    "[&_td]:border [&_td]:border-gray-200 [&_td]:px-3 [&_td]:py-2 [&_td]:align-top",
-    "[&_th]:border [&_th]:border-gray-200 [&_th]:bg-gray-50 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:font-semibold",
+    "[&_table]:my-4 [&_table]:w-full [&_table]:border-separate [&_table]:border-spacing-0 [&_table]:rounded-xl [&_table]:border [&_table]:border-gray-200",
+    "[&_td]:border-r [&_td]:border-b [&_td]:border-gray-200 [&_td]:px-3 [&_td]:py-2 [&_td]:align-top",
+    "[&_th]:border-r [&_th]:border-b [&_th]:border-gray-200 [&_th]:bg-gray-50 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:font-semibold",
+    "[&_tr>*:last-child]:border-r-0",
+    "[&_tbody_tr:last-child>*]:border-b-0",
+    "[&_thead_tr:first-child_th:first-child]:rounded-tl-xl",
+    "[&_thead_tr:first-child_th:last-child]:rounded-tr-xl",
+    "[&_tbody_tr:last-child_td:first-child]:rounded-bl-xl",
+    "[&_tbody_tr:last-child_td:last-child]:rounded-br-xl",
     "[&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6",
   );
 }

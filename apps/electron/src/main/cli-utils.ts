@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,11 @@ export type CliInvocation = {
   args: string[];
   isMjs: boolean;
   nodePath?: string;
+};
+
+export type CliShim = {
+  shimDir: string;
+  shimPath: string;
 };
 
 function uniqueExistingPaths(candidates: Array<string | null | undefined>): string[] {
@@ -156,4 +161,40 @@ export function resolveCliInvocation(
   }
 
   return { command: nodePath, args: [cliPath, ...args], isMjs, nodePath };
+}
+
+function escapePosixSingleQuoted(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export function ensureBundledOpenClawShim(
+  cliPath: string,
+  stateDir: string,
+  options?: { includeBundledNode?: boolean },
+): CliShim | null {
+  const invocation = resolveCliInvocation(cliPath, [], options);
+  if (!invocation) {
+    return null;
+  }
+
+  const shimDir = resolve(stateDir, "electron", "bin");
+  const shimPath = resolve(shimDir, process.platform === "win32" ? "openclaw.cmd" : "openclaw");
+  mkdirSync(shimDir, { recursive: true, mode: 0o755 });
+
+  if (process.platform === "win32") {
+    const target =
+      invocation.isMjs && invocation.nodePath
+        ? `"${invocation.nodePath}" "${cliPath}" %*`
+        : `"${cliPath}" %*`;
+    writeFileSync(shimPath, `@echo off\r\n${target}\r\n`, "utf-8");
+    return { shimDir, shimPath };
+  }
+
+  const execLine =
+    invocation.isMjs && invocation.nodePath
+      ? `exec ${escapePosixSingleQuoted(invocation.nodePath)} ${escapePosixSingleQuoted(cliPath)} "$@"`
+      : `exec ${escapePosixSingleQuoted(cliPath)} "$@"`;
+  writeFileSync(shimPath, `#!/bin/sh\n${execLine}\n`, { encoding: "utf-8", mode: 0o755 });
+  chmodSync(shimPath, 0o755);
+  return { shimDir, shimPath };
 }
