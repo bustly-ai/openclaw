@@ -685,6 +685,38 @@ describe("gateway server auth/connect", () => {
       ws.close();
     });
 
+    test("rejects local control ui without browser origin by default", async () => {
+      const ws = await openWs(port);
+      const res = await connectReq(ws, {
+        skipDefaultAuth: true,
+        client: {
+          ...CONTROL_UI_CLIENT,
+        },
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("origin not allowed");
+      ws.close();
+    });
+
+    test("allows local electron webchat clients without browser origin", async () => {
+      const ws = await openWs(port);
+      const res = await connectReq(ws, {
+        token: "secret",
+        device: null,
+        client: {
+          ...CONTROL_UI_CLIENT,
+          instanceId: "bustly-electron-chat-123",
+        },
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").not.toContain("origin not allowed");
+      expect(res.error?.message ?? "").toContain("secure context");
+      expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+        ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+      );
+      ws.close();
+    });
+
     test("rejects control ui without device identity by default", async () => {
       const ws = await openWs(port, { origin: originForPort(port) });
       const res = await connectReq(ws, {

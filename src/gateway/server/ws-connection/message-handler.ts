@@ -191,6 +191,12 @@ export function attachGatewayWsMessageHandler(params: {
   }
 
   const isWebchatConnect = (p: ConnectParams | null | undefined) => isWebchatClient(p?.client);
+  const isLocalElectronWebchatConnect = (p: ConnectParams | null | undefined) => {
+    const instanceId = p?.client?.instanceId?.trim() ?? "";
+    // Packaged/local Electron webchat runs without a browser Origin, so keep this bypass
+    // narrow to direct local connections that identify themselves as Bustly Electron.
+    return isLocalClient && instanceId.startsWith("bustly-electron-");
+  };
   const unauthorizedFloodGuard = new UnauthorizedFloodGuard();
 
   socket.on("message", async (data) => {
@@ -329,7 +335,7 @@ export function attachGatewayWsMessageHandler(params: {
 
         const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
         const isWebchat = isWebchatConnect(connectParams);
-        if (isControlUi || isWebchat) {
+        if ((isControlUi || isWebchat) && !isLocalElectronWebchatConnect(connectParams)) {
           const originCheck = checkBrowserOrigin({
             requestHost,
             origin: requestOrigin,

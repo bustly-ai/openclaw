@@ -30,6 +30,7 @@ import {
 } from "./defaults.js";
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
+let lastInitializationLogSignature: string | null = null;
 
 async function ensureElectronDefaultConfig(configPath: string): Promise<OpenClawConfig> {
   const openrouterApiKey = getElectronOpenrouterApiKey();
@@ -279,9 +280,12 @@ export function isInitialized(): boolean {
 export function isFullyInitialized(): boolean {
   try {
     const configPath = resolveConfigPathSafe();
-    console.log(`[Init] Checking config at ${configPath}`);
     if (!existsSync(configPath)) {
-      console.log("[Init] Config file not found");
+      const signature = `missing:${configPath}`;
+      if (lastInitializationLogSignature !== signature) {
+        lastInitializationLogSignature = signature;
+        console.log(`[Init] Config file not found at ${configPath}`);
+      }
       return false;
     }
     const raw = readFileSync(configPath, "utf-8");
@@ -294,10 +298,20 @@ export function isFullyInitialized(): boolean {
     const model = config.agents?.defaults?.model;
     const primary = typeof model === "string" ? model : model?.primary;
     const hasPrimaryModel = typeof primary === "string" && primary.trim().length > 0;
-    console.log(
-      `[Init] hasProfiles=${hasProfiles} hasPrimaryModel=${hasPrimaryModel} primary=${primary ?? ""}`,
-    );
-    return hasProfiles && hasPrimaryModel;
+    const initialized = hasProfiles && hasPrimaryModel;
+    const signature = [
+      configPath,
+      initialized ? "ready" : "not-ready",
+      hasProfiles ? "profiles" : "no-profiles",
+      hasPrimaryModel ? `primary:${primary ?? ""}` : "no-primary",
+    ].join("|");
+    if (lastInitializationLogSignature !== signature) {
+      lastInitializationLogSignature = signature;
+      console.log(
+        `[Init] config=${configPath} initialized=${initialized} hasProfiles=${hasProfiles} hasPrimaryModel=${hasPrimaryModel} primary=${primary ?? ""}`,
+      );
+    }
+    return initialized;
   } catch {
     return false;
   }
