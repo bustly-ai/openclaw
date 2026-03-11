@@ -56,6 +56,7 @@ type ContextPath = {
   path: string;
   name: string;
   kind: InputArtifactKind;
+  imageUrl?: string;
 };
 
 type TextItem = {
@@ -290,6 +291,30 @@ function parseDataUrl(dataUrl: string): { content: string; mimeType: string } | 
     return null;
   }
   return { mimeType: match[1], content: match[2] };
+}
+
+function looksLikeImagePath(pathOrName: string | undefined): boolean {
+  return /\.(avif|bmp|gif|heic|jpeg|jpg|png|svg|tiff|webp)$/i.test(pathOrName ?? "");
+}
+
+async function resolvePastedSelection(params: {
+  file?: File;
+  entryPath?: string;
+  entryName?: string;
+  fallbackKind: "file" | "directory";
+}): Promise<{ path: string; kind: "file" | "directory" }> {
+  if (typeof window.electronAPI?.resolvePastedPath !== "function") {
+    return { path: params.entryPath?.trim() ?? "", kind: params.fallbackKind };
+  }
+  try {
+    const resolved = await window.electronAPI.resolvePastedPath(params);
+    return {
+      path: resolved?.path?.trim() ?? params.entryPath?.trim() ?? "",
+      kind: resolved?.kind === "directory" || resolved?.kind === "file" ? resolved.kind : params.fallbackKind,
+    };
+  } catch {
+    return { path: params.entryPath?.trim() ?? "", kind: params.fallbackKind };
+  }
 }
 
 function compareTimeline(a: TimelineItem, b: TimelineItem): number {
@@ -1690,12 +1715,198 @@ export default function ChatPage() {
     await window.electronAPI.bustlyOpenWorkspaceManage(activeWorkspaceId);
   }, [activeWorkspaceId]);
 
-  const handleAttachmentFiles = useCallback(async (files: FileList | null) => {
-    if (subscriptionExpired || !files || files.length === 0) {
+  const appendContextSelections = useCallback((selected: ChatContextPathSelection[]) => {
+    if (selected.length > 0) {
+      console.log("[electron-chat] context paths added", selected);
+    }
+    setContextPaths((prev) => {
+      const seen = new Set(prev.map((entry) => entry.path));
+      const nextEntries = selected
+        .filter((entry): entry is ChatContextPathSelection => Boolean(entry?.path && entry?.name))
+        .filter((entry) => {
+          if (seen.has(entry.path)) {
+            return false;
+          }
+          seen.add(entry.path);
+          return true;
+        })
+        .map((entry) => ({
+          id: nextId("ctx"),
+          path: entry.path,
+          name: entry.name,
+          kind: inferInputArtifactKind(entry),
+          imageUrl: entry.imageUrl,
+        }));
+      return nextEntries.length > 0 ? [...prev, ...nextEntries] : prev;
+    });
+  }, []);
+
+  const handleAttachmentFiles = useCallback(async (
+    input: FileList | DataTransferItemList | null,
+    clipboardData?: DataTransfer | null,
+  ) => {
+    if (subscriptionExpired || !input || input.length === 0) {
+      return;
+    }
+    const hasFileLikeEntry = Array.from(input).some((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return false;
+      }
+      if ("kind" in entry) {
+        return (entry as DataTransferItem).kind === "file";
+      }
+      return "name" in entry && "type" in entry;
+    });
+    if (!hasFileLikeEntry) {
+      return;
+    }
+
+    const contextSelections: ChatContextPathSelection[] = [];
+    const files: File[] = [];
+    for (const entry of Array.from(input)) {
+      const directFile =
+        entry &&
+        typeof entry === "object" &&
+        "type" in entry &&
+        "name" in entry &&
+        typeof (entry as File).type === "string" &&
+        typeof (entry as File).name === "string"
+          ? (entry as File)
+          : null;
+      if (directFile) {
+        const resolvedSelection = await resolvePastedSelection({
+          file: directFile,
+          entryPath:
+            "path" in directFile && typeof (directFile as File & { path?: unknown }).path === "string"
+              ? String((directFile as File & { path?: string }).path)
+              : undefined,
+          entryName: directFile.name,
+          fallbackKind: "file",
+        });
+        if (resolvedSelection.path) {
+          contextSelections.push({
+            path: resolvedSelection.path,
+            name: directFile.name || resolvedSelection.path,
+            kind: resolvedSelection.kind,
+            imageUrl:
+              resolvedSelection.kind === "file" &&
+              (directFile.type.startsWith("image/") || looksLikeImagePath(resolvedSelection.path))
+                ? await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.addEventListener(
+                      "load",
+                      () => {
+                        if (typeof reader.result === "string") {
+                          resolve(reader.result);
+                          return;
+                        }
+                        reject(new Error("Unexpected file reader result type"));
+                      },
+                      { once: true },
+                    );
+                    reader.addEventListener(
+                      "error",
+                      () => {
+                        reject(reader.error ?? new Error("Failed to read image"));
+                      },
+                      { once: true },
+                    );
+                    reader.readAsDataURL(directFile);
+                  }).catch(() => undefined)
+                : undefined,
+          });
+          continue;
+        }
+        files.push(directFile);
+        continue;
+      }
+      const clipboardItem =
+        entry &&
+        typeof entry === "object" &&
+        "kind" in entry &&
+        "getAsFile" in entry &&
+        typeof (entry as DataTransferItem).getAsFile === "function"
+          ? (entry as DataTransferItem)
+          : null;
+      const entryHandle =
+        clipboardItem &&
+        "webkitGetAsEntry" in clipboardItem &&
+        typeof (clipboardItem as DataTransferItem & { webkitGetAsEntry?: () => { isDirectory?: boolean; fullPath?: string; name?: string } | null }).webkitGetAsEntry === "function"
+          ? (clipboardItem as DataTransferItem & { webkitGetAsEntry: () => { isDirectory?: boolean; fullPath?: string; name?: string } | null }).webkitGetAsEntry()
+          : null;
+      if (entryHandle?.isDirectory && entryHandle.fullPath) {
+        const resolvedSelection = await resolvePastedSelection({
+          entryPath: entryHandle.fullPath,
+          entryName: entryHandle.name,
+          fallbackKind: "directory",
+        });
+        contextSelections.push({
+          path: resolvedSelection.path || entryHandle.fullPath,
+          name: entryHandle.name || resolvedSelection.path || entryHandle.fullPath,
+          kind: resolvedSelection.kind,
+        });
+        continue;
+      }
+      if (!clipboardItem || clipboardItem.kind !== "file") {
+        continue;
+      }
+      const file = clipboardItem.getAsFile();
+      if (file) {
+        const resolvedSelection = await resolvePastedSelection({
+          file,
+          entryPath:
+            "path" in file && typeof (file as File & { path?: unknown }).path === "string"
+              ? String((file as File & { path?: string }).path)
+              : undefined,
+          entryName: file.name,
+          fallbackKind: "file",
+        });
+        if (resolvedSelection.path) {
+          contextSelections.push({
+            path: resolvedSelection.path,
+            name: file.name || resolvedSelection.path,
+            kind: resolvedSelection.kind,
+            imageUrl:
+              resolvedSelection.kind === "file" &&
+              (file.type.startsWith("image/") || looksLikeImagePath(resolvedSelection.path))
+                ? await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.addEventListener(
+                      "load",
+                      () => {
+                        if (typeof reader.result === "string") {
+                          resolve(reader.result);
+                          return;
+                        }
+                        reject(new Error("Unexpected file reader result type"));
+                      },
+                      { once: true },
+                    );
+                    reader.addEventListener(
+                      "error",
+                      () => {
+                        reject(reader.error ?? new Error("Failed to read image"));
+                      },
+                      { once: true },
+                    );
+                    reader.readAsDataURL(file);
+                  }).catch(() => undefined)
+                : undefined,
+          });
+          continue;
+        }
+        files.push(file);
+      }
+    }
+    if (contextSelections.length > 0) {
+      console.log("[electron-chat] pasted context selections", contextSelections);
+      appendContextSelections(contextSelections);
+    }
+    if (files.length === 0) {
       return;
     }
     const next: Attachment[] = [];
-    for (const file of Array.from(files)) {
+    for (const file of files) {
       if (!file.type.startsWith("image/")) {
         continue;
       }
@@ -1732,9 +1943,13 @@ export default function ChatPage() {
       });
     }
     if (next.length > 0) {
+      console.log(
+        "[electron-chat] image attachments added",
+        next.map((entry) => ({ name: entry.name, mimeType: entry.mimeType })),
+      );
       setAttachments((prev) => [...prev, ...next]);
     }
-  }, [subscriptionExpired]);
+  }, [appendContextSelections, subscriptionExpired]);
 
   const handleSelectContextPaths = useCallback(async () => {
     if (subscriptionExpired) {
@@ -1745,29 +1960,11 @@ export default function ChatPage() {
       if (!Array.isArray(selected) || selected.length === 0) {
         return;
       }
-      setContextPaths((prev) => {
-        const seen = new Set(prev.map((entry) => entry.path));
-        const nextEntries = selected
-          .filter((entry): entry is ChatContextPathSelection => Boolean(entry?.path && entry?.name))
-          .filter((entry) => {
-            if (seen.has(entry.path)) {
-              return false;
-            }
-            seen.add(entry.path);
-            return true;
-          })
-          .map((entry) => ({
-            id: nextId("ctx"),
-            path: entry.path,
-            name: entry.name,
-            kind: inferInputArtifactKind(entry),
-          }));
-        return nextEntries.length > 0 ? [...prev, ...nextEntries] : prev;
-      });
+      appendContextSelections(selected);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [subscriptionExpired]);
+  }, [appendContextSelections, subscriptionExpired]);
 
   const runningTools = useMemo(
     () =>
@@ -2131,6 +2328,14 @@ export default function ChatPage() {
                         kind={entry.kind}
                         title={entry.name}
                         subtitle={entry.path}
+                        imageUrl={entry.imageUrl}
+                        onPreview={
+                          entry.imageUrl
+                            ? () => {
+                                setPreviewImage(entry.imageUrl ?? null);
+                              }
+                            : undefined
+                        }
                         onRemove={() => {
                           setContextPaths((prev) => prev.filter((p) => p.id !== entry.id));
                         }}
@@ -2160,8 +2365,15 @@ export default function ChatPage() {
                     }
                   }}
                   onPaste={(e) => {
+                    const files = e.clipboardData.files;
                     const items = e.clipboardData.items;
-                    void handleAttachmentFiles(items as unknown as FileList);
+                    const source = files && files.length > 0 ? files : items;
+                    if (!source || source.length === 0) {
+                      return;
+                    }
+                    void handleAttachmentFiles(source, e.clipboardData).catch((error) => {
+                      console.error("[electron-chat] paste attachment handling failed", error);
+                    });
                   }}
                 />
 

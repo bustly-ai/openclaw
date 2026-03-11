@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   ipcMain,
   shell,
   globalShortcut,
@@ -99,6 +100,123 @@ let needsOnboardAtLaunch = false;
 let gatewayPort: number = 17999;
 let gatewayBind: string = "loopback";
 let gatewayToken: string | null = null;
+
+const IMAGE_PREVIEW_EXT_RE = /\.(avif|bmp|gif|heic|jpeg|jpg|png|svg|tiff|webp)$/i;
+
+function parseClipboardFilePathsFromText(value: string): string[] {
+  return value
+    .replace(/\0/g, "\n")
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0 && !entry.startsWith("#"))
+    .flatMap((entry) => {
+      if (!entry.startsWith("file://")) {
+        return [];
+      }
+      try {
+        const url = new URL(entry);
+        if (url.protocol !== "file:") {
+          return [];
+        }
+        return [decodeURIComponent(url.pathname)];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function readNativeClipboardFilePaths(): string[] {
+  const formats = clipboard.availableFormats("clipboard");
+  const candidates = ["public.file-url", "NSURLPboardType", "text/uri-list"].filter((format) =>
+    formats.includes(format),
+  );
+  const paths = new Set<string>();
+
+  for (const format of candidates) {
+    try {
+      const raw = clipboard.readBuffer(format, "clipboard");
+      for (const path of parseClipboardFilePathsFromText(raw.toString("utf8"))) {
+        paths.add(path);
+      }
+    } catch {
+      // Ignore unsupported clipboard formats.
+    }
+  }
+
+  try {
+    for (const path of parseClipboardFilePathsFromText(clipboard.readText("clipboard"))) {
+      paths.add(path);
+    }
+  } catch {
+    // Ignore plain-text clipboard failures.
+  }
+
+  return [...paths];
+}
+
+function basenameFromResolvedPath(pathValue: string): string {
+  return basename(pathValue.replace(/[\\/]+$/, "")) || pathValue;
+}
+
+function resolvePastedPath(params: {
+  directPath?: string;
+  entryPath?: string;
+  entryName?: string;
+  fallbackKind: "file" | "directory";
+}): { path: string; kind: "file" | "directory" | null } {
+  const directPath = typeof params.directPath === "string" ? params.directPath.trim() : "";
+  if (directPath) {
+    try {
+      return {
+        path: directPath,
+        kind: statSync(directPath).isDirectory() ? "directory" : "file",
+      };
+    } catch {
+      return { path: directPath, kind: params.fallbackKind };
+    }
+  }
+
+  const clipboardPaths = readNativeClipboardFilePaths();
+  const entryPath = typeof params.entryPath === "string" ? params.entryPath.trim() : "";
+  const entryName = typeof params.entryName === "string" ? params.entryName.trim() : "";
+
+  let resolvedPath = "";
+  if (clipboardPaths.length === 1) {
+    resolvedPath = clipboardPaths[0];
+  } else if (entryName) {
+    resolvedPath =
+      clipboardPaths.find((candidate) => basenameFromResolvedPath(candidate) === entryName) ?? "";
+  }
+  if (!resolvedPath) {
+    resolvedPath = entryPath;
+  }
+  if (!resolvedPath) {
+    return { path: "", kind: null };
+  }
+
+  try {
+    return {
+      path: resolvedPath,
+      kind: statSync(resolvedPath).isDirectory() ? "directory" : "file",
+    };
+  } catch {
+    return { path: resolvedPath, kind: params.fallbackKind };
+  }
+}
+
+function resolveImagePreviewMimeType(filePath: string): string | null {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".bmp")) return "image/bmp";
+  if (lower.endsWith(".svg")) return "image/svg+xml";
+  if (lower.endsWith(".avif")) return "image/avif";
+  if (lower.endsWith(".heic")) return "image/heic";
+  if (lower.endsWith(".tif") || lower.endsWith(".tiff")) return "image/tiff";
+  return null;
+}
 let updateReady = false;
 let updateVersion: string | null = null;
 let updateInstalling = false;
@@ -1611,6 +1729,24 @@ function setupIpcHandlers(): void {
     }
   });
 
+  ipcMain.handle("resolve-pasted-path", (_event, params) => {
+    const payload =
+      params && typeof params === "object"
+        ? (params as {
+            directPath?: string;
+            entryPath?: string;
+            entryName?: string;
+            fallbackKind?: "file" | "directory";
+          })
+        : {};
+    return resolvePastedPath({
+      directPath: payload.directPath,
+      entryPath: payload.entryPath,
+      entryName: payload.entryName,
+      fallbackKind: payload.fallbackKind === "directory" ? "directory" : "file",
+    });
+  });
+
   ipcMain.handle("dialog-select-chat-context-paths", async () => {
     const dialogOptions: OpenDialogOptions = {
       title: "Select files or folders",
@@ -1629,10 +1765,23 @@ function setupIpcHandlers(): void {
       } catch {
         isDirectory = false;
       }
+      let imageUrl: string | undefined;
+      if (!isDirectory && IMAGE_PREVIEW_EXT_RE.test(selectedPath)) {
+        try {
+          const mimeType = resolveImagePreviewMimeType(selectedPath);
+          if (mimeType) {
+            const base64 = readFileSync(selectedPath).toString("base64");
+            imageUrl = `data:${mimeType};base64,${base64}`;
+          }
+        } catch {
+          imageUrl = undefined;
+        }
+      }
       return {
         path: selectedPath,
         name: basename(selectedPath) || selectedPath,
         kind: isDirectory ? ("directory" as const) : ("file" as const),
+        imageUrl,
       };
     });
   });

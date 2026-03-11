@@ -45,6 +45,7 @@ interface ChatContextPathSelection {
   path: string;
   name: string;
   kind: "file" | "directory";
+  imageUrl?: string;
 }
 
 interface AppInfo {
@@ -167,6 +168,12 @@ interface ElectronAPI {
   gatewayConnectConfig: () => Promise<GatewayConnectConfig>;
   gatewayPatchSessionLabel: (key: string, label: string) => Promise<{ success: boolean; error?: string }>;
   gatewayDeleteSession: (key: string) => Promise<{ success: boolean; error?: string }>;
+  resolvePastedPath: (params: {
+    file?: File;
+    entryPath?: string;
+    entryName?: string;
+    fallbackKind: "file" | "directory";
+  }) => Promise<{ path: string; kind: "file" | "directory" | null }>;
   selectChatContextPaths: () => Promise<ChatContextPathSelection[]>;
   getAppInfo: () => Promise<AppInfo>;
   getNativeFullscreenStatus: () => Promise<{ isNativeFullscreen: boolean }>;

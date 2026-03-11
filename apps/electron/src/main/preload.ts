@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
 
 type OpenClawInitOptions = {
   gatewayPort?: number;
@@ -63,6 +63,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
   gatewayPatchSessionLabel: (key: string, label: string) =>
     ipcRenderer.invoke("gateway-patch-session-label", key, label),
   gatewayDeleteSession: (key: string) => ipcRenderer.invoke("gateway-delete-session", key),
+  resolvePastedPath: (params: {
+    file?: File;
+    entryPath?: string;
+    entryName?: string;
+    fallbackKind: "file" | "directory";
+  }) =>
+    ipcRenderer.invoke("resolve-pasted-path", {
+      directPath: params.file ? webUtils.getPathForFile(params.file) : "",
+      entryPath: params.entryPath,
+      entryName: params.entryName,
+      fallbackKind: params.fallbackKind,
+    }),
   selectChatContextPaths: () => ipcRenderer.invoke("dialog-select-chat-context-paths"),
 
   // App info
