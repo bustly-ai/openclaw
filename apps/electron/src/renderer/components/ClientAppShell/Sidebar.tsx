@@ -956,7 +956,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                 }
                 requestSettled = true;
                 setRecentTasks(
-                  result.sessions
+                  [...result.sessions]
                     .filter((session) => isMainChannelSessionKey(session.key))
                     .map((session) => ({
                       id: session.key,
@@ -1178,21 +1178,11 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       return;
     }
     try {
-      const connectConfig = await window.electronAPI.gatewayConnectConfig();
-      if (!connectConfig.token || !connectConfig.wsUrl) {
+      const result = await window.electronAPI.gatewayDeleteSession(selectedTask.id);
+      if (!result.success) {
         setDeleteModalOpen(false);
         return;
       }
-      const client = new GatewayBrowserClient({
-        url: connectConfig.wsUrl,
-        token: connectConfig.token ?? undefined,
-        clientName: "openclaw-control-ui",
-        mode: "webchat",
-        instanceId: `bustly-electron-sidebar-delete-${Date.now()}`,
-      });
-      client.start();
-      await client.request("sessions.delete", { key: selectedTask.id });
-      client.stop();
       const nextLabels = { ...customSessionLabels };
       delete nextLabels[selectedTask.id];
       setCustomSessionLabels(nextLabels);

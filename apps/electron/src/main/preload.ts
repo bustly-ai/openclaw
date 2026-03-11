@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   gatewayConnectConfig: () => ipcRenderer.invoke("gateway-connect-config"),
   gatewayPatchSessionLabel: (key: string, label: string) =>
     ipcRenderer.invoke("gateway-patch-session-label", key, label),
+  gatewayDeleteSession: (key: string) => ipcRenderer.invoke("gateway-delete-session", key),
   selectChatContextPaths: () => ipcRenderer.invoke("dialog-select-chat-context-paths"),
 
   // App info

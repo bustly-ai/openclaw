@@ -1584,6 +1584,33 @@ function setupIpcHandlers(): void {
     }
   });
 
+  ipcMain.handle("gateway-delete-session", async (_event, key: string) => {
+    try {
+      const normalizedKey = typeof key === "string" ? key.trim() : "";
+      if (!normalizedKey) {
+        return { success: false, error: "Session key is required." };
+      }
+
+      const result = await withPrivilegedGatewayClient((client) =>
+        client.request<{ ok?: boolean; deleted?: boolean }>("sessions.delete", {
+          key: normalizedKey,
+        })
+      );
+      if (!result?.ok) {
+        return { success: false, error: "Failed to delete session." };
+      }
+      if (result.deleted !== true) {
+        return { success: false, error: "Session was not deleted." };
+      }
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
   ipcMain.handle("dialog-select-chat-context-paths", async () => {
     const dialogOptions: OpenDialogOptions = {
       title: "Select files or folders",
