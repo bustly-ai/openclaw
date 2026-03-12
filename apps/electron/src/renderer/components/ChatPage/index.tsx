@@ -17,10 +17,10 @@ import {
 import { listWorkspaceSummaries } from "../../lib/bustly-supabase";
 import { GatewayBrowserClient, type GatewayEventFrame } from "../../lib/gateway-client";
 import {
-  DEFAULT_SESSION_KEY,
   deriveScenarioLabel,
   resolveSessionIconComponent,
 } from "../../lib/session-icons";
+import { buildBustlyWorkspaceMainSessionKey } from "../../../shared/bustly-agent";
 import { extractText, extractThinking } from "../../lib/chat-extract";
 import Skeleton from "../ui/Skeleton";
 import { ChatTimeline, ChatTimelineWaitingIndicator } from "./ChatTimeline";
@@ -602,8 +602,8 @@ export default function ChatPage() {
   const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
   const currentSessionKey = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
-    return searchParams.get("session") ?? DEFAULT_SESSION_KEY;
-  }, [location.search]);
+    return searchParams.get("session") ?? buildBustlyWorkspaceMainSessionKey(activeWorkspaceId);
+  }, [activeWorkspaceId, location.search]);
   const currentScenarioLabel = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
     return deriveScenarioLabel(currentSessionKey, searchParams.get("label"));

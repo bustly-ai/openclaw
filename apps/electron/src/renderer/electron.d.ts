@@ -64,6 +64,10 @@ interface GatewayExitData {
   code: number | null;
   signal: string | null;
 }
+interface GatewayLifecycleData {
+  phase: "starting" | "stopping" | "ready" | "error";
+  message: string | null;
+}
 interface MainLogData {
   message: string;
 }
@@ -192,7 +196,10 @@ interface ElectronAPI {
   bustlyIsLoggedIn: () => Promise<boolean>;
   bustlyGetUserInfo: () => Promise<BustlyUserInfo | null>;
   bustlyGetSupabaseConfig: () => Promise<BustlySupabaseConfig | null>;
-  bustlySetActiveWorkspace: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
+  bustlySetActiveWorkspace: (
+    workspaceId: string,
+    workspaceName?: string,
+  ) => Promise<{ success: boolean; agentId?: string; sessionKey?: string; error?: string }>;
   bustlyLogout: () => Promise<{ success: boolean; error?: string }>;
   bustlyOpenLogin: () => Promise<{ success: boolean; error?: string }>;
   bustlyOpenSettings: () => Promise<{ success: boolean; error?: string }>;
@@ -226,6 +233,7 @@ interface ElectronAPI {
   onOAuthRequestCode: (callback: (message: string) => void) => () => void;
   onGatewayLog: (callback: (data: GatewayLogData) => void) => () => void;
   onGatewayExit: (callback: (data: GatewayExitData) => void) => () => void;
+  onGatewayLifecycle: (callback: (data: GatewayLifecycleData) => void) => () => void;
   onMainLog: (callback: (data: MainLogData) => void) => () => void;
   onBustlyLoginRefresh: (callback: () => void) => () => void;
   onUpdateStatus: (callback: (data: { event: string }) => void) => () => void;

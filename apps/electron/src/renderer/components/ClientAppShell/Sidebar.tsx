@@ -23,7 +23,6 @@ import openSidebarIcon from "../../assets/imgs/open_sidebar.svg";
 import {
   buildChatRoute,
   CollapsedScenariosIcon,
-  DEFAULT_SESSION_KEY,
   deriveScenarioLabel,
   getSessionIconComponent,
   resolveSessionIconComponent,
@@ -32,6 +31,12 @@ import {
 } from "../../lib/session-icons";
 import { listWorkspaceSummaries, type WorkspaceSummary } from "../../lib/bustly-supabase";
 import { GatewayBrowserClient } from "../../lib/gateway-client";
+import {
+  buildBustlyWorkspaceAgentId,
+  buildBustlyWorkspaceMainSessionKey,
+  isAgentChannelSessionKey,
+  isAgentMainSessionKey,
+} from "../../../shared/bustly-agent";
 import Skeleton from "../ui/Skeleton";
 
 type ClientAppSidebarProps = {
@@ -83,11 +88,8 @@ function writeCustomSessionLabels(value: Record<string, string>) {
   window.localStorage.setItem(SIDEBAR_CUSTOM_LABELS_STORAGE_KEY, JSON.stringify(value));
 }
 
-function isMainChannelSessionKey(sessionKey: string): boolean {
-  if (sessionKey === "agent:main:main") {
-    return true;
-  }
-  return sessionKey.startsWith("agent:main:main:channel:");
+function isMainChannelSessionKey(sessionKey: string, agentId: string): boolean {
+  return isAgentMainSessionKey(sessionKey, agentId) || isAgentChannelSessionKey(sessionKey, agentId);
 }
 
 function stripLeadingMessageTimestamp(text: string): string {
@@ -1103,10 +1105,19 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const navigate = useNavigate();
   const isSettingsPage = false;
   const isSkillPage = location.pathname === "/skill";
+  const effectiveWorkspaceId = activeWorkspaceId || bustlyUserInfo?.workspaceId || "";
+  const activeAgentId = useMemo(
+    () => buildBustlyWorkspaceAgentId(effectiveWorkspaceId),
+    [effectiveWorkspaceId],
+  );
+  const activeMainSessionKey = useMemo(
+    () => buildBustlyWorkspaceMainSessionKey(effectiveWorkspaceId),
+    [effectiveWorkspaceId],
+  );
   const activeTaskId = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
-    return searchParams.get("session") ?? DEFAULT_SESSION_KEY;
-  }, [location.search]);
+    return searchParams.get("session") ?? activeMainSessionKey;
+  }, [activeMainSessionKey, location.search]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -1226,6 +1237,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                 includeUnknown: false,
                 includeDerivedTitles: true,
                 includeLastMessage: false,
+                agentId: activeAgentId,
               })
               .then((result) => {
                 if (disposed) {
@@ -1234,12 +1246,12 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                 requestSettled = true;
                 setRecentTasks(
                   [...result.sessions]
-                    .filter((session) => isMainChannelSessionKey(session.key))
+                    .filter((session) => isMainChannelSessionKey(session.key, activeAgentId))
                     .map((session) => ({
                       id: session.key,
                       name: resolveSessionDisplayName(session, customSessionLabels),
                       icon: session.icon,
-                      isMain: session.key === DEFAULT_SESSION_KEY,
+                      isMain: session.key === activeMainSessionKey,
                     })),
                 );
                 setHasLoadedTasks(true);
@@ -1287,7 +1299,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       clientRef.current?.stop();
       clientRef.current = null;
     };
-  }, [customSessionLabels, hasLoadedTasks, location.pathname, location.search]);
+  }, [activeAgentId, activeMainSessionKey, customSessionLabels, hasLoadedTasks, location.pathname, location.search]);
 
   useEffect(() => {
     if (location.pathname !== "/chat") {
@@ -1371,11 +1383,20 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   };
 
   const handleSwitchWorkspace = async (workspaceId: string) => {
-    const result = await window.electronAPI.bustlySetActiveWorkspace(workspaceId);
+    const workspace = workspaces.find((entry) => entry.id === workspaceId);
+    const result = await window.electronAPI.bustlySetActiveWorkspace(workspaceId, workspace?.name);
     if (!result.success) {
       return;
     }
     setActiveWorkspaceId(workspaceId);
+    void navigate(
+      buildChatRoute({
+        sessionKey: result.sessionKey || buildBustlyWorkspaceMainSessionKey(workspaceId),
+        label: "Bustly AI",
+      }),
+      { replace: true },
+    );
+    notifySidebarTasksRefresh();
   };
 
   const handleSignOut = async () => {
@@ -1433,7 +1454,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     if (createSaving) {
       return;
     }
-    const nextSessionKey = buildChannelSessionKey(DEFAULT_SESSION_KEY);
+    const nextSessionKey = buildChannelSessionKey(activeMainSessionKey);
     setCreateSaving(true);
     setCreateError(null);
     try {
