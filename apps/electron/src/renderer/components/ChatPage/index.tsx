@@ -112,6 +112,9 @@ const CHAT_MODEL_LEVELS = [
   { id: "pro", modelRef: "bustly/chat.pro", label: "Bustly Pro", description: "Balanced performance for complex reasoning." },
   { id: "max", modelRef: "bustly/chat.max", label: "Bustly Max", description: "Frontier intelligence for critical challenges." },
 ] as const;
+const PREVIEW_ZOOM_STEPS = [0.5, 0.67, 0.8, 1] as const;
+const PREVIEW_ZOOM_WHEEL_THRESHOLD = 45;
+const PREVIEW_ZOOM_STEP_THROTTLE_MS = 45;
 
 type ChatModelLevelId = (typeof CHAT_MODEL_LEVELS)[number]["id"];
 
@@ -153,6 +156,21 @@ function normalizeTextDelta(current: string, text?: string, delta?: string): str
     return `${current}${delta}`;
   }
   return current;
+}
+
+function resolvePreviewMinZoom(viewportWidth: number, viewportHeight: number, imageWidth: number, imageHeight: number): number {
+  if (viewportWidth <= 0 || viewportHeight <= 0 || imageWidth <= 0 || imageHeight <= 0) {
+    return PREVIEW_ZOOM_STEPS[0];
+  }
+  const fullWidthHeight = viewportWidth * (imageHeight / imageWidth);
+  if (fullWidthHeight <= 0) {
+    return PREVIEW_ZOOM_STEPS[0];
+  }
+  return Math.min(1, viewportHeight / fullWidthHeight);
+}
+
+function resolvePreviewZoomChoices(minZoom: number): number[] {
+  return Array.from(new Set([Number(minZoom.toFixed(3)), ...PREVIEW_ZOOM_STEPS.filter((step) => step > minZoom + 0.001)])).sort((a, b) => a - b);
 }
 
 function formatTokenCount(value: number | null | undefined): string {
@@ -535,6 +553,8 @@ export default function ChatPage() {
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [composerAreaHeight, setComposerAreaHeight] = useState(176);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [previewZoom, setPreviewZoom] = useState(0.67);
+  const [previewMinZoom, setPreviewMinZoom] = useState(0.67);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
   const [subscriptionExpired, setSubscriptionExpired] = useState(false);
   const [modelMenuPos, setModelMenuPos] = useState<{
@@ -560,6 +580,10 @@ export default function ChatPage() {
   const retryPayloadsRef = useRef<Map<string, { draft: string; attachments: Attachment[]; contextPaths: ContextPath[] }>>(new Map());
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const modelTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const previewViewportRef = useRef<HTMLDivElement | null>(null);
+  const previewImageRef = useRef<HTMLImageElement | null>(null);
+  const previewWheelDeltaRef = useRef(0);
+  const previewWheelLastStepAtRef = useRef(0);
   const streamSegmentsRef = useRef<
     Map<
       string,
@@ -588,6 +612,37 @@ export default function ChatPage() {
     const searchParams = new URLSearchParams(location.search);
     setCurrentScenarioIconId(searchParams.get("icon"));
   }, [location.search]);
+  useEffect(() => {
+    setPreviewZoom(0.67);
+    setPreviewMinZoom(0.67);
+    previewWheelDeltaRef.current = 0;
+    previewWheelLastStepAtRef.current = 0;
+  }, [previewImage]);
+  useEffect(() => {
+    if (!previewImage) {
+      return undefined;
+    }
+    const updatePreviewBounds = () => {
+      const viewport = previewViewportRef.current;
+      const image = previewImageRef.current;
+      if (!viewport || !image || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+        return;
+      }
+      const minZoom = resolvePreviewMinZoom(
+        viewport.clientWidth,
+        viewport.clientHeight,
+        image.naturalWidth,
+        image.naturalHeight,
+      );
+      setPreviewMinZoom(minZoom);
+      setPreviewZoom((value) => Math.max(minZoom, Math.min(1, value)));
+    };
+    updatePreviewBounds();
+    window.addEventListener("resize", updatePreviewBounds);
+    return () => {
+      window.removeEventListener("resize", updatePreviewBounds);
+    };
+  }, [previewImage]);
   const CurrentScenarioIcon = useMemo(
     () =>
       resolveSessionIconComponent({
@@ -1051,6 +1106,14 @@ export default function ChatPage() {
               : role === "system"
                 ? "system"
                 : "assistant";
+        if (textRole === "user") {
+          console.log("[electron-chat] history user message", {
+            sessionKey,
+            timestamp,
+            message,
+            text,
+          });
+        }
         items.push({
           kind: "text",
           id: nextId("history-text"),
@@ -1674,6 +1737,12 @@ export default function ChatPage() {
       artifacts: timelineArtifacts,
       streaming: false,
     };
+    console.log("[electron-chat] local user message", {
+      sessionKey: currentSessionKey,
+      outgoingMessage,
+      timelineArtifacts,
+      outgoingArtifacts,
+    });
     setTimeline((prev) => [...prev, userItem].sort(compareTimeline));
     setDraft("");
     setAttachments([]);
@@ -2575,18 +2644,93 @@ export default function ChatPage() {
       {previewImage
         ? createPortal(
             <div
-              className="fixed inset-0 z-[30000] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+              className="fixed inset-0 z-[30000] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm [-webkit-app-region:no-drag]"
               onClick={() => setPreviewImage(null)}
             >
-              <div className="relative max-h-full max-w-full overflow-hidden rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()}>
-                <button
-                  type="button"
-                  className="absolute top-4 right-4 z-10 rounded-full bg-black/50 p-2 text-white transition-all hover:bg-black/70"
-                  onClick={() => setPreviewImage(null)}
+              <button
+                type="button"
+                className="fixed top-6 right-6 z-[30010] cursor-pointer rounded-full bg-black/50 p-2 text-white transition-all hover:bg-black/70 [-webkit-app-region:no-drag]"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setPreviewImage(null);
+                }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setPreviewImage(null);
+                }}
+              >
+                <X size={20} weight="bold" />
+              </button>
+              <div
+                className="relative flex w-full max-w-[90vw] flex-col overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div
+                  ref={previewViewportRef}
+                  className="max-h-[90vh] overflow-y-auto overflow-x-hidden p-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  style={{ msOverflowStyle: "none" }}
+                  onWheel={(event) => {
+                    if (!event.ctrlKey && !event.metaKey) {
+                      return;
+                    }
+                    event.preventDefault();
+                    if (event.deltaY === 0) {
+                      return;
+                    }
+                    previewWheelDeltaRef.current += event.deltaY;
+                    if (Math.abs(previewWheelDeltaRef.current) < PREVIEW_ZOOM_WHEEL_THRESHOLD) {
+                      return;
+                    }
+                    const now = Date.now();
+                    if (now - previewWheelLastStepAtRef.current < PREVIEW_ZOOM_STEP_THROTTLE_MS) {
+                      return;
+                    }
+                    const direction = previewWheelDeltaRef.current < 0 ? "in" : "out";
+                    previewWheelDeltaRef.current = 0;
+                    previewWheelLastStepAtRef.current = now;
+                    setPreviewZoom((value) => {
+                      const zoomChoices = resolvePreviewZoomChoices(previewMinZoom);
+                      if (direction === "in") {
+                        return zoomChoices.find((step) => step > value + 0.001) ?? zoomChoices[zoomChoices.length - 1] ?? value;
+                      }
+                      for (let index = zoomChoices.length - 1; index >= 0; index -= 1) {
+                        const step = zoomChoices[index];
+                        if (step < value - 0.001) {
+                          return step;
+                        }
+                      }
+                      return zoomChoices[0] ?? value;
+                    });
+                  }}
                 >
-                  <X size={20} weight="bold" />
-                </button>
-                <img src={previewImage} alt="Preview" className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg" />
+                  <img
+                    ref={previewImageRef}
+                    src={previewImage}
+                    alt="Preview"
+                    className="mx-auto block"
+                    onLoad={() => {
+                      const viewport = previewViewportRef.current;
+                      const image = previewImageRef.current;
+                      if (!viewport || !image || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+                        return;
+                      }
+                      const minZoom = resolvePreviewMinZoom(
+                        viewport.clientWidth,
+                        viewport.clientHeight,
+                        image.naturalWidth,
+                        image.naturalHeight,
+                      );
+                      setPreviewMinZoom(minZoom);
+                      setPreviewZoom(minZoom);
+                    }}
+                    style={{
+                      width: `${Math.round(previewZoom * 100)}%`,
+                      maxWidth: "100%",
+                      height: "auto",
+                    }}
+                  />
+                </div>
               </div>
             </div>,
             document.body,

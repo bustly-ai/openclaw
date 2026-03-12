@@ -183,6 +183,7 @@ interface ElectronAPI {
     fallbackKind: "file" | "directory";
   }) => Promise<{ path: string; kind: "file" | "directory" | null }>;
   selectChatContextPaths: () => Promise<ChatContextPathSelection[]>;
+  resolveChatImagePreview: (path: string) => Promise<string | null>;
   getAppInfo: () => Promise<AppInfo>;
   getNativeFullscreenStatus: () => Promise<{ isNativeFullscreen: boolean }>;
 

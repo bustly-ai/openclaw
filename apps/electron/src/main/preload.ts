@@ -80,6 +80,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       fallbackKind: params.fallbackKind,
     }),
   selectChatContextPaths: () => ipcRenderer.invoke("dialog-select-chat-context-paths"),
+  resolveChatImagePreview: (path: string) => ipcRenderer.invoke("resolve-chat-image-preview", path),
 
   // App info
   getAppInfo: () => ipcRenderer.invoke("get-app-info"),

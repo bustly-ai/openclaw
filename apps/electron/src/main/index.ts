@@ -2350,6 +2350,23 @@ function setupIpcHandlers(): void {
     });
   });
 
+  ipcMain.handle("resolve-chat-image-preview", async (_event, rawPath: string) => {
+    const targetPath = typeof rawPath === "string" ? rawPath.trim() : "";
+    if (!targetPath || !IMAGE_PREVIEW_EXT_RE.test(targetPath)) {
+      return null;
+    }
+    try {
+      const mimeType = resolveImagePreviewMimeType(targetPath);
+      if (!mimeType) {
+        return null;
+      }
+      const base64 = readFileSync(targetPath).toString("base64");
+      return `data:${mimeType};base64,${base64}`;
+    } catch {
+      return null;
+    }
+  });
+
   // Get app info
   ipcMain.handle("get-app-info", () => {
     return {
