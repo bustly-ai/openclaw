@@ -798,10 +798,10 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = (model, context, options) => {
           const workspaceId = readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
           const modelHeaders = {
-            ...((model as { headers?: Record<string, string> }).headers ?? {}),
+            ...(model as { headers?: Record<string, string> }).headers,
           };
           const optionHeaders = {
-            ...((options?.headers as Record<string, string> | undefined) ?? {}),
+            ...((options?.headers) ?? {}),
           };
           const mergedHeaders = {
             ...modelHeaders,

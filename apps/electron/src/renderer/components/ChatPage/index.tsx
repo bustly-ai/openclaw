@@ -170,7 +170,7 @@ function resolvePreviewMinZoom(viewportWidth: number, viewportHeight: number, im
 }
 
 function resolvePreviewZoomChoices(minZoom: number): number[] {
-  return Array.from(new Set([Number(minZoom.toFixed(3)), ...PREVIEW_ZOOM_STEPS.filter((step) => step > minZoom + 0.001)])).sort((a, b) => a - b);
+  return Array.from(new Set([Number(minZoom.toFixed(3)), ...PREVIEW_ZOOM_STEPS.filter((step) => step > minZoom + 0.001)])).toSorted((a, b) => a - b);
 }
 
 function formatTokenCount(value: number | null | undefined): string {

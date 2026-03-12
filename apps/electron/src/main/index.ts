@@ -691,7 +691,7 @@ async function ensureBustlyPresetChannels(params: { agentId: string }): Promise<
   const presets = BUSTLY_PRESET_CHANNELS
     .filter((entry) => entry.enabled !== false)
     .slice()
-    .sort((a, b) => a.order - b.order);
+    .toSorted((a, b) => a.order - b.order);
   if (presets.length === 0) {
     return;
   }

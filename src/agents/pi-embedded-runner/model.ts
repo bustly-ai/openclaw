@@ -42,7 +42,7 @@ function applyBustlyWorkspaceHeader(
     return headers;
   }
   const workspaceId = readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
-  const nextHeaders = { ...(headers ?? {}) };
+  const nextHeaders = { ...headers };
   if (workspaceId) {
     nextHeaders[BUSTLY_WORKSPACE_HEADER] = workspaceId;
   } else {
@@ -52,7 +52,7 @@ function applyBustlyWorkspaceHeader(
 }
 
 function withRuntimeProviderHeaders(providerId: string, model: Model<Api>): Model<Api> {
-  const headers = applyBustlyWorkspaceHeader(providerId, model.headers as Record<string, string> | undefined);
+  const headers = applyBustlyWorkspaceHeader(providerId, model.headers);
   if (!headers) {
     const { headers: _headers, ...rest } = model as Model<Api> & { headers?: unknown };
     return rest as Model<Api>;
