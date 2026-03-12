@@ -663,7 +663,9 @@ function resolveElectronConfigPath(): string {
 }
 
 function resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId: string): string {
-  return join(resolveElectronStateDir(), "workspaces", buildBustlyWorkspaceAgentId(workspaceId));
+  const agentId = buildBustlyWorkspaceAgentId(workspaceId);
+  const stateDir = resolveElectronStateDir();
+  return join(stateDir, "workspaces", agentId);
 }
 
 function resolveBustlyWorkspaceAgentSessionKey(workspaceId: string): string {
@@ -705,6 +707,10 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
     ...updated,
     agents: {
       ...updated.agents,
+      defaults: {
+        ...updated.agents?.defaults,
+        workspace: workspaceDir,
+      },
       list: normalizedNextList,
     },
   };
@@ -724,15 +730,47 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
 async function syncBustlyWorkspaceAgent(params: {
   workspaceId?: string;
   workspaceName?: string;
+  forceInit?: boolean;
 }): Promise<{ agentId: string; sessionKey: string; workspaceDir: string } | null> {
   const workspaceId = params.workspaceId?.trim() || resolveBustlyWorkspaceIdFromOAuthState();
   if (!workspaceId) {
     return null;
   }
+  const configPath = resolveElectronConfigPath();
+  const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId);
+  if (params.forceInit === true || !existsSync(configPath)) {
+    const result = await initializeOpenClaw({
+      force: params.forceInit === true,
+      workspace: workspaceDir,
+    });
+    if (!result.success) {
+      throw new Error(result.error ?? "Failed to initialize OpenClaw");
+    }
+    initResult = result;
+    gatewayPort = result.gatewayPort;
+    gatewayBind = result.gatewayBind;
+    gatewayToken = result.gatewayToken ?? null;
+    needsOnboardAtLaunch = false;
+  }
   return await ensureBustlyWorkspaceAgentConfig({
     workspaceId,
     workspaceName: params.workspaceName,
   });
+}
+
+async function synchronizeBustlyWorkspaceContext(params?: {
+  workspaceId?: string;
+  workspaceName?: string;
+  selectedModelInput?: string;
+  forceInit?: boolean;
+}): Promise<{ agentId: string; sessionKey: string; workspaceDir: string } | null> {
+  const agentBinding = await syncBustlyWorkspaceAgent({
+    workspaceId: params?.workspaceId,
+    workspaceName: params?.workspaceName,
+    forceInit: params?.forceInit,
+  });
+  syncBustlyConfigFile(resolveElectronConfigPath(), params?.selectedModelInput?.trim());
+  return agentBinding;
 }
 
 function prependPathEntry(pathValue: string, entry: string): string {
@@ -2086,32 +2124,17 @@ async function bootstrapDesktopSession(options?: {
   model?: string;
   openControlUi?: boolean;
 }): Promise<void> {
-  const shouldInitialize = options?.forceInit === true || !isFullyInitialized();
-
-  if (shouldInitialize) {
-    const result = await initializeOpenClaw({
-      force: options?.forceInit === true,
-    });
-    if (!result.success) {
-      throw new Error(result.error ?? "Failed to initialize OpenClaw");
-    }
-    initResult = result;
-    gatewayPort = result.gatewayPort;
-    gatewayBind = result.gatewayBind;
-    gatewayToken = result.gatewayToken ?? null;
-    needsOnboardAtLaunch = false;
-  } else {
-    const existingConfig = loadGatewayConfig();
-    if (existingConfig) {
-      gatewayPort = existingConfig.port;
-      gatewayBind = existingConfig.bind;
-      gatewayToken = existingConfig.token ?? null;
-    }
+  await synchronizeBustlyWorkspaceContext({
+    selectedModelInput: options?.model,
+    forceInit: options?.forceInit === true,
+  });
+  const existingConfig = loadGatewayConfig();
+  if (existingConfig) {
+    gatewayPort = existingConfig.port;
+    gatewayBind = existingConfig.bind;
+    gatewayToken = existingConfig.token ?? null;
   }
-
   await ensureElectronBootstrapModel();
-  syncBustlyConfigFile(resolveElectronConfigPath(), options?.model?.trim());
-  await syncBustlyWorkspaceAgent({});
   await startGateway();
 
   if (options?.openControlUi === true) {
@@ -2182,9 +2205,11 @@ function setupIpcHandlers(): void {
       // If API key is provided, re-initialize config with the API key
       if (apiKey && apiKey.trim()) {
         console.log("[Gateway] Re-initializing with API key...");
+        const workspaceId = resolveBustlyWorkspaceIdFromOAuthState();
         const result = await initializeOpenClaw({
           force: true,
           openrouterApiKey: apiKey.trim(),
+          workspace: workspaceId ? resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId) : undefined,
         });
         if (result.success) {
           initResult = result;
@@ -2543,8 +2568,10 @@ function setupIpcHandlers(): void {
     async (_event, workspaceId: string, workspaceName?: string) => {
     try {
       BustlyOAuth.setActiveWorkspaceId(workspaceId);
-      syncBustlyConfigFile(resolveElectronConfigPath());
-      const agentBinding = await syncBustlyWorkspaceAgent({ workspaceId, workspaceName });
+      const agentBinding = await synchronizeBustlyWorkspaceContext({
+        workspaceId,
+        workspaceName,
+      });
       if (gatewayProcess) {
         await stopGateway();
         await startGateway();
