@@ -171,6 +171,10 @@ interface ElectronAPI {
     patch: { label?: string | null; icon?: string | null },
   ) => Promise<{ success: boolean; error?: string }>;
   gatewayPatchSessionLabel: (key: string, label: string) => Promise<{ success: boolean; error?: string }>;
+  gatewayPatchSessionModel: (
+    key: string,
+    model: string,
+  ) => Promise<{ success: boolean; model?: string; error?: string }>;
   gatewayDeleteSession: (key: string) => Promise<{ success: boolean; error?: string }>;
   resolvePastedPath: (params: {
     file?: File;

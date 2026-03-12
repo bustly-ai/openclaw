@@ -261,15 +261,15 @@ function resolvePastedPath(params: {
 
 function resolveImagePreviewMimeType(filePath: string): string | null {
   const lower = filePath.toLowerCase();
-  if (lower.endsWith(".png")) return "image/png";
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-  if (lower.endsWith(".gif")) return "image/gif";
-  if (lower.endsWith(".webp")) return "image/webp";
-  if (lower.endsWith(".bmp")) return "image/bmp";
-  if (lower.endsWith(".svg")) return "image/svg+xml";
-  if (lower.endsWith(".avif")) return "image/avif";
-  if (lower.endsWith(".heic")) return "image/heic";
-  if (lower.endsWith(".tif") || lower.endsWith(".tiff")) return "image/tiff";
+  if (lower.endsWith(".png")) {return "image/png";}
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {return "image/jpeg";}
+  if (lower.endsWith(".gif")) {return "image/gif";}
+  if (lower.endsWith(".webp")) {return "image/webp";}
+  if (lower.endsWith(".bmp")) {return "image/bmp";}
+  if (lower.endsWith(".svg")) {return "image/svg+xml";}
+  if (lower.endsWith(".avif")) {return "image/avif";}
+  if (lower.endsWith(".heic")) {return "image/heic";}
+  if (lower.endsWith(".tif") || lower.endsWith(".tiff")) {return "image/tiff";}
   return null;
 }
 let updateReady = false;
@@ -438,8 +438,10 @@ const DEV_PANEL_SHORTCUT = "CommandOrControl+Shift+Alt+D";
 const DASHBOARD_CHANNEL_PLUGIN_IDS = ["whatsapp"] as const;
 const BUSTLY_PROVIDER_ID = "bustly";
 const BUSTLY_PROVIDER_PROFILE_ID = `${BUSTLY_PROVIDER_ID}:default`;
+const BUSTLY_MODEL_GATEWAY_BASE_URL_DEFAULT = "https://gw.bustly.ai/api/v1";
+const BUSTLY_MODEL_GATEWAY_BASE_URL_ENV = process.env.BUSTLY_MODEL_GATEWAY_BASE_URL?.trim() ?? "";
 const BUSTLY_MODEL_GATEWAY_BASE_URL =
-  process.env.BUSTLY_MODEL_GATEWAY_BASE_URL?.trim() || "https://gw.bustly.ai/api/v1";
+  BUSTLY_MODEL_GATEWAY_BASE_URL_ENV || BUSTLY_MODEL_GATEWAY_BASE_URL_DEFAULT;
 const BUSTLY_MODEL_GATEWAY_USER_AGENT =
   process.env.BUSTLY_MODEL_GATEWAY_USER_AGENT?.trim() || "openclaw/2026.2.24";
 const BUSTLY_ROUTE_MODELS = [
@@ -540,6 +542,9 @@ function buildBustlyProviderModels(headers: Record<string, string>) {
 }
 
 function resolveBustlyGatewayBaseUrl(cfg: OpenClawConfig): string {
+  if (BUSTLY_MODEL_GATEWAY_BASE_URL_ENV) {
+    return BUSTLY_MODEL_GATEWAY_BASE_URL_ENV;
+  }
   const configured = cfg.models?.providers?.[BUSTLY_PROVIDER_ID]?.baseUrl?.trim();
   if (configured) {
     return configured;
@@ -1984,6 +1989,7 @@ async function ensureElectronBootstrapModel(): Promise<void> {
 
 async function bootstrapDesktopSession(options?: {
   forceInit?: boolean;
+  model?: string;
   openControlUi?: boolean;
 }): Promise<void> {
   const shouldInitialize = options?.forceInit === true || !isFullyInitialized();
@@ -2010,6 +2016,7 @@ async function bootstrapDesktopSession(options?: {
   }
 
   await ensureElectronBootstrapModel();
+  syncBustlyConfigFile(resolveElectronConfigPath(), options?.model?.trim());
   await startGateway();
 
   if (options?.openControlUi === true) {
@@ -2222,6 +2229,35 @@ function setupIpcHandlers(): void {
         return { success: false, error: "Failed to rename scenario." };
       }
       return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle("gateway-patch-session-model", async (_event, key: string, model: string) => {
+    try {
+      const normalizedKey = typeof key === "string" ? key.trim() : "";
+      if (!normalizedKey) {
+        return { success: false, error: "Session key is required." };
+      }
+      const normalizedModel = normalizeBustlyModelRef(model);
+
+      const result = await withPrivilegedGatewayClient((client) =>
+        client.request<SessionsPatchResult>("sessions.patch", {
+          key: normalizedKey,
+          model: normalizedModel,
+        })
+      );
+      if (!result?.ok) {
+        return { success: false, error: "Failed to set model for this scenario." };
+      }
+      return {
+        success: true,
+        model: result.resolved?.model ?? normalizedModel,
+      };
     } catch (error) {
       return {
         success: false,
@@ -2807,7 +2843,7 @@ function setupIpcHandlers(): void {
           model: options?.model?.trim() || authResult.defaultModel,
           openControlUi: options?.openControlUi === true,
         });
-        return result;
+        return { success: true };
       } catch (error) {
         return {
           success: false,
