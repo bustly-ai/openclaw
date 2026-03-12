@@ -28,6 +28,18 @@ export function buildBustlyWorkspaceMainSessionKey(workspaceId: string | undefin
   return `agent:${buildBustlyWorkspaceAgentId(workspaceId)}:main`;
 }
 
+function normalizeSessionSlug(value: string | undefined | null): string {
+  return normalizeToken(value) || "channel";
+}
+
+export function buildBustlyAgentPresetChannelSessionKey(
+  agentId: string | undefined | null,
+  slug: string | undefined | null,
+): string {
+  const normalizedAgentId = normalizeToken(agentId) || "main";
+  return `agent:${normalizedAgentId}:main:channel:${normalizeSessionSlug(slug)}`;
+}
+
 export function isAgentMainSessionKey(sessionKey: string, agentId: string): boolean {
   const normalizedAgentId = normalizeToken(agentId) || "main";
   return sessionKey === `agent:${normalizedAgentId}:main`;

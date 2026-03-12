@@ -31,6 +31,7 @@ import {
 } from "../../lib/session-icons";
 import { listWorkspaceSummaries, type WorkspaceSummary } from "../../lib/bustly-supabase";
 import { GatewayBrowserClient } from "../../lib/gateway-client";
+import { useAppState } from "../../providers/AppStateProvider";
 import {
   buildBustlyWorkspaceAgentId,
   buildBustlyWorkspaceMainSessionKey,
@@ -1076,6 +1077,7 @@ function WorkspaceSwitcher(props: {
 }
 
 export function ClientAppSidebar(props: ClientAppSidebarProps) {
+  const { checking, gatewayReady, initialized } = useAppState();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isWindowFullscreen, setIsWindowFullscreen] = useState(false);
   const [recentTasks, setRecentTasks] = useState<SidebarTask[]>([]);
@@ -1189,6 +1191,10 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   }, [loadWorkspaces]);
 
   useEffect(() => {
+    if (checking || !initialized || !gatewayReady) {
+      return;
+    }
+
     let disposed = false;
     const clientRef: { current: GatewayBrowserClient | null } = { current: null };
     let requestSettled = false;
@@ -1299,18 +1305,29 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       clientRef.current?.stop();
       clientRef.current = null;
     };
-  }, [activeAgentId, activeMainSessionKey, customSessionLabels, hasLoadedTasks, location.pathname, location.search]);
+  }, [
+    activeAgentId,
+    activeMainSessionKey,
+    checking,
+    customSessionLabels,
+    gatewayReady,
+    hasLoadedTasks,
+    initialized,
+    location.pathname,
+    location.search,
+  ]);
 
   useEffect(() => {
     if (location.pathname !== "/chat") {
       return;
     }
     const searchParams = new URLSearchParams(location.search);
-    if (searchParams.get("session")) {
-      return;
-    }
     const fallbackTask = recentTasks[0];
     if (!fallbackTask) {
+      return;
+    }
+    const activeSessionKey = searchParams.get("session");
+    if (activeSessionKey && recentTasks.some((task) => task.id === activeSessionKey)) {
       return;
     }
     void navigate(buildChatRoute({ sessionKey: fallbackTask.id, label: fallbackTask.name, icon: fallbackTask.icon }), {
@@ -1389,13 +1406,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       return;
     }
     setActiveWorkspaceId(workspaceId);
-    void navigate(
-      buildChatRoute({
-        sessionKey: result.sessionKey || buildBustlyWorkspaceMainSessionKey(workspaceId),
-        label: "Bustly AI",
-      }),
-      { replace: true },
-    );
+    void navigate("/chat", { replace: true });
     notifySidebarTasksRefresh();
   };
 
@@ -1469,10 +1480,6 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       const nextLabels = { ...customSessionLabels, [nextSessionKey]: name };
       setCustomSessionLabels(nextLabels);
       writeCustomSessionLabels(nextLabels);
-      setRecentTasks((prev) => [
-        ...prev.filter((entry) => entry.id !== nextSessionKey),
-        { id: nextSessionKey, name, icon: selectedIcon, isMain: false },
-      ]);
       setHasLoadedTasks(true);
       setDraftScenarioName("");
       setSelectedIcon("SquaresFour");

@@ -63,10 +63,13 @@ import {
   normalizeProviderId,
 } from "../../../../src/agents/model-selection";
 import { loadConfig } from "../../../../src/config/config";
+import { updateSessionStore } from "../../../../src/config/sessions";
+import { resolveDefaultSessionStorePath } from "../../../../src/config/sessions/paths";
 import { applyAgentConfig, listAgentEntries } from "../../../../src/commands/agents.config";
 import { resolveGatewayLaunchAgentLabel } from "../../../../src/daemon/constants";
 import { GatewayClient } from "../../../../src/gateway/client";
 import type { SessionsPatchResult } from "../../../../src/gateway/protocol";
+import { applySessionsPatchToStore } from "../../../../src/gateway/sessions-patch";
 import { mergeWhatsAppConfig } from "../../../../src/config/merge-config";
 import type { DmPolicy, OpenClawConfig } from "../../../../src/config/types";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../../../src/utils/message-channel";
@@ -91,7 +94,11 @@ import {
   ELECTRON_OPENCLAW_PROFILE,
   getElectronOpenrouterApiKey,
 } from "./defaults.js";
-import { buildBustlyWorkspaceAgentId } from "../shared/bustly-agent.js";
+import {
+  buildBustlyAgentPresetChannelSessionKey,
+  buildBustlyWorkspaceAgentId,
+} from "../shared/bustly-agent.js";
+import { BUSTLY_PRESET_CHANNELS } from "../shared/bustly-preset-channels.js";
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 
@@ -672,6 +679,57 @@ function resolveBustlyWorkspaceAgentSessionKey(workspaceId: string): string {
   return buildAgentMainSessionKey({ agentId: buildBustlyWorkspaceAgentId(workspaceId) });
 }
 
+async function ensureBustlyPresetChannels(params: { agentId: string }): Promise<void> {
+  const legacyPresetIcons = new Set(["ChartBar", "TrendUp", "ChatCircleText"]);
+  const presets = BUSTLY_PRESET_CHANNELS
+    .filter((entry) => entry.enabled !== false)
+    .slice()
+    .sort((a, b) => a.order - b.order);
+  if (presets.length === 0) {
+    return;
+  }
+
+  const cfg = loadConfig();
+  const storePath = resolveDefaultSessionStorePath(params.agentId);
+
+  await updateSessionStore(storePath, async (store) => {
+    for (const preset of presets) {
+      const storeKey = buildBustlyAgentPresetChannelSessionKey(params.agentId, preset.slug);
+      const existing = store[storeKey];
+      const nextPatch: {
+        key: string;
+        label?: string;
+        icon?: string;
+        model?: string;
+      } = { key: storeKey };
+
+      if (!existing?.label?.trim()) {
+        nextPatch.label = preset.label;
+      }
+      if (!existing?.icon?.trim() || legacyPresetIcons.has(existing.icon.trim())) {
+        nextPatch.icon = preset.icon;
+      }
+      if (!existing?.modelOverride?.trim() && preset.model?.trim()) {
+        nextPatch.model = preset.model.trim();
+      }
+      if (!("label" in nextPatch) && !("icon" in nextPatch) && !("model" in nextPatch)) {
+        continue;
+      }
+
+      const applied = await applySessionsPatchToStore({
+        cfg,
+        store,
+        storeKey,
+        patch: nextPatch,
+      });
+      if (!applied.ok) {
+        throw new Error(applied.error.message);
+      }
+    }
+    return store;
+  });
+}
+
 async function ensureBustlyWorkspaceAgentConfig(params: {
   workspaceId: string;
   workspaceName?: string;
@@ -723,6 +781,8 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
     dir: workspaceDir,
     ensureBootstrapFiles: true,
   });
+
+  await ensureBustlyPresetChannels({ agentId });
 
   return { agentId, sessionKey, workspaceDir };
 }
