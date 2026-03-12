@@ -60,6 +60,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   gatewayStop: () => ipcRenderer.invoke("gateway-stop"),
   gatewayStatus: () => ipcRenderer.invoke("gateway-status"),
   gatewayConnectConfig: () => ipcRenderer.invoke("gateway-connect-config"),
+  gatewayPatchSession: (key: string, patch: { label?: string | null; icon?: string | null }) =>
+    ipcRenderer.invoke("gateway-patch-session", key, patch),
   gatewayPatchSessionLabel: (key: string, label: string) =>
     ipcRenderer.invoke("gateway-patch-session-label", key, label),
   gatewayDeleteSession: (key: string) => ipcRenderer.invoke("gateway-delete-session", key),

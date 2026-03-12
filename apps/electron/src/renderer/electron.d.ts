@@ -166,6 +166,10 @@ interface ElectronAPI {
   gatewayStop: () => Promise<{ success: boolean; error?: string }>;
   gatewayStatus: () => Promise<GatewayStatus>;
   gatewayConnectConfig: () => Promise<GatewayConnectConfig>;
+  gatewayPatchSession: (
+    key: string,
+    patch: { label?: string | null; icon?: string | null },
+  ) => Promise<{ success: boolean; error?: string }>;
   gatewayPatchSessionLabel: (key: string, label: string) => Promise<{ success: boolean; error?: string }>;
   gatewayDeleteSession: (key: string) => Promise<{ success: boolean; error?: string }>;
   resolvePastedPath: (params: {

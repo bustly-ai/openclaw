@@ -9,26 +9,18 @@ import {
   File,
   Folder,
   Image,
-  ChartBar,
-  ChatCircleText,
-  Database,
-  Globe,
-  Heart,
-  MagnifyingGlass,
   Paperclip,
-  PencilSimpleLine,
-  Robot,
-  ShoppingBag,
   Stop,
-  StackOverflowLogo,
-  TrendUp,
-  User,
-  Users,
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
 import { listWorkspaceSummaries } from "../../lib/bustly-supabase";
 import { GatewayBrowserClient, type GatewayEventFrame } from "../../lib/gateway-client";
+import {
+  DEFAULT_SESSION_KEY,
+  deriveScenarioLabel,
+  resolveSessionIconComponent,
+} from "../../lib/session-icons";
 import { extractText, extractThinking } from "../../lib/chat-extract";
 import Skeleton from "../ui/Skeleton";
 import { ChatTimeline, ChatTimelineWaitingIndicator } from "./ChatTimeline";
@@ -111,7 +103,6 @@ type ReconnectStatus = {
   runId: string;
 };
 
-const DEFAULT_SESSION_KEY = "agent:main:main";
 const TOOL_RUNNING_MIN_VISIBLE_MS = 600;
 const SIDEBAR_TASKS_REFRESH_EVENT = "openclaw:sidebar-refresh-tasks";
 const CHAT_MODEL_LEVEL_STORAGE_KEY = "bustly.chat.model-level.v1";
@@ -149,58 +140,6 @@ function sessionAccentClasses(sessionKey: string) {
     "bg-[#FDECEF] text-[#B43C59]",
   ] as const;
   return palette[hashString(sessionKey) % palette.length] ?? palette[0];
-}
-
-function resolveSessionIcon(label: string, sessionKey: string) {
-  const value = `${label} ${sessionKey}`.toLowerCase();
-  if (value.includes("heart")) {
-    return Heart;
-  }
-  if (value.includes("shop") || value.includes("order") || value.includes("source") || value.includes("product")) {
-    return ShoppingBag;
-  }
-  if (value.includes("sale") || value.includes("revenue") || value.includes("growth") || value.includes("trend")) {
-    return TrendUp;
-  }
-  if (value.includes("data") || value.includes("report") || value.includes("chart") || value.includes("analytics")) {
-    return ChartBar;
-  }
-  if (value.includes("inventory") || value.includes("db") || value.includes("database")) {
-    return Database;
-  }
-  if (value.includes("user") || value.includes("profile")) {
-    return User;
-  }
-  if (value.includes("team") || value.includes("member") || value.includes("customer")) {
-    return Users;
-  }
-  if (value.includes("search") || value.includes("find") || value.includes("research")) {
-    return MagnifyingGlass;
-  }
-  if (value.includes("write") || value.includes("draft") || value.includes("content")) {
-    return PencilSimpleLine;
-  }
-  if (value.includes("web") || value.includes("browser")) {
-    return Globe;
-  }
-  if (value.includes("chat") || value.includes("support")) {
-    return ChatCircleText;
-  }
-  if (value.includes("openclaw") || value.includes("codex") || value.includes("stack")) {
-    return StackOverflowLogo;
-  }
-  return Robot;
-}
-
-function deriveScenarioLabel(sessionKey: string, rawLabel?: string | null) {
-  const trimmed = rawLabel?.trim();
-  if (trimmed) {
-    return trimmed;
-  }
-  if (sessionKey === DEFAULT_SESSION_KEY) {
-    return "Bustly AI";
-  }
-  return "Scenario";
 }
 
 function normalizeTextDelta(current: string, text?: string, delta?: string): string {
@@ -636,6 +575,7 @@ export default function ChatPage() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const composerAreaRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
+  const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
   const currentSessionKey = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
     return searchParams.get("session") ?? DEFAULT_SESSION_KEY;
@@ -644,9 +584,18 @@ export default function ChatPage() {
     const searchParams = new URLSearchParams(location.search);
     return deriveScenarioLabel(currentSessionKey, searchParams.get("label"));
   }, [currentSessionKey, location.search]);
+  useEffect(() => {
+    const searchParams = new URLSearchParams(location.search);
+    setCurrentScenarioIconId(searchParams.get("icon"));
+  }, [location.search]);
   const CurrentScenarioIcon = useMemo(
-    () => resolveSessionIcon(currentScenarioLabel, currentSessionKey),
-    [currentScenarioLabel, currentSessionKey],
+    () =>
+      resolveSessionIconComponent({
+        icon: currentScenarioIconId,
+        label: currentScenarioLabel,
+        sessionKey: currentSessionKey,
+      }),
+    [currentScenarioIconId, currentScenarioLabel, currentSessionKey],
   );
 
   const loadGatewayStatus = useCallback(async () => {
@@ -659,6 +608,7 @@ export default function ChatPage() {
       defaults?: { contextTokens?: number | null };
       sessions?: Array<{
         key: string;
+        icon?: string;
         totalTokens?: number;
         contextTokens?: number;
       }>;
@@ -677,6 +627,7 @@ export default function ChatPage() {
       typeof totalTokens === "number" && typeof contextTokens === "number"
         ? Math.max(0, contextTokens - totalTokens)
         : null;
+    setCurrentScenarioIconId(typeof row?.icon === "string" ? row.icon : null);
     setSessionUsage({ totalTokens, contextTokens, remainingTokens });
   }, []);
 

@@ -2149,6 +2149,58 @@ function setupIpcHandlers(): void {
     };
   });
 
+  ipcMain.handle(
+    "gateway-patch-session",
+    async (_event, key: string, patch: { label?: string | null; icon?: string | null }) => {
+      try {
+        const normalizedKey = typeof key === "string" ? key.trim() : "";
+        if (!normalizedKey) {
+          return { success: false, error: "Session key is required." };
+        }
+
+        const nextPatch: { key: string; label?: string | null; icon?: string | null } = { key: normalizedKey };
+        if (patch && "label" in patch) {
+          if (patch.label === null) {
+            nextPatch.label = null;
+          } else {
+            const normalizedLabel = typeof patch.label === "string" ? patch.label.trim() : "";
+            if (!normalizedLabel) {
+              return { success: false, error: "Scenario name is required." };
+            }
+            nextPatch.label = normalizedLabel;
+          }
+        }
+        if (patch && "icon" in patch) {
+          if (patch.icon === null) {
+            nextPatch.icon = null;
+          } else {
+            const normalizedIcon = typeof patch.icon === "string" ? patch.icon.trim() : "";
+            if (!normalizedIcon) {
+              return { success: false, error: "Scenario icon is required." };
+            }
+            nextPatch.icon = normalizedIcon;
+          }
+        }
+        if (!("label" in nextPatch) && !("icon" in nextPatch)) {
+          return { success: false, error: "At least one session field is required." };
+        }
+
+        const result = await withPrivilegedGatewayClient((client) =>
+          client.request<SessionsPatchResult>("sessions.patch", nextPatch),
+        );
+        if (!result?.ok) {
+          return { success: false, error: "Failed to update scenario." };
+        }
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
   ipcMain.handle("gateway-patch-session-label", async (_event, key: string, label: string) => {
     try {
       const normalizedKey = typeof key === "string" ? key.trim() : "";
@@ -2164,7 +2216,7 @@ function setupIpcHandlers(): void {
         client.request<SessionsPatchResult>("sessions.patch", {
           key: normalizedKey,
           label: normalizedLabel,
-        })
+        }),
       );
       if (!result?.ok) {
         return { success: false, error: "Failed to rename scenario." };
