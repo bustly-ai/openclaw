@@ -1868,32 +1868,57 @@ export default function ChatPage() {
   }, [clearReconnectStatus, connected, currentSessionKey, modelLevel, removeRunError, sending, subscriptionExpired]);
 
   const handleAbort = useCallback(async () => {
-    if (!connected || !clientRef.current) {
+    const client = clientRef.current;
+    const runId = activeRunId;
+
+    // Abort must clear the local running state immediately so the UI cannot get stuck
+    // behind an RPC response that is delayed, missing runIds, or races with reconnects.
+    setSending(false);
+    setActiveRunId(null);
+    setCompactingRunId(null);
+    clearReconnectStatus(runId);
+    if (runId) {
+      discardedRunIdsRef.current.add(runId);
+      finalizeRunState(runId, "error");
+    }
+
+    if (!connected || !client) {
       return;
     }
+
     try {
-      const client = clientRef.current;
       const res = await client.request<{ aborted?: boolean; runIds?: string[] }>("chat.abort", {
         sessionKey: currentSessionKey,
-        runId: activeRunId ?? undefined,
+        runId: runId ?? undefined,
       });
-      const abortedRunIds = Array.isArray(res.runIds)
+      let abortedRunIds = Array.isArray(res.runIds)
         ? res.runIds.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
-        : activeRunId
-          ? [activeRunId]
+        : runId
+          ? [runId]
           : [];
-      if (res.aborted && abortedRunIds.length > 0) {
-        for (const runId of abortedRunIds) {
-          discardedRunIdsRef.current.add(runId);
-          finalizeRunState(runId, "error");
+
+      if ((!res.aborted || abortedRunIds.length === 0) && currentSessionKey) {
+        const fallbackRes = await client.request<{ aborted?: boolean; runIds?: string[] }>("chat.abort", {
+          sessionKey: currentSessionKey,
+        });
+        const fallbackRunIds = Array.isArray(fallbackRes.runIds)
+          ? fallbackRes.runIds.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+          : [];
+        if (fallbackRunIds.length > 0) {
+          abortedRunIds = fallbackRunIds;
         }
-        refreshSessionUsage(client, currentSessionKey);
-        notifySidebarTasksRefresh();
       }
+
+      for (const abortedRunId of abortedRunIds) {
+        discardedRunIdsRef.current.add(abortedRunId);
+        finalizeRunState(abortedRunId, "error");
+      }
+      refreshSessionUsage(client, currentSessionKey);
+      notifySidebarTasksRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [activeRunId, connected, currentSessionKey, finalizeRunState, refreshSessionUsage]);
+  }, [activeRunId, clearReconnectStatus, connected, currentSessionKey, finalizeRunState, refreshSessionUsage]);
 
   const handleOpenPricing = useCallback(async () => {
     if (!activeWorkspaceId) {
