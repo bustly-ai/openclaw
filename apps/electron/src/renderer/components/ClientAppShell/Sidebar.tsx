@@ -1012,6 +1012,24 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   }, [customSessionLabels, hasLoadedTasks, location.pathname, location.search]);
 
   useEffect(() => {
+    if (location.pathname !== "/chat") {
+      return;
+    }
+    const searchParams = new URLSearchParams(location.search);
+    if (searchParams.get("session")) {
+      return;
+    }
+    const fallbackTask = recentTasks[0];
+    if (!fallbackTask) {
+      return;
+    }
+    void navigate(
+      `/chat?session=${encodeURIComponent(fallbackTask.id)}&label=${encodeURIComponent(fallbackTask.name)}`,
+      { replace: true },
+    );
+  }, [location.pathname, location.search, navigate, recentTasks]);
+
+  useEffect(() => {
     let disposed = false;
 
     const loadBustlyUserInfo = async () => {
