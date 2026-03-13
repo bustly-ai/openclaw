@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useState } from "react";
+import React, { memo, useEffect, useMemo, useState } from "react";
 import Lottie from "lottie-react";
 import {
   ArrowsCounterClockwise,
@@ -289,27 +289,47 @@ function shouldTightJoin(prev: TimelineNode | null, next: TimelineNode | null): 
   return isProcessNode(prev) && isProcessNode(next);
 }
 
+function resolveExpandableNodeId(node: Extract<TimelineNode, { kind: "tool" | "processed" | "streamFold" }>): string {
+  if (node.kind === "tool") {
+    return `tool:${node.mergeKey || node.key}`;
+  }
+  if (node.kind === "streamFold") {
+    const firstItemKey = node.items[0]?.key ?? node.key;
+    return `streamFold:${firstItemKey}`;
+  }
+  return `processed:${node.key}`;
+}
+
 const StreamFoldNode = memo(function StreamFoldNode({
   node,
+  expanded,
+  expandedNodeIds,
   activeRunningToolKey,
+  onToggleExpanded,
+  onToggleNodeExpanded,
   onCopyText,
   onRetryRun,
   onPreviewImage,
 }: {
   node: Extract<TimelineNode, { kind: "streamFold" }>;
+  expanded: boolean;
+  expandedNodeIds: Record<string, true>;
   activeRunningToolKey: string | null;
+  onToggleExpanded: () => void;
+  onToggleNodeExpanded: (id: string) => void;
   onCopyText?: (text: string) => void;
   onRetryRun?: (runId?: string) => void;
   onPreviewImage?: (url: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const stepLabel = `${node.hiddenCount} step${node.hiddenCount === 1 ? "" : "s"} hidden`;
 
   if (expanded) {
     return (
       <TimelineStack
         items={node.items}
+        expandedNodeIds={expandedNodeIds}
         activeRunningToolKey={activeRunningToolKey}
+        onToggleExpanded={onToggleNodeExpanded}
         onCopyText={onCopyText}
         onRetryRun={onRetryRun}
         onPreviewImage={onPreviewImage}
@@ -323,7 +343,7 @@ const StreamFoldNode = memo(function StreamFoldNode({
         <button
           type="button"
           onClick={() => {
-            setExpanded(true);
+            onToggleExpanded();
           }}
           className="group flex w-full items-center justify-center gap-3 rounded-[22px] border border-dashed border-[#D8DCE7] bg-[#FBFBFD] px-4 py-3 text-center transition-colors hover:border-[#C5CBD9] hover:bg-[#F7F8FC]"
         >
@@ -511,12 +531,15 @@ const TextNode = memo(function TextNode({
 
 const ToolNode = memo(function ToolNode({
   node,
+  expanded,
   activeRunningToolKey,
+  onToggleExpanded,
 }: {
   node: Extract<TimelineNode, { kind: "tool" }>;
+  expanded: boolean;
   activeRunningToolKey: string | null;
+  onToggleExpanded: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const running = node.running && node.key === activeRunningToolKey;
 
   return (
@@ -536,7 +559,7 @@ const ToolNode = memo(function ToolNode({
           type="button"
           className="group mb-1 mt-1 flex items-center gap-3 text-left"
           onClick={() => {
-            setExpanded((value) => !value);
+            onToggleExpanded();
           }}
         >
           <div className="relative flex-1 rounded-xl transition-colors hover:bg-white">
@@ -582,14 +605,21 @@ const ToolNode = memo(function ToolNode({
 
 const ProcessedNode = memo(function ProcessedNode({
   node,
+  expanded,
+  expandedNodeIds,
   activeRunningToolKey,
+  onToggleExpanded,
+  onToggleNodeExpanded,
   onRetryRun,
 }: {
   node: Extract<TimelineNode, { kind: "processed" }>;
+  expanded: boolean;
+  expandedNodeIds: Record<string, true>;
   activeRunningToolKey: string | null;
+  onToggleExpanded: () => void;
+  onToggleNodeExpanded: (id: string) => void;
   onRetryRun?: (runId?: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const duration = formatProcessedDuration(node.durationMs);
   const summary = duration
     ? `${node.items.length} steps processed in ${duration}`
@@ -601,7 +631,7 @@ const ProcessedNode = memo(function ProcessedNode({
         type="button"
         className="flex w-full items-center gap-3 rounded-xl border border-gray-200 bg-gray-50/80 p-3 text-left transition-colors hover:bg-gray-100"
         onClick={() => {
-          setExpanded((value) => !value);
+          onToggleExpanded();
         }}
       >
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#1A162F]/5 text-[#1A162F]">
@@ -621,7 +651,13 @@ const ProcessedNode = memo(function ProcessedNode({
         )}
       >
         <div>
-          <TimelineStack items={node.items} activeRunningToolKey={activeRunningToolKey} onRetryRun={onRetryRun} />
+          <TimelineStack
+            items={node.items}
+            expandedNodeIds={expandedNodeIds}
+            activeRunningToolKey={activeRunningToolKey}
+            onToggleExpanded={onToggleNodeExpanded}
+            onRetryRun={onRetryRun}
+          />
         </div>
       </div>
     </div>
@@ -640,14 +676,18 @@ const DividerNode = memo(function DividerNode({ node }: { node: Extract<Timeline
 
 function TimelineStack({
   items,
+  expandedNodeIds,
   activeRunningToolKey,
+  onToggleExpanded,
   onCopyText,
   onRetryRun,
   onPreviewImage,
   spaced = false,
 }: {
   items: TimelineNode[];
+  expandedNodeIds: Record<string, true>;
   activeRunningToolKey: string | null;
+  onToggleExpanded: (id: string) => void;
   onCopyText?: (text: string) => void;
   onRetryRun?: (runId?: string) => void;
   onPreviewImage?: (url: string) => void;
@@ -662,7 +702,9 @@ function TimelineStack({
           <div key={node.key} className={cx(needsLooseSpacing && "mt-4")}>
             <TimelineItem
               node={node}
+              expandedNodeIds={expandedNodeIds}
               activeRunningToolKey={activeRunningToolKey}
+              onToggleExpanded={onToggleExpanded}
               onCopyText={onCopyText}
               onRetryRun={onRetryRun}
               onPreviewImage={onPreviewImage}
@@ -676,13 +718,17 @@ function TimelineStack({
 
 const TimelineItem = memo(function TimelineItem({
   node,
+  expandedNodeIds,
   activeRunningToolKey,
+  onToggleExpanded,
   onCopyText,
   onRetryRun,
   onPreviewImage,
 }: {
   node: TimelineNode;
+  expandedNodeIds: Record<string, true>;
   activeRunningToolKey: string | null;
+  onToggleExpanded: (id: string) => void;
   onCopyText?: (text: string) => void;
   onRetryRun?: (runId?: string) => void;
   onPreviewImage?: (url: string) => void;
@@ -691,16 +737,37 @@ const TimelineItem = memo(function TimelineItem({
     case "text":
       return <TextNode node={node} onCopyText={onCopyText} onPreviewImage={onPreviewImage} />;
     case "tool":
-      return <ToolNode node={node} activeRunningToolKey={activeRunningToolKey} />;
+      return (
+        <ToolNode
+          node={node}
+          expanded={Boolean(expandedNodeIds[resolveExpandableNodeId(node)])}
+          activeRunningToolKey={activeRunningToolKey}
+          onToggleExpanded={() => onToggleExpanded(resolveExpandableNodeId(node))}
+        />
+      );
     case "processed":
-      return <ProcessedNode node={node} activeRunningToolKey={activeRunningToolKey} onRetryRun={onRetryRun} />;
+      return (
+        <ProcessedNode
+          node={node}
+          expanded={Boolean(expandedNodeIds[resolveExpandableNodeId(node)])}
+          expandedNodeIds={expandedNodeIds}
+          activeRunningToolKey={activeRunningToolKey}
+          onToggleExpanded={() => onToggleExpanded(resolveExpandableNodeId(node))}
+          onToggleNodeExpanded={onToggleExpanded}
+          onRetryRun={onRetryRun}
+        />
+      );
     case "errorState":
       return <ErrorStateNode node={node} onRetryRun={onRetryRun} />;
     case "streamFold":
       return (
         <StreamFoldNode
           node={node}
+          expanded={Boolean(expandedNodeIds[resolveExpandableNodeId(node)])}
+          expandedNodeIds={expandedNodeIds}
           activeRunningToolKey={activeRunningToolKey}
+          onToggleExpanded={() => onToggleExpanded(resolveExpandableNodeId(node))}
+          onToggleNodeExpanded={onToggleExpanded}
           onCopyText={onCopyText}
           onRetryRun={onRetryRun}
           onPreviewImage={onPreviewImage}
@@ -731,10 +798,38 @@ export const ChatTimeline = memo(function ChatTimeline({
   onRetryRun,
   onPreviewImage,
 }: ChatTimelineProps) {
+  const [expandedNodeIds, setExpandedNodeIds] = useState<Record<string, true>>({});
+  const latestUserTurnKey = useMemo(() => {
+    for (let index = timeline.length - 1; index >= 0; index -= 1) {
+      const node = timeline[index];
+      if (node.kind === "text" && node.tone === "user") {
+        return node.key;
+      }
+    }
+    return null;
+  }, [timeline]);
+
+  useEffect(() => {
+    setExpandedNodeIds({});
+  }, [latestUserTurnKey]);
+
+  const handleToggleExpanded = (id: string) => {
+    setExpandedNodeIds((current) => {
+      if (current[id]) {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      }
+      return { ...current, [id]: true };
+    });
+  };
+
   return (
     <TimelineStack
       items={timeline}
+      expandedNodeIds={expandedNodeIds}
       activeRunningToolKey={activeRunningToolKey}
+      onToggleExpanded={handleToggleExpanded}
       onCopyText={onCopyText}
       onRetryRun={onRetryRun}
       onPreviewImage={onPreviewImage}

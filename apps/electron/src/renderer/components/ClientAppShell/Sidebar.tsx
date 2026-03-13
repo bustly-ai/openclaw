@@ -1344,7 +1344,19 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     if (activeSessionKey && recentTasks.some((task) => task.id === activeSessionKey)) {
       return;
     }
-    void navigate(buildChatRoute({ sessionKey: fallbackTask.id, label: fallbackTask.name, icon: fallbackTask.icon }), {
+    const nextSearchParams = new URLSearchParams();
+    nextSearchParams.set("session", fallbackTask.id);
+    if (fallbackTask.name?.trim()) {
+      nextSearchParams.set("label", fallbackTask.name.trim());
+    }
+    if (fallbackTask.icon?.trim()) {
+      nextSearchParams.set("icon", fallbackTask.icon.trim());
+    }
+    const prompt = searchParams.get("prompt")?.trim();
+    if (prompt) {
+      nextSearchParams.set("prompt", prompt);
+    }
+    void navigate(`/chat?${nextSearchParams.toString()}`, {
       replace: true,
     });
   }, [location.pathname, location.search, navigate, pendingSessionKey, recentTasks]);

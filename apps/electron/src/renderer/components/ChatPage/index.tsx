@@ -601,6 +601,8 @@ export default function ChatPage() {
   const composerAreaRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
+  const lastAppliedPromptRef = useRef<string | null>(null);
+  const pendingPromptFocusRef = useRef(false);
   const currentSessionKey = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
     return searchParams.get("session") ?? buildBustlyWorkspaceMainSessionKey(activeWorkspaceId);
@@ -1598,6 +1600,9 @@ export default function ChatPage() {
   useEffect(() => {
     resetSessionView();
     setLoading(true);
+  }, [currentSessionKey, resetSessionView]);
+
+  useEffect(() => {
     const client = clientRef.current;
     if (!connected || !client) {
       setLoading(false);
@@ -1613,7 +1618,50 @@ export default function ChatPage() {
     void loadSessionUsage(client, currentSessionKey).catch((err) => {
       setError(err instanceof Error ? err.message : String(err));
     });
-  }, [connected, currentSessionKey, loadHistory, loadSessionUsage, resetSessionView]);
+  }, [connected, currentSessionKey, loadHistory, loadSessionUsage, location.search]);
+
+  useEffect(() => {
+    const searchParams = new URLSearchParams(location.search);
+    const explicitSessionKey = searchParams.get("session")?.trim();
+    const prompt = searchParams.get("prompt")?.trim();
+    if (!prompt || !explicitSessionKey || lastAppliedPromptRef.current === prompt) {
+      return;
+    }
+    lastAppliedPromptRef.current = prompt;
+    pendingPromptFocusRef.current = true;
+    setDraft(prompt);
+    window.requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      composerRef.current?.setSelectionRange(prompt.length, prompt.length);
+    });
+    window.setTimeout(() => {
+      composerRef.current?.focus();
+      composerRef.current?.setSelectionRange(prompt.length, prompt.length);
+    }, 80);
+    searchParams.delete("prompt");
+    void navigate(
+      {
+        pathname: location.pathname,
+        search: searchParams.toString() ? `?${searchParams.toString()}` : "",
+      },
+      { replace: true },
+    );
+  }, [location.pathname, location.search, navigate]);
+
+  useEffect(() => {
+    if (!pendingPromptFocusRef.current || !connected || sending || subscriptionExpired || !draft.trim()) {
+      return;
+    }
+    pendingPromptFocusRef.current = false;
+    window.requestAnimationFrame(() => {
+      const textarea = composerRef.current;
+      if (!textarea) {
+        return;
+      }
+      textarea.focus();
+      textarea.setSelectionRange(draft.length, draft.length);
+    });
+  }, [connected, draft, sending, subscriptionExpired]);
 
   useEffect(() => {
     const element = scrollRef.current;

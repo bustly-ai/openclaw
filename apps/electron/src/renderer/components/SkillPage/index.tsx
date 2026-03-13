@@ -1,7 +1,8 @@
 import { createPortal } from "react-dom";
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { GatewayBrowserClient } from "../../lib/gateway-client";
+import { buildBustlyWorkspaceAgentId } from "../../../shared/bustly-agent";
 import Skeleton from "../ui/Skeleton";
 import collapsedLogo from "../../assets/imgs/collapsed_logo_clean.svg";
 import trashIcon from "../../assets/imgs/Trash.svg";
@@ -290,6 +291,16 @@ function SkillCardSkeleton() {
   );
 }
 
+const BUILD_WITH_BUSTLY_PROMPT =
+  "/skill-creator Help me create a skill together. First ask me what the skill should do.";
+function buildUploadSkillPrompt(fileName: string): string {
+  return `Help me install a local skill together. I just selected a skill package named "${fileName}". First help me verify it and then guide me through installation.`;
+}
+
+function buildImportGithubSkillPrompt(url: string): string {
+  return `Help me install a skill from GitHub together. I want to use this repository: ${url}`;
+}
+
 function UploadSkillModal(props: {
   isOpen: boolean;
   onClose: () => void;
@@ -462,6 +473,12 @@ export default function SkillPage() {
     id: null,
   });
 
+  const navigateToChatWithPrompt = (prompt: string) => {
+    const searchParams = new URLSearchParams();
+    searchParams.set("prompt", prompt);
+    void navigate(`/chat?${searchParams.toString()}`);
+  };
+
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -477,6 +494,8 @@ export default function SkillPage() {
 
     const connectGateway = async () => {
       try {
+        const supabaseConfig = await window.electronAPI.bustlyGetSupabaseConfig();
+        const agentId = buildBustlyWorkspaceAgentId(supabaseConfig.workspaceId);
         const status = await window.electronAPI.gatewayStatus();
         if (!status.running) {
           if (!disposed) {
@@ -506,7 +525,7 @@ export default function SkillPage() {
             }
             setSkillsError(null);
             void client
-              .request<SkillStatusReport>("skills.status", {})
+              .request<SkillStatusReport>("skills.status", { agentId })
               .then((report) => {
                 if (disposed) {
                   return;
@@ -567,20 +586,6 @@ export default function SkillPage() {
     };
   }, []);
 
-  const handleAddSkill = (skill?: Partial<SkillItemData>) => {
-    setSkills((previous) => [
-      {
-        id: `skill-${Date.now()}`,
-        name: skill?.name ?? "New Custom Skill",
-        description: skill?.description ?? "A newly created skill for your workspace.",
-        enabled: true,
-        icon: skill?.icon ?? LightningIcon,
-        canDelete: false,
-      },
-      ...previous,
-    ]);
-  };
-
   const skillRows = useMemo(() => skills, [skills]);
 
   return (
@@ -609,7 +614,7 @@ export default function SkillPage() {
                     type="button"
                     onClick={() => {
                       setIsDropdownOpen(false);
-                      void navigate("/chat");
+                      navigateToChatWithPrompt(BUILD_WITH_BUSTLY_PROMPT);
                     }}
                     className="group flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[#1A162F]/5"
                   >
@@ -728,10 +733,7 @@ export default function SkillPage() {
             return;
           }
           setShowUploadModal(false);
-          handleAddSkill({
-            name: file.name.replace(/\.(zip|skill)$/i, ""),
-            description: "Uploaded from file",
-          });
+          navigateToChatWithPrompt(buildUploadSkillPrompt(file.name));
         }}
       />
 
@@ -740,10 +742,7 @@ export default function SkillPage() {
         onClose={() => setShowGithubModal(false)}
         onImport={(url) => {
           setShowGithubModal(false);
-          handleAddSkill({
-            name: url.split("/").filter(Boolean).pop() ?? "GitHub Skill",
-            description: `Imported from ${url}`,
-          });
+          navigateToChatWithPrompt(buildImportGithubSkillPrompt(url));
         }}
       />
 
