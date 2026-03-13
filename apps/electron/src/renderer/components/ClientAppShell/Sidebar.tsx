@@ -754,6 +754,7 @@ function WorkspaceSwitcher(props: {
   onOpenSettings: (workspaceId: string) => void;
   onOpenInvite: (workspaceId: string) => void;
   onOpenManage: (workspaceId: string) => void;
+  onOpenPricing: (workspaceId: string) => void;
   onCreateWorkspace: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -849,7 +850,11 @@ function WorkspaceSwitcher(props: {
       return;
     }
     setIsOpen(false);
-    props.onOpenManage(activeWorkspace.id);
+    if (activeWorkspace.buttonText === "Manage") {
+      props.onOpenManage(activeWorkspace.id);
+      return;
+    }
+    props.onOpenPricing(activeWorkspace.id);
   };
 
   return (
@@ -976,24 +981,25 @@ function WorkspaceSwitcher(props: {
                 <div className="mx-4 mb-4 flex items-center justify-between rounded-xl border border-gray-100 bg-gray-50 p-3">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-gray-900">
-                      {activeWorkspace.expired
-                        ? "Trial Expired"
-                        : activeWorkspace.plan
-                          ? activeWorkspace.plan
-                          : "Workspace plan"}
+                      {activeWorkspace.planDisplayText || "Workspace plan"}
                     </span>
+                    {activeWorkspace.badge ? (
+                      <span className="rounded bg-[#1A162F] px-1.5 py-0.5 text-[10px] font-bold uppercase text-white">
+                        {activeWorkspace.badge}
+                      </span>
+                    ) : null}
                   </div>
                   <button
                     type="button"
                     onClick={handleOpenManage}
                     className={`rounded-lg px-4 py-1.5 text-xs font-semibold shadow-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                      activeWorkspace.expired
+                      activeWorkspace.expired || activeWorkspace.planStatus === "canceled"
                         ? "border border-transparent bg-[#1A162F] text-white hover:bg-[#1A162F]/90"
                         : "border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
                     }`}
                     disabled={!activeWorkspace.id}
                   >
-                    {activeWorkspace.expired ? "Renew" : "Manage"}
+                    {activeWorkspace.buttonText}
                   </button>
                 </div>
 
@@ -1036,6 +1042,10 @@ function WorkspaceSwitcher(props: {
                             {workspace.expired ? (
                               <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase bg-gray-100 text-gray-600">
                                 Expired
+                              </span>
+                            ) : workspace.badge ? (
+                              <span className="shrink-0 rounded bg-[#1A162F] px-1.5 py-0.5 text-[10px] font-bold uppercase text-white">
+                                {workspace.badge}
                               </span>
                             ) : workspace.plan ? (
                               <span className="shrink-0 rounded bg-[#1A162F] px-1.5 py-0.5 text-[10px] font-bold uppercase text-white">
@@ -1102,6 +1112,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedIcon, setSelectedIcon] = useState<SessionIconId>("SquaresFour");
   const [iconPickerMode, setIconPickerMode] = useState<"create" | "edit">("edit");
+  const [pendingSessionKey, setPendingSessionKey] = useState<string | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
@@ -1327,13 +1338,25 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       return;
     }
     const activeSessionKey = searchParams.get("session");
+    if (activeSessionKey && pendingSessionKey === activeSessionKey) {
+      return;
+    }
     if (activeSessionKey && recentTasks.some((task) => task.id === activeSessionKey)) {
       return;
     }
     void navigate(buildChatRoute({ sessionKey: fallbackTask.id, label: fallbackTask.name, icon: fallbackTask.icon }), {
       replace: true,
     });
-  }, [location.pathname, location.search, navigate, recentTasks]);
+  }, [location.pathname, location.search, navigate, pendingSessionKey, recentTasks]);
+
+  useEffect(() => {
+    if (!pendingSessionKey) {
+      return;
+    }
+    if (recentTasks.some((task) => task.id === pendingSessionKey)) {
+      setPendingSessionKey(null);
+    }
+  }, [pendingSessionKey, recentTasks]);
 
   useEffect(() => {
     let disposed = false;
@@ -1395,8 +1418,12 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     void window.electronAPI.bustlyOpenWorkspaceManage(workspaceId);
   };
 
+  const handleOpenWorkspacePricing = (workspaceId: string) => {
+    void window.electronAPI.bustlyOpenWorkspacePricing(workspaceId);
+  };
+
   const handleCreateWorkspace = () => {
-    void window.electronAPI.bustlyOpenWorkspaceCreate();
+    void window.electronAPI.bustlyOpenWorkspaceCreate(effectiveWorkspaceId || undefined);
   };
 
   const handleSwitchWorkspace = async (workspaceId: string) => {
@@ -1480,6 +1507,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       const nextLabels = { ...customSessionLabels, [nextSessionKey]: name };
       setCustomSessionLabels(nextLabels);
       writeCustomSessionLabels(nextLabels);
+      setPendingSessionKey(nextSessionKey);
       setHasLoadedTasks(true);
       setDraftScenarioName("");
       setSelectedIcon("SquaresFour");
@@ -1638,6 +1666,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                 onOpenSettings={handleOpenWorkspaceSettings}
                 onOpenInvite={handleOpenWorkspaceInvite}
                 onOpenManage={handleOpenWorkspaceManage}
+                onOpenPricing={handleOpenWorkspacePricing}
                 onCreateWorkspace={handleCreateWorkspace}
               />
             </div>

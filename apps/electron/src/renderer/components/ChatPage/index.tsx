@@ -557,6 +557,7 @@ export default function ChatPage() {
   const [previewMinZoom, setPreviewMinZoom] = useState(0.67);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
   const [subscriptionExpired, setSubscriptionExpired] = useState(false);
+  const [subscriptionActionText, setSubscriptionActionText] = useState("Upgrade");
   const [modelMenuPos, setModelMenuPos] = useState<{
     top: number;
     left: number;
@@ -1517,10 +1518,12 @@ export default function ChatPage() {
         const activeWorkspace = summary.workspaces.find((entry) => entry.id === workspaceId);
         setActiveWorkspaceId(workspaceId);
         setSubscriptionExpired(activeWorkspace?.expired === true);
+        setSubscriptionActionText(activeWorkspace?.buttonText?.trim() || "Upgrade");
       } catch {
         if (!disposed) {
           setActiveWorkspaceId("");
           setSubscriptionExpired(false);
+          setSubscriptionActionText("Upgrade");
         }
       }
     };
@@ -1924,7 +1927,7 @@ export default function ChatPage() {
     if (!activeWorkspaceId) {
       return;
     }
-    await window.electronAPI.bustlyOpenWorkspaceManage(activeWorkspaceId);
+    await window.electronAPI.bustlyOpenWorkspacePricing(activeWorkspaceId);
   }, [activeWorkspaceId]);
 
   const appendContextSelections = useCallback((selected: ChatContextPathSelection[]) => {
@@ -2522,7 +2525,7 @@ export default function ChatPage() {
                       }}
                       className="shrink-0 rounded-xl bg-[#1A162F] px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-[#27223F]"
                     >
-                      Renew plan
+                      {subscriptionActionText}
                     </button>
                   </div>
                 </div>

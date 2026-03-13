@@ -192,7 +192,8 @@ interface ElectronAPI {
   getNativeFullscreenStatus: () => Promise<{ isNativeFullscreen: boolean }>;
 
   // Onboarding
-  bustlyLogin: () => Promise<{ success: boolean; error?: string }>;
+  bustlyLogin: () => Promise<{ success: boolean; canceled?: boolean; error?: string }>;
+  bustlyCancelLogin: () => Promise<{ success: boolean; error?: string }>;
   bustlyIsLoggedIn: () => Promise<boolean>;
   bustlyGetUserInfo: () => Promise<BustlyUserInfo | null>;
   bustlyGetSupabaseConfig: () => Promise<BustlySupabaseConfig | null>;
@@ -207,7 +208,8 @@ interface ElectronAPI {
   bustlyOpenWorkspaceSettings: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
   bustlyOpenWorkspaceInvite: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
   bustlyOpenWorkspaceManage: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
-  bustlyOpenWorkspaceCreate: () => Promise<{ success: boolean; error?: string }>;
+  bustlyOpenWorkspacePricing: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
+  bustlyOpenWorkspaceCreate: (workspaceId?: string) => Promise<{ success: boolean; error?: string }>;
   onboardBetaOpenRouterApiKey: () => Promise<string>;
   onboardListProviders: () => Promise<ProviderConfig[]>;
   onboardAuthApiKey: (provider: string, apiKey: string) => Promise<AuthResult>;

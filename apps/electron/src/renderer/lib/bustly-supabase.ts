@@ -54,7 +54,131 @@ export type WorkspaceSummary = {
   members: number;
   plan: string | null;
   expired: boolean;
+  planDisplayText: string;
+  badge: string;
+  expirationText: string;
+  buttonText: string;
+  planStatus: "none" | "active" | "expired" | "canceled";
 };
+
+function parseTimestamp(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatPlanDate(value: string | null | undefined): string {
+  const timestamp = parseTimestamp(value);
+  if (timestamp === null) {
+    return "";
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(timestamp));
+}
+
+function resolvePlanLabel(subscription?: WorkspaceSubscriptionRow): string | null {
+  const benefitPlan = Array.isArray(subscription?.benefit_plan)
+    ? subscription.benefit_plan[0]
+    : subscription?.benefit_plan;
+  return (
+    benefitPlan?.name?.trim() ||
+    benefitPlan?.tier?.trim() ||
+    benefitPlan?.code?.trim() ||
+    null
+  );
+}
+
+function resolveWorkspacePlanState(subscription?: WorkspaceSubscriptionRow): Pick<
+  WorkspaceSummary,
+  "plan" | "expired" | "planDisplayText" | "badge" | "expirationText" | "buttonText" | "planStatus"
+> {
+  const now = Date.now();
+  const status = subscription?.status?.trim().toLowerCase() ?? "";
+  const effectiveEndAt = subscription?.end_at || subscription?.current_period_end;
+  const endAt = parseTimestamp(effectiveEndAt);
+  const currentPeriodEnd = parseTimestamp(subscription?.current_period_end);
+  const isExpired = Boolean((endAt ?? currentPeriodEnd) !== null && (endAt ?? currentPeriodEnd)! <= now) || status === "expired";
+  const isCanceled = status === "pending_cancellation" || status === "canceled";
+  const isTrial = status === "trialing" || status === "trial";
+  const planLabel = resolvePlanLabel(subscription);
+  const planDisplayText = planLabel || "Basic";
+
+  if (!subscription) {
+    return {
+      plan: null,
+      expired: false,
+      planDisplayText: "",
+      badge: "",
+      expirationText: "",
+      buttonText: "Manage",
+      planStatus: "none",
+    };
+  }
+
+  if (isExpired) {
+    return {
+      plan: planLabel,
+      expired: true,
+      planDisplayText: "Plan Expired",
+      badge: "",
+      expirationText: "",
+      buttonText: "Upgrade",
+      planStatus: "expired",
+    };
+  }
+
+  if (isTrial) {
+    return {
+      plan: planLabel,
+      expired: false,
+      planDisplayText,
+      badge: "Trial",
+      expirationText: effectiveEndAt ? `Will renew on ${formatPlanDate(effectiveEndAt)}.` : "",
+      buttonText: "Manage",
+      planStatus: "active",
+    };
+  }
+
+  if (isCanceled && endAt !== null) {
+    const daysLeft = Math.max(0, Math.ceil((endAt - now) / (1000 * 60 * 60 * 24)));
+    return {
+      plan: planLabel,
+      expired: false,
+      planDisplayText,
+      badge: "",
+      expirationText: daysLeft < 7 ? `${daysLeft} days left.` : `Expires on ${formatPlanDate(effectiveEndAt)}.`,
+      buttonText: "Renew",
+      planStatus: "canceled",
+    };
+  }
+
+  if (effectiveEndAt) {
+    return {
+      plan: planLabel,
+      expired: false,
+      planDisplayText,
+      badge: "",
+      expirationText: `Will renew on ${formatPlanDate(effectiveEndAt)}.`,
+      buttonText: "Manage",
+      planStatus: "active",
+    };
+  }
+
+  return {
+    plan: planLabel,
+    expired: false,
+    planDisplayText,
+    badge: "",
+    expirationText: "",
+    buttonText: "Manage",
+    planStatus: "active",
+  };
+}
 
 let cachedClient: SupabaseClient | null = null;
 let cachedConfigKey = "";
@@ -161,22 +285,7 @@ export async function listWorkspaceSummaries(): Promise<{
         return null;
       }
       const subscription = latestSubscriptionByWorkspace.get(item.workspace_id);
-      const benefitPlan = Array.isArray(subscription?.benefit_plan)
-        ? subscription.benefit_plan[0]
-        : subscription?.benefit_plan;
-      const effectiveEndAt = subscription?.end_at || subscription?.current_period_end;
-      const expired =
-        subscription?.status === "expired" ||
-        (subscription?.status === "canceled" &&
-          typeof effectiveEndAt === "string" &&
-          Number.isFinite(Date.parse(effectiveEndAt)) &&
-          Date.parse(effectiveEndAt) <= Date.now());
-      const planLabel = (benefitPlan?.code ||
-        benefitPlan?.name ||
-        benefitPlan?.tier ||
-        "")
-        .trim()
-        .toUpperCase();
+      const planState = resolveWorkspacePlanState(subscription);
       return {
         id: workspace.id,
         name: workspace.name,
@@ -184,8 +293,7 @@ export async function listWorkspaceSummaries(): Promise<{
         role: item.role,
         status: workspace.status,
         members: memberCounts.get(item.workspace_id) ?? 0,
-        plan: planLabel || null,
-        expired,
+        ...planState,
       } satisfies WorkspaceSummary;
     })
     .filter((item): item is WorkspaceSummary => Boolean(item));

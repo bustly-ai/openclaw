@@ -166,6 +166,7 @@ let needsOnboardAtLaunch = false;
 let gatewayPort: number = 17999;
 let gatewayBind: string = "loopback";
 let gatewayToken: string | null = null;
+let bustlyLoginCancelled = false;
 
 function emitGatewayLifecycle(phase: "starting" | "stopping" | "ready" | "error", message?: string): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -1409,7 +1410,6 @@ async function resolveGatewayStartupPort(
  * Start the OpenClaw Gateway process
  */
 async function startGateway(): Promise<boolean> {
-  emitGatewayLifecycle("starting", "Starting gateway...");
   const oauthCallbackPort = await startOAuthCallbackServer();
   console.log("[Bustly] OAuth callback server started on port", oauthCallbackPort);
 
@@ -1417,8 +1417,11 @@ async function startGateway(): Promise<boolean> {
   if (gatewayProcess) {
     console.log("Gateway already running");
     writeMainLog("Gateway already running");
+    emitGatewayLifecycle("ready", null);
     return true;
   }
+
+  emitGatewayLifecycle("starting", "Starting gateway...");
 
   const cliPath = resolveOpenClawCliPath({
     info: (message) => console.log(message),
@@ -2667,6 +2670,7 @@ function setupIpcHandlers(): void {
   ipcMain.handle("bustly-login", async () => {
     try {
       console.log("[Bustly Login] Starting Bustly OAuth login flow");
+      bustlyLoginCancelled = false;
 
       // Initialize OAuth flow (clears any existing state)
       const oauthState = BustlyOAuth.initBustlyOAuthFlow();
@@ -2688,6 +2692,12 @@ function setupIpcHandlers(): void {
       // Poll for completion
       while (true) {
         await delay(2000);
+
+        if (bustlyLoginCancelled) {
+          console.log("[Bustly Login] Login canceled by user");
+          stopOAuthCallbackServer();
+          return { success: false, canceled: true };
+        }
 
         const code = BustlyOAuth.getBustlyAuthCode();
 
@@ -2766,7 +2776,15 @@ function setupIpcHandlers(): void {
         success: false,
         error: error instanceof Error ? error.message : String(error),
       };
+    } finally {
+      bustlyLoginCancelled = false;
     }
+  });
+
+  ipcMain.handle("bustly-cancel-login", async () => {
+    bustlyLoginCancelled = true;
+    cancelOAuthFlow();
+    return { success: true };
   });
 
   // Bustly OAuth logout
@@ -2854,9 +2872,28 @@ function setupIpcHandlers(): void {
     }
   });
 
-  ipcMain.handle("bustly-open-workspace-create", async () => {
+  ipcMain.handle("bustly-open-workspace-pricing", async (_event, workspaceId: string) => {
     try {
-      const url = buildBustlyAdminUrl({}, "/onboarding");
+      const url = buildBustlyAdminUrl({
+        payment_modal: "pricing",
+        workspace_id: workspaceId,
+      });
+      await shell.openExternal(url);
+      return { success: true };
+    } catch (error) {
+      console.error("[Bustly Workspace Manage] Error:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle("bustly-open-workspace-create", async (_event, workspaceId?: string) => {
+    try {
+      const url = buildBustlyAdminUrl({
+        workspace_id: workspaceId?.trim() || undefined,
+      }, "/onboarding");
       await shell.openExternal(url);
       return { success: true };
     } catch (error) {

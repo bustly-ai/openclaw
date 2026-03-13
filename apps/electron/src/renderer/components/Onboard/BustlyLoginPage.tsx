@@ -5,6 +5,7 @@ import {
   ShoppingBag,
   SignOut,
   Sparkle,
+  X,
 } from "@phosphor-icons/react";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -60,6 +61,7 @@ export default function BustlyLoginPage({
 }: BustlyLoginPageProps) {
   const { loggedIn, checking, gatewayPhase } = useAppState();
   const [loading, setLoading] = useState(false);
+  const [waitingHover, setWaitingHover] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const autoContinueFiredRef = useRef(false);
@@ -91,6 +93,8 @@ export default function BustlyLoginPage({
       const result = await window.electronAPI.bustlyLogin();
       if (result.success) {
         onContinue();
+      } else if (result.canceled) {
+        setError(null);
       } else {
         setError(result.error || "Login failed");
       }
@@ -100,6 +104,18 @@ export default function BustlyLoginPage({
       setLoading(false);
     }
   }, [onContinue]);
+
+  const handleCancelBustlyLogin = useCallback(async () => {
+    if (!window.electronAPI || !loading) {
+      return;
+    }
+    try {
+      await window.electronAPI.bustlyCancelLogin();
+    } finally {
+      setWaitingHover(false);
+      setLoading(false);
+    }
+  }, [loading]);
 
   const handleBustlyLogout = useCallback(async () => {
     if (!window.electronAPI) {return;}
@@ -149,15 +165,37 @@ export default function BustlyLoginPage({
           <div className="mx-auto mb-16 flex max-w-xs flex-col gap-3">
             {!loggedIn || showContinueWhenLoggedIn ? (
               <button
-                onClick={loggedIn ? onContinue : handleBustlyLogin}
-                disabled={loading || checking}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#1A162F] px-4 py-3.5 text-base font-bold text-white shadow-lg transition-all hover:-translate-y-0.5 hover:bg-[#1A162F]/90 hover:shadow-xl disabled:opacity-80"
+                onClick={loading ? handleCancelBustlyLogin : (loggedIn ? onContinue : handleBustlyLogin)}
+                disabled={checking}
+                onMouseEnter={() => {
+                  if (loading) {
+                    setWaitingHover(true);
+                  }
+                }}
+                onMouseMove={() => {
+                  if (loading) {
+                    setWaitingHover(true);
+                  }
+                }}
+                onMouseLeave={() => {
+                  if (loading) {
+                    setWaitingHover(false);
+                  }
+                }}
+                className="group flex w-full items-center justify-center gap-2 rounded-xl bg-[#1A162F] px-4 py-3.5 text-base font-bold text-white shadow-lg transition-all hover:-translate-y-0.5 hover:bg-[#1A162F]/90 hover:shadow-xl disabled:opacity-80"
               >
                 {loading ? (
-                  <>
-                    <CircleNotch size={20} weight="bold" className="animate-spin" />
-                    <span>Waiting...</span>
-                  </>
+                  waitingHover ? (
+                    <>
+                      <X size={18} weight="bold" />
+                      <span>Cancel</span>
+                    </>
+                  ) : (
+                    <>
+                      <CircleNotch size={20} weight="bold" className="animate-spin" />
+                      <span>Waiting...</span>
+                    </>
+                  )
                 ) : loggedIn ? (
                   "Continue"
                 ) : (

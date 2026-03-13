@@ -95,6 +95,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Onboarding
   bustlyLogin: () => ipcRenderer.invoke("bustly-login"),
+  bustlyCancelLogin: () => ipcRenderer.invoke("bustly-cancel-login"),
   bustlyIsLoggedIn: () => ipcRenderer.invoke("bustly-is-logged-in"),
   bustlyGetUserInfo: () => ipcRenderer.invoke("bustly-get-user-info"),
   bustlyGetSupabaseConfig: () => ipcRenderer.invoke("bustly-get-supabase-config"),
@@ -110,7 +111,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("bustly-open-workspace-invite", workspaceId),
   bustlyOpenWorkspaceManage: (workspaceId: string) =>
     ipcRenderer.invoke("bustly-open-workspace-manage", workspaceId),
-  bustlyOpenWorkspaceCreate: () => ipcRenderer.invoke("bustly-open-workspace-create"),
+  bustlyOpenWorkspacePricing: (workspaceId: string) =>
+    ipcRenderer.invoke("bustly-open-workspace-pricing", workspaceId),
+  bustlyOpenWorkspaceCreate: (workspaceId?: string) => ipcRenderer.invoke("bustly-open-workspace-create", workspaceId),
   bustlyReonboard: () => ipcRenderer.invoke("bustly-reonboard"),
   onboardBetaOpenRouterApiKey: () => ipcRenderer.invoke("onboard-beta-openrouter-api-key"),
   onboardListProviders: () => ipcRenderer.invoke("onboard-list-providers"),
