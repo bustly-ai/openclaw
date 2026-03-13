@@ -170,7 +170,7 @@ function resolvePreviewMinZoom(viewportWidth: number, viewportHeight: number, im
 }
 
 function resolvePreviewZoomChoices(minZoom: number): number[] {
-  return Array.from(new Set([Number(minZoom.toFixed(3)), ...PREVIEW_ZOOM_STEPS.filter((step) => step > minZoom + 0.001)])).sort((a, b) => a - b);
+  return Array.from(new Set([Number(minZoom.toFixed(3)), ...PREVIEW_ZOOM_STEPS.filter((step) => step > minZoom + 0.001)])).toSorted((a, b) => a - b);
 }
 
 function formatTokenCount(value: number | null | undefined): string {
@@ -1862,7 +1862,28 @@ export default function ChatPage() {
       notifySidebarTasksRefresh();
       void loadSessionUsage(clientRef.current, currentSessionKey).catch(() => {});
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.toLowerCase().includes("unknown method: chat.retry")) {
+        const fallbackRunId = nextId("run");
+        retryPayloadsRef.current.set(fallbackRunId, {
+          draft: retryPayload.draft,
+          attachments: retryPayload.attachments.map((attachment) => ({ ...attachment })),
+          contextPaths: retryPayload.contextPaths.map((entry) => ({ ...entry })),
+        });
+        settledRunIdsRef.current.delete(fallbackRunId);
+        setActiveRunId(fallbackRunId);
+        await clientRef.current.request("chat.send", {
+          sessionKey: currentSessionKey,
+          message: outgoingMessage,
+          deliver: false,
+          idempotencyKey: fallbackRunId,
+          attachments: apiAttachments.length > 0 ? apiAttachments : undefined,
+        });
+        notifySidebarTasksRefresh();
+        void loadSessionUsage(clientRef.current, currentSessionKey).catch(() => {});
+        return;
+      }
+      setError(message);
       setActiveRunId(null);
       setCompactingRunId(null);
     } finally {
