@@ -1,6 +1,7 @@
-import chokidar, { type FSWatcher } from "chokidar";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import chokidar, { type FSWatcher } from "chokidar";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
@@ -81,6 +82,49 @@ function toWatchGlobRoot(raw: string): string {
   return raw.replaceAll("\\", "/").replace(/\/+$/, "");
 }
 
+function readSkillMtimeMs(filePath: string): number {
+  try {
+    const stats = statSync(filePath);
+    const value = Math.floor(stats.mtimeMs);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function collectSkillRootMtimeMs(rootDir: string): number {
+  let maxMtime = readSkillMtimeMs(path.join(rootDir, "SKILL.md"));
+  if (!existsSync(rootDir)) {
+    return maxMtime;
+  }
+  let entries: Array<{ name: string; isDirectory: () => boolean }> = [];
+  try {
+    entries = readdirSync(rootDir, { withFileTypes: true });
+  } catch {
+    return maxMtime;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) {
+      continue;
+    }
+    maxMtime = Math.max(maxMtime, readSkillMtimeMs(path.join(rootDir, entry.name, "SKILL.md")));
+  }
+  return maxMtime;
+}
+
+function resolveSkillsDiskVersion(workspaceDir?: string): number {
+  const normalizedWorkspace = workspaceDir?.trim();
+  const roots = normalizedWorkspace
+    ? resolveWatchPaths(normalizedWorkspace)
+    : [path.join(CONFIG_DIR, "skills"), path.join(os.homedir(), ".agents", "skills")];
+  const uniqueRoots = Array.from(new Set(roots.map((root) => path.resolve(root))));
+  let maxMtime = 0;
+  for (const root of uniqueRoots) {
+    maxMtime = Math.max(maxMtime, collectSkillRootMtimeMs(root));
+  }
+  return maxMtime;
+}
+
 function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): string[] {
   // Skills are defined by SKILL.md; watch only those files to avoid traversing
   // or watching unrelated large trees (e.g. datasets) that can exhaust FDs.
@@ -122,11 +166,12 @@ export function bumpSkillsSnapshotVersion(params?: {
 }
 
 export function getSkillsSnapshotVersion(workspaceDir?: string): number {
+  const diskVersion = resolveSkillsDiskVersion(workspaceDir);
   if (!workspaceDir) {
-    return globalVersion;
+    return Math.max(globalVersion, diskVersion);
   }
   const local = workspaceVersions.get(workspaceDir) ?? 0;
-  return Math.max(globalVersion, local);
+  return Math.max(globalVersion, local, diskVersion);
 }
 
 export function ensureSkillsWatcher(params: { workspaceDir: string; config?: OpenClawConfig }) {

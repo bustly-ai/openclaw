@@ -9,18 +9,22 @@ import {
   type OpenDialogOptions,
 } from "electron";
 import { randomUUID } from "node:crypto";
-import { resolve, dirname, basename, join } from "node:path";
+import { resolve, dirname, basename, join, relative as relativePath, isAbsolute } from "node:path";
 import { spawn, spawnSync, ChildProcess } from "node:child_process";
 import {
   existsSync,
   readFileSync,
   writeFileSync,
   mkdirSync,
+  mkdtempSync,
   rmSync,
   appendFileSync,
   cpSync,
+  readdirSync,
   statSync,
+  utimesSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { Socket, createServer } from "node:net";
@@ -46,13 +50,6 @@ import {
 import * as BustlyOAuth from "./bustly-oauth.js";
 import { resolveOpenClawAgentDir } from "../../../../src/agents/agent-paths";
 import { ensureAgentWorkspace } from "../../../../src/agents/workspace";
-import { loadModelCatalog } from "../../../../src/agents/model-catalog";
-import { upsertAuthProfile } from "../../../../src/agents/auth-profiles";
-import { DEFAULT_PROVIDER } from "../../../../src/agents/defaults";
-import {
-  buildModelAliasIndex,
-  modelKey,
-} from "../../../../src/agents/model-selection";
 import { loadConfig } from "../../../../src/config/config";
 import { updateSessionStore } from "../../../../src/config/sessions";
 import { resolveDefaultSessionStorePath } from "../../../../src/config/sessions/paths";
@@ -67,7 +64,6 @@ import {
   applyAuthProfileConfig,
   applyOpenrouterProviderConfig,
   setOpenrouterApiKey,
-  writeOAuthCredentials,
 } from "../../../../src/commands/onboard-auth";
 import { applyPrimaryModel } from "../../../../src/commands/model-picker";
 import { buildAgentMainSessionKey } from "../../../../src/routing/session-key";
@@ -81,6 +77,7 @@ import {
   buildBustlyWorkspaceAgentId,
 } from "../shared/bustly-agent.js";
 import { BUSTLY_PRESET_CHANNELS } from "../shared/bustly-preset-channels.js";
+import { extractArchive, resolvePackedRootDir } from "../../../../src/infra/archive.js";
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 
@@ -164,7 +161,8 @@ const IMAGE_PREVIEW_EXT_RE = /\.(avif|bmp|gif|heic|jpeg|jpg|png|svg|tiff|webp)$/
 
 function parseClipboardFilePathsFromText(value: string): string[] {
   return value
-    .replace(/\0/g, "\n")
+    .split("\0")
+    .join("\n")
     .split(/\r?\n/)
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0 && !entry.startsWith("#"))
@@ -641,6 +639,397 @@ function resolveElectronConfigPath(): string {
     return resolveUserPath(override, homeDir);
   }
   return resolve(resolveElectronStateDir(), "openclaw.json");
+}
+
+function resolveManagedSkillsDir(): string {
+  return join(resolveElectronStateDir(), "skills");
+}
+
+function sanitizeSkillDirectoryName(input: string): string {
+  const normalized = input
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "custom-skill";
+}
+
+function readSkillNameFromFrontmatter(skillFilePath: string): string | null {
+  let content = "";
+  try {
+    content = readFileSync(skillFilePath, "utf8");
+  } catch {
+    return null;
+  }
+  const normalized = content.replace(/^\uFEFF/, "");
+  const frontmatterMatch = normalized.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
+  const header = frontmatterMatch?.[1] ?? normalized.split(/\r?\n/).slice(0, 40).join("\n");
+  const nameLine = header
+    .split(/\r?\n/)
+    .find((line) => /^\s*name\s*:/i.test(line));
+  if (!nameLine) {
+    return null;
+  }
+  const rawValue = nameLine.replace(/^\s*name\s*:\s*/i, "").trim();
+  if (!rawValue) {
+    return null;
+  }
+  const unquoted = rawValue.replace(/^['"]|['"]$/g, "").trim();
+  return unquoted || null;
+}
+
+function resolveInstalledSkillBaseName(sourceDir: string): string {
+  const skillFilePath = join(sourceDir, "SKILL.md");
+  const frontmatterName = readSkillNameFromFrontmatter(skillFilePath);
+  if (frontmatterName) {
+    return sanitizeSkillDirectoryName(frontmatterName);
+  }
+  const fallback = sanitizeSkillDirectoryName(basename(sourceDir));
+  if (fallback === "extract" || fallback === "skills") {
+    return "custom-skill";
+  }
+  return fallback;
+}
+
+function discoverSkillSourceDirs(rootDir: string): string[] {
+  const root = resolve(rootDir);
+  const rootSkillPath = join(root, "SKILL.md");
+  if (existsSync(rootSkillPath)) {
+    return [root];
+  }
+
+  const found = new Set<string>();
+  const addIfSkillDir = (candidate: string) => {
+    const resolvedCandidate = resolve(candidate);
+    if (found.has(resolvedCandidate)) {
+      return;
+    }
+    const skillPath = join(resolvedCandidate, "SKILL.md");
+    if (existsSync(skillPath)) {
+      found.add(resolvedCandidate);
+    }
+  };
+  const collectChildSkillDirs = (parentDir: string) => {
+    if (!existsSync(parentDir)) {
+      return;
+    }
+    let entries: Array<{ name: string; isDirectory: () => boolean }> = [];
+    try {
+      entries = readdirSync(parentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      if (entry.name.startsWith(".")) {
+        continue;
+      }
+      addIfSkillDir(join(parentDir, entry.name));
+    }
+  };
+
+  collectChildSkillDirs(join(root, "skills"));
+  collectChildSkillDirs(root);
+  return [...found].toSorted((a, b) => a.localeCompare(b));
+}
+
+function readManagedSkillsMaxMtimeMs(managedSkillsDir: string): number {
+  if (!existsSync(managedSkillsDir)) {
+    return 0;
+  }
+  let maxMtimeMs = 0;
+  let entries: Array<{ name: string; isDirectory: () => boolean }> = [];
+  try {
+    entries = readdirSync(managedSkillsDir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) {
+      continue;
+    }
+    const skillPath = join(managedSkillsDir, entry.name, "SKILL.md");
+    try {
+      const mtimeMs = Math.floor(statSync(skillPath).mtimeMs);
+      if (Number.isFinite(mtimeMs) && mtimeMs > maxMtimeMs) {
+        maxMtimeMs = mtimeMs;
+      }
+    } catch {
+      // Ignore invalid entries.
+    }
+  }
+  return maxMtimeMs;
+}
+
+function installSkillsFromDirectoryRoot(rootDir: string): {
+  imported: string[];
+  managedSkillsDir: string;
+} {
+  const sourceDirs = discoverSkillSourceDirs(rootDir);
+  if (sourceDirs.length === 0) {
+    throw new Error(`No valid skill found under ${rootDir}. Expect SKILL.md in root or child folders.`);
+  }
+
+  const managedSkillsDir = resolveManagedSkillsDir();
+  mkdirSync(managedSkillsDir, { recursive: true });
+
+  const imported: string[] = [];
+  const usedNames = new Set<string>();
+  let touchMtimeMs = Math.max(Date.now(), readManagedSkillsMaxMtimeMs(managedSkillsDir));
+
+  for (const sourceDir of sourceDirs) {
+    const baseName = resolveInstalledSkillBaseName(sourceDir);
+    let finalName = baseName;
+    let suffix = 2;
+    while (usedNames.has(finalName)) {
+      finalName = `${baseName}-${suffix}`;
+      suffix += 1;
+    }
+    usedNames.add(finalName);
+    const targetDir = join(managedSkillsDir, finalName);
+    rmSync(targetDir, { recursive: true, force: true });
+    cpSync(sourceDir, targetDir, {
+      recursive: true,
+      dereference: false,
+      filter: (srcPath) => {
+        const name = basename(srcPath);
+        if (name === ".git" || name === "node_modules") {
+          return false;
+        }
+        return true;
+      },
+    });
+    if (!existsSync(join(targetDir, "SKILL.md"))) {
+      throw new Error(`Installed folder ${finalName} does not contain SKILL.md`);
+    }
+
+    touchMtimeMs += 1;
+    const skillFilePath = join(targetDir, "SKILL.md");
+    try {
+      const touchedAt = new Date(touchMtimeMs);
+      utimesSync(skillFilePath, touchedAt, touchedAt);
+    } catch {
+      // Best-effort: if touching fails, import still succeeds.
+    }
+    imported.push(finalName);
+  }
+
+  return { imported, managedSkillsDir };
+}
+
+async function installSkillsFromArchivePath(archivePathInput: string): Promise<{
+  imported: string[];
+  managedSkillsDir: string;
+}> {
+  const archivePath = archivePathInput.trim();
+  if (!archivePath) {
+    throw new Error("Missing archive path.");
+  }
+  const normalizedArchivePath = resolve(archivePath);
+  if (!existsSync(normalizedArchivePath)) {
+    throw new Error(`Archive not found: ${normalizedArchivePath}`);
+  }
+  const archiveStat = statSync(normalizedArchivePath);
+  if (!archiveStat.isFile()) {
+    throw new Error(`Archive path is not a file: ${normalizedArchivePath}`);
+  }
+  if (!/\.(zip|skill|tar|tgz|tar\.gz)$/i.test(normalizedArchivePath)) {
+    throw new Error("Unsupported file type. Use .zip, .skill, .tar, .tgz, or .tar.gz.");
+  }
+
+  const tempRoot = mkdtempSync(join(tmpdir(), "bustly-skill-archive-"));
+  try {
+    const extractDir = join(tempRoot, "extract");
+    mkdirSync(extractDir, { recursive: true });
+    await extractArchive({
+      archivePath: normalizedArchivePath,
+      destDir: extractDir,
+      timeoutMs: 120_000,
+    });
+    let sourceRoot = extractDir;
+    try {
+      sourceRoot = await resolvePackedRootDir(extractDir);
+    } catch {
+      sourceRoot = extractDir;
+    }
+    return installSkillsFromDirectoryRoot(sourceRoot);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+type ParsedGithubRepoUrl = {
+  owner: string;
+  repo: string;
+  normalizedUrl: string;
+  treePath: string | null;
+};
+
+function parseGithubRepoUrl(urlInput: string): ParsedGithubRepoUrl {
+  const trimmed = urlInput.trim();
+  if (!trimmed) {
+    throw new Error("Please provide a valid GitHub repository URL.");
+  }
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error("Please provide a valid GitHub repository URL.");
+  }
+  if (!/^https?:$/i.test(url.protocol) || url.hostname.toLowerCase() !== "github.com") {
+    throw new Error("Only public GitHub repository URLs are supported.");
+  }
+  const parts = url.pathname.replace(/\/+$/, "").split("/").filter(Boolean);
+  if (parts.length < 2) {
+    throw new Error("Please provide a valid GitHub repository URL.");
+  }
+  const owner = parts[0].trim();
+  let repo = parts[1].trim();
+  repo = repo.replace(/\.git$/i, "");
+  if (!owner || !repo) {
+    throw new Error("Please provide a valid GitHub repository URL.");
+  }
+  let treePath: string | null = null;
+  // Support URLs like /owner/repo/tree/branch/path/to/skill
+  const treeIndex = parts.findIndex((p) => p.toLowerCase() === "tree");
+  if (treeIndex >= 0 && parts.length > treeIndex + 2) {
+    treePath = parts.slice(treeIndex + 2).join("/").trim() || null;
+  }
+  return {
+    owner,
+    repo,
+    normalizedUrl: `https://github.com/${owner}/${repo}`,
+    treePath,
+  };
+}
+
+async function fetchWithTimeout(
+  url: string,
+  timeoutMs: number,
+  options?: { headers?: Record<string, string> },
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      signal: controller.signal,
+      headers: options?.headers,
+    });
+  } catch (error) {
+    if ((error as { name?: string })?.name === "AbortError") {
+      throw new Error(`GitHub request timed out after ${Math.ceil(timeoutMs / 1000)}s: ${url}`, { cause: error });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function installSkillsFromGithubRepoUrl(repoUrlInput: string): Promise<{
+  imported: string[];
+  managedSkillsDir: string;
+}> {
+  const { owner, repo, normalizedUrl, treePath } = parseGithubRepoUrl(repoUrlInput);
+
+  const repoMetaResponse = await fetchWithTimeout(
+    `https://api.github.com/repos/${owner}/${repo}`,
+    15_000,
+    {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "Bustly-Electron",
+      },
+    },
+  );
+  if (!repoMetaResponse.ok) {
+    throw new Error(`Failed to resolve GitHub repo metadata: HTTP ${repoMetaResponse.status}`);
+  }
+  const repoMeta = (await repoMetaResponse.json()) as { default_branch?: string };
+  const defaultBranch = repoMeta.default_branch?.trim() || "main";
+
+  // Guardrail: importing whole "skills repositories" can be huge and appears as frozen UI.
+  if (!treePath) {
+    const skillsListResponse = await fetchWithTimeout(
+      `https://api.github.com/repos/${owner}/${repo}/contents/skills?ref=${encodeURIComponent(defaultBranch)}`,
+      15_000,
+      {
+        headers: {
+          Accept: "application/vnd.github+json",
+          "User-Agent": "Bustly-Electron",
+        },
+      },
+    );
+    if (skillsListResponse.ok) {
+      const payload = (await skillsListResponse.json()) as Array<{ type?: string }>;
+      const dirCount = Array.isArray(payload)
+        ? payload.filter((item) => item?.type === "dir").length
+        : 0;
+      if (dirCount > 12) {
+        throw new Error(
+          `This repository contains many skills (${dirCount}). Please import a specific skill folder URL, e.g. https://github.com/${owner}/${repo}/tree/${defaultBranch}/skills/<skill-name>.`,
+        );
+      }
+    }
+  }
+
+  const archiveUrl = `${normalizedUrl}/archive/refs/heads/${encodeURIComponent(defaultBranch)}.zip`;
+  const archiveResponse = await fetchWithTimeout(archiveUrl, 60_000, {
+    headers: {
+      "User-Agent": "Bustly-Electron",
+    },
+  });
+  if (!archiveResponse.ok) {
+    throw new Error(`Failed to download GitHub archive: HTTP ${archiveResponse.status}`);
+  }
+  const archiveBuffer = Buffer.from(await archiveResponse.arrayBuffer());
+  if (archiveBuffer.byteLength === 0) {
+    throw new Error("GitHub archive is empty.");
+  }
+
+  const tempRoot = mkdtempSync(join(tmpdir(), "bustly-skill-github-"));
+  try {
+    const archivePath = join(tempRoot, `${owner}-${repo}.zip`);
+    writeFileSync(archivePath, archiveBuffer);
+    const extractDir = join(tempRoot, "extract");
+    mkdirSync(extractDir, { recursive: true });
+    await extractArchive({
+      archivePath,
+      destDir: extractDir,
+      timeoutMs: 120_000,
+    });
+    let sourceRoot = extractDir;
+    try {
+      sourceRoot = await resolvePackedRootDir(extractDir);
+    } catch {
+      sourceRoot = extractDir;
+    }
+
+    if (treePath) {
+      const normalizedTreePath = treePath.replace(/^\/+|\/+$/g, "");
+      if (!normalizedTreePath) {
+        throw new Error("Invalid GitHub folder path.");
+      }
+      const candidateDir = resolve(sourceRoot, normalizedTreePath);
+      const relative = relativePath(sourceRoot, candidateDir);
+      const isOutOfRoot = relative.startsWith("..") || isAbsolute(relative);
+      if (isOutOfRoot) {
+        throw new Error("Invalid GitHub folder path.");
+      }
+      if (!existsSync(candidateDir) || !statSync(candidateDir).isDirectory()) {
+        throw new Error(
+          `Cannot find folder "${normalizedTreePath}" in ${normalizedUrl} (branch: ${defaultBranch}).`,
+        );
+      }
+      sourceRoot = candidateDir;
+    }
+
+    return installSkillsFromDirectoryRoot(sourceRoot);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 }
 
 function resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId: string): string {
@@ -1506,9 +1895,6 @@ async function startGateway(): Promise<boolean> {
       "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
     const bundledCliShim = ensureBundledOpenClawShim(cliPath, stateDir, { includeBundledNode: true });
     const effectivePath = bundledCliShim ? prependPathEntry(fixedPath, bundledCliShim.shimDir) : fixedPath;
-    const bunInstall =
-      process.env.BUN_INSTALL?.trim() || resolve(app.getPath("home"), ".bun");
-    const homebrewPrefix = process.env.HOMEBREW_PREFIX?.trim() || "/opt/homebrew";
     const appNodeModules = resolve(appPath, "node_modules");
     const resourcesNodeModules = resolve(resourcesPath, "node_modules");
     const openclawNodeModules = resolve(resourcesPath, "openclaw", "node_modules");
@@ -1788,7 +2174,13 @@ async function withPrivilegedGatewayClient<T>(
       clearTimeout(timer);
       client?.stop();
       if (error) {
-        reject(error instanceof Error ? error : new Error(String(error)));
+        const message =
+          typeof error === "string"
+            ? error
+            : error instanceof Error
+              ? error.message
+              : JSON.stringify(error);
+        reject(error instanceof Error ? error : new Error(message || "Unknown gateway error"));
         return;
       }
       resolve(value as T);
@@ -2346,6 +2738,38 @@ function setupIpcHandlers(): void {
       entryName: payload.entryName,
       fallbackKind: payload.fallbackKind === "directory" ? "directory" : "file",
     });
+  });
+
+  ipcMain.handle("skills-install-from-archive", async (_event, archivePath: string) => {
+    try {
+      const result = await installSkillsFromArchivePath(archivePath);
+      return {
+        success: true,
+        imported: result.imported,
+        managedSkillsDir: result.managedSkillsDir,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle("skills-import-from-github", async (_event, repoUrl: string) => {
+    try {
+      const result = await installSkillsFromGithubRepoUrl(repoUrl);
+      return {
+        success: true,
+        imported: result.imported,
+        managedSkillsDir: result.managedSkillsDir,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   });
 
   ipcMain.handle("dialog-select-chat-context-paths", async () => {

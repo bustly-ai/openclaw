@@ -48,6 +48,13 @@ interface ChatContextPathSelection {
   imageUrl?: string;
 }
 
+interface SkillsImportResult {
+  success: boolean;
+  imported?: string[];
+  managedSkillsDir?: string;
+  error?: string;
+}
+
 interface AppInfo {
   version: string;
   name: string;
@@ -122,6 +129,8 @@ interface ElectronAPI {
     entryName?: string;
     fallbackKind: "file" | "directory";
   }) => Promise<{ path: string; kind: "file" | "directory" | null }>;
+  skillsInstallFromArchive: (file: File) => Promise<SkillsImportResult>;
+  skillsImportFromGithub: (repoUrl: string) => Promise<SkillsImportResult>;
   selectChatContextPaths: () => Promise<ChatContextPathSelection[]>;
   resolveChatImagePreview: (path: string) => Promise<string | null>;
   getAppInfo: () => Promise<AppInfo>;

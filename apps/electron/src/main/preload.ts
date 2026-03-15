@@ -51,6 +51,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
       entryName: params.entryName,
       fallbackKind: params.fallbackKind,
     }),
+  skillsInstallFromArchive: (file: File) =>
+    ipcRenderer.invoke("skills-install-from-archive", webUtils.getPathForFile(file)),
+  skillsImportFromGithub: (repoUrl: string) =>
+    ipcRenderer.invoke("skills-import-from-github", repoUrl),
   selectChatContextPaths: () => ipcRenderer.invoke("dialog-select-chat-context-paths"),
   resolveChatImagePreview: (path: string) => ipcRenderer.invoke("resolve-chat-image-preview", path),
 

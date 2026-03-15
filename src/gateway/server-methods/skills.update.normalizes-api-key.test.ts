@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 let writtenConfig: unknown = null;
+const bumpSkillsSnapshotVersion = vi.fn();
 
 vi.mock("../../config/config.js", () => {
   return {
@@ -14,6 +15,10 @@ vi.mock("../../config/config.js", () => {
     },
   };
 });
+
+vi.mock("../../agents/skills/refresh.js", () => ({
+  bumpSkillsSnapshotVersion,
+}));
 
 const { skillsHandlers } = await import("./skills.js");
 
@@ -49,5 +54,6 @@ describe("skills.update", () => {
         },
       },
     });
+    expect(bumpSkillsSnapshotVersion).toHaveBeenCalledWith({ reason: "manual" });
   });
 });

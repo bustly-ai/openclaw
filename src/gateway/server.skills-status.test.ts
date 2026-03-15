@@ -46,4 +46,16 @@ describe("gateway skills.status", () => {
       },
     );
   });
+
+  it("accepts dynamic bustly workspace agent ids", async () => {
+    await withServer(async (ws) => {
+      await connectOk(ws, { token: "secret", scopes: ["operator.read"] });
+      const res = await rpcReq<{ workspaceDir?: string }>(ws, "skills.status", {
+        agentId: "bustly-9a85bcbe-a783-4b37-81d1-229d176e9d87",
+      });
+
+      expect(res.ok).toBe(true);
+      expect(typeof res.payload?.workspaceDir).toBe("string");
+    });
+  });
 });

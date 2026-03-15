@@ -1,17 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import "../cron/isolated-agent.mocks.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import "../cron/isolated-agent.mocks.js";
 import * as cliRunnerModule from "../agents/cli-runner.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
+import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
+import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import * as sessionsModule from "../config/sessions.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { agentCommand } from "./agent.js";
 
@@ -37,6 +39,7 @@ vi.mock("../agents/skills.js", () => ({
 
 vi.mock("../agents/skills/refresh.js", () => ({
   getSkillsSnapshotVersion: vi.fn(() => 0),
+  ensureSkillsWatcher: vi.fn(),
 }));
 
 const runtime: RuntimeEnv = {
@@ -288,6 +291,47 @@ describe("agentCommand", () => {
 
       const matching = assistantEvents.filter((evt) => evt.text === "hello");
       expect(matching).toHaveLength(1);
+    });
+  });
+
+  it("refreshes stale session skills snapshot when snapshot version is outdated", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:channel:support": {
+          sessionId: "session-123",
+          updatedAt: Date.now(),
+          systemSent: true,
+          skillsSnapshot: {
+            prompt: "<available_skills><description>old</description></available_skills>",
+            skills: [{ name: "old-skill" }],
+            version: 1,
+          },
+        },
+      });
+      mockConfig(home, store);
+
+      vi.mocked(getSkillsSnapshotVersion).mockReturnValue(2);
+      vi.mocked(buildWorkspaceSkillSnapshot).mockReturnValue({
+        prompt: "<available_skills><description>weather</description></available_skills>",
+        skills: [{ name: "weather" }],
+        version: 2,
+      } as never);
+
+      await agentCommand(
+        { message: "hi", sessionKey: "agent:main:channel:support", messageChannel: "support" },
+        runtime,
+      );
+
+      expect(buildWorkspaceSkillSnapshot).toHaveBeenCalled();
+      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
+        string,
+        { skillsSnapshot?: { version?: number; skills?: Array<{ name: string }> } }
+      >;
+      expect(saved["agent:main:channel:support"]?.skillsSnapshot?.version).toBe(2);
+      expect(saved["agent:main:channel:support"]?.skillsSnapshot?.skills?.[0]?.name).toBe(
+        "weather",
+      );
     });
   });
 

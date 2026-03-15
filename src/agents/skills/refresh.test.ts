@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -69,5 +70,24 @@ describe("ensureSkillsWatcher", () => {
     // Should NOT ignore normal skill files
     expect(ignored.some((re) => re.test("/tmp/.hidden/skills/index.md"))).toBe(false);
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/my-skill/SKILL.md"))).toBe(false);
+  });
+
+  it("uses skill file mtime as snapshot version fallback", async () => {
+    const mod = await import("./refresh.js");
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skills-version-"));
+    const workspaceDir = path.join(tmpRoot, "workspace");
+    const skillPath = path.join(workspaceDir, "skills", "weather", "SKILL.md");
+    fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+    fs.writeFileSync(skillPath, "name: weather\ndescription: test\n");
+
+    const first = mod.getSkillsSnapshotVersion(workspaceDir);
+    expect(first).toBeGreaterThan(0);
+
+    const now = Date.now();
+    const nextDate = new Date(now + 2_000);
+    fs.utimesSync(skillPath, nextDate, nextDate);
+
+    const second = mod.getSkillsSnapshotVersion(workspaceDir);
+    expect(second).toBeGreaterThanOrEqual(first);
   });
 });

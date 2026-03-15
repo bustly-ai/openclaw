@@ -78,8 +78,7 @@ function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
     return formatZonedTimestamp(date, { displaySeconds: true }) ?? "unknown-time";
   }
   return (
-    formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true }) ??
-    "unknown-time"
+    formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true }) ?? "unknown-time"
   );
 }
 
@@ -176,8 +175,9 @@ export async function ensureSkillSnapshot(params: {
   const remoteEligibility = getRemoteSkillEligibility();
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   ensureSkillsWatcher({ workspaceDir, config: cfg });
+  const currentSnapshotVersion = nextEntry?.skillsSnapshot?.version;
   const shouldRefreshSnapshot =
-    snapshotVersion > 0 && (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion;
+    typeof currentSnapshotVersion !== "number" || currentSnapshotVersion < snapshotVersion;
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??
