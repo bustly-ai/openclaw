@@ -45,45 +45,45 @@ Use the standalone Node entrypoint directly:
 
 ### Google Ads
 
-#### 1. Developer Token（开发者令牌）
+#### 1. Developer Token
 
-**链接**: https://ads.google.com/aw/apicenter
+**URL**: https://ads.google.com/aw/apicenter
 
-步骤：
+Steps:
 
-- 登录 Google Ads 管理员账户
-- 进入 **Tools & Settings** → **API Center**
-- 申请 Developer Token（测试账户可即时获得，生产账户需要 Google 审批）
+- Log in to your Google Ads manager account
+- Go to **Tools & Settings** → **API Center**
+- Apply for a Developer Token (test accounts get it instantly, production accounts require Google approval)
 
-#### 2. OAuth2 凭证
+#### 2. OAuth2 Credentials
 
-**链接**: https://console.cloud.google.com/apis/credentials
+**URL**: https://console.cloud.google.com/apis/credentials
 
-步骤：
+Steps:
 
-1. 创建项目或选择现有项目
-2. 启用 Google Ads API：https://console.cloud.google.com/apis/library/googleads.googleapis.com
-3. 创建 OAuth 2.0 客户端 ID：
-   - **Application type**: Web application 或 Desktop app
-   - 添加 Authorized redirect URI: `http://localhost` 或 `urn:ietf:wg:oauth:2.0:oob`
-4. 获取 `client_id` 和 `client_secret`
+1. Create a project or select an existing one
+2. Enable Google Ads API: https://console.cloud.google.com/apis/library/googleads.googleapis.com
+3. Create OAuth 2.0 Client ID:
+   - **Application type**: Web application or Desktop app
+   - Add Authorized redirect URI: `http://localhost` or `urn:ietf:wg:oauth:2.0:oob`
+4. Get `client_id` and `client_secret`
 
 #### 3. Refresh Token
 
-**方法 A**: 使用 OAuth Playground（推荐测试用）
+**Method A**: Use OAuth Playground (recommended for testing)
 
-**链接**: https://developers.google.com/oauthplayground
+**URL**: https://developers.google.com/oauthplayground
 
-步骤：
+Steps:
 
-1. 点击右上角 ⚙️ 设置，勾选 "Use your own OAuth credentials"
-2. 填入你的 `client_id` 和 `client_secret`
-3. 左侧输入 scope: `https://www.googleapis.com/auth/adwords`
-4. 点击 "Authorize APIs"
-5. 授权后点击 "Exchange authorization code for tokens"
-6. 获取 `refresh_token`
+1. Click ⚙️ settings in the top right, check "Use your own OAuth credentials"
+2. Enter your `client_id` and `client_secret`
+3. Enter scope on the left: `https://www.googleapis.com/auth/adwords`
+4. Click "Authorize APIs"
+5. After authorization, click "Exchange authorization code for tokens"
+6. Get your `refresh_token`
 
-**方法 B**: 手动 OAuth 流程
+**Method B**: Manual OAuth flow
 
 ```
 https://accounts.google.com/o/oauth2/v2/auth?
@@ -94,37 +94,37 @@ https://accounts.google.com/o/oauth2/v2/auth?
   access_type=offline
 ```
 
-#### 凭证配置命令
+#### Credential Configuration Command
 
 ```bash
 node skills/ads_core_ops/scripts/run.js config set-google-ads '{"developerToken":"xxx","clientId":"xxx","clientSecret":"xxx","refreshToken":"xxx"}'
 ```
 
-#### 快速链接汇总
+#### Quick Links Summary
 
-| 凭证             | 获取链接                                                               |
+| Credential       | URL                                                                    |
 | ---------------- | ---------------------------------------------------------------------- |
 | Developer Token  | https://ads.google.com/aw/apicenter                                    |
 | Client ID/Secret | https://console.cloud.google.com/apis/credentials                      |
 | Google Ads API   | https://console.cloud.google.com/apis/library/googleads.googleapis.com |
 | Refresh Token    | https://developers.google.com/oauthplayground                          |
 
-#### 常见问题
+#### Common Issues
 
-**问题**: `USER_PERMISSION_DENIED` 错误
+**Issue**: `USER_PERMISSION_DENIED` error
 
-**原因**: OAuth 授权的 Google 账户无权访问目标 Google Ads 客户账户
+**Cause**: The OAuth-authorized Google account does not have access to the target Google Ads customer account
 
-**解决方案**:
+**Solution**:
 
-1. 确保用有权访问 Ads 账户的 Google 账户生成 refresh token
-2. 或在 Google Ads 界面中将你的 Google 邮箱添加为账户用户（**工具和设置** → **访问权限**）
+1. Ensure you generate the refresh token with a Google account that has access to the Ads account
+2. Or add your Google email as a user in the Google Ads interface (**Tools & Settings** → **Access**)
 
-**问题**: `SERVICE_DISABLED` 错误
+**Issue**: `SERVICE_DISABLED` error
 
-**原因**: Google Ads API 未在项目中启用
+**Cause**: Google Ads API is not enabled in the project
 
-**解决方案**: 访问 API 启用链接并点击 Enable 按钮，等待几分钟生效
+**Solution**: Visit the API enablement link and click the Enable button, wait a few minutes for it to take effect
 
 ### Meta Ads
 
