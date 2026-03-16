@@ -194,9 +194,7 @@ Then configure it:
         campaign.name,
         campaign.status,
         campaign.advertising_channel_type,
-        campaign.budget_amount_micros,
-        campaign.start_date,
-        campaign.end_date
+        campaign.campaign_budget
       FROM campaign
     `;
 
