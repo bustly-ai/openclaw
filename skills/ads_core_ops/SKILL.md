@@ -45,10 +45,86 @@ Use the standalone Node entrypoint directly:
 
 ### Google Ads
 
-1. Go to: https://developers.google.com/google-ads/api/docs/first-call/overview
-2. Get Developer Token from Google Ads API Center
-3. Create OAuth2 credentials in Google Cloud Console
-4. Generate refresh token via OAuth flow
+#### 1. Developer Token
+
+**URL**: https://ads.google.com/aw/apicenter
+
+Steps:
+
+- Log in to your Google Ads manager account
+- Go to **Tools & Settings** → **API Center**
+- Apply for a Developer Token (test accounts get it instantly, production accounts require Google approval)
+
+#### 2. OAuth2 Credentials
+
+**URL**: https://console.cloud.google.com/apis/credentials
+
+Steps:
+
+1. Create a project or select an existing one
+2. Enable Google Ads API: https://console.cloud.google.com/apis/library/googleads.googleapis.com
+3. Create OAuth 2.0 Client ID:
+   - **Application type**: Web application or Desktop app
+   - Add Authorized redirect URI: `http://localhost` or `urn:ietf:wg:oauth:2.0:oob`
+4. Get `client_id` and `client_secret`
+
+#### 3. Refresh Token
+
+**Method A**: Use OAuth Playground (recommended for testing)
+
+**URL**: https://developers.google.com/oauthplayground
+
+Steps:
+
+1. Click ⚙️ settings in the top right, check "Use your own OAuth credentials"
+2. Enter your `client_id` and `client_secret`
+3. Enter scope on the left: `https://www.googleapis.com/auth/adwords`
+4. Click "Authorize APIs"
+5. After authorization, click "Exchange authorization code for tokens"
+6. Get your `refresh_token`
+
+**Method B**: Manual OAuth flow
+
+```
+https://accounts.google.com/o/oauth2/v2/auth?
+  client_id=YOUR_CLIENT_ID&
+  redirect_uri=urn:ietf:wg:oauth:2.0:oob&
+  response_type=code&
+  scope=https://www.googleapis.com/auth/adwords&
+  access_type=offline
+```
+
+#### Credential Configuration Command
+
+```bash
+node skills/ads_core_ops/scripts/run.js config set-google-ads '{"developerToken":"xxx","clientId":"xxx","clientSecret":"xxx","refreshToken":"xxx"}'
+```
+
+#### Quick Links Summary
+
+| Credential       | URL                                                                    |
+| ---------------- | ---------------------------------------------------------------------- |
+| Developer Token  | https://ads.google.com/aw/apicenter                                    |
+| Client ID/Secret | https://console.cloud.google.com/apis/credentials                      |
+| Google Ads API   | https://console.cloud.google.com/apis/library/googleads.googleapis.com |
+| Refresh Token    | https://developers.google.com/oauthplayground                          |
+
+#### Common Issues
+
+**Issue**: `USER_PERMISSION_DENIED` error
+
+**Cause**: The OAuth-authorized Google account does not have access to the target Google Ads customer account
+
+**Solution**:
+
+1. Ensure you generate the refresh token with a Google account that has access to the Ads account
+2. Or add your Google email as a user in the Google Ads interface (**Tools & Settings** → **Access**)
+
+**Issue**: `SERVICE_DISABLED` error
+
+**Cause**: Google Ads API is not enabled in the project
+
+**Solution**: Visit the API enablement link and click the Enable button, wait a few minutes for it to take effect
 
 ### Meta Ads
 
