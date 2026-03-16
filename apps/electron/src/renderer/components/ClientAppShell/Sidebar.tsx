@@ -2,13 +2,11 @@ import { createPortal } from "react-dom";
 import { createElement, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
-  ArrowSquareOut,
   CaretDown,
   CaretRight,
   Check,
   DotsThree,
   Gear,
-  House,
   Lightning,
   PencilSimple,
   Plus,
@@ -157,14 +155,6 @@ function CloseIcon({ className }: IconProps) {
 
 function GearIcon({ className }: IconProps) {
   return <Gear size={16} weight="bold" className={className} />;
-}
-
-function HouseIcon({ className }: IconProps) {
-  return <House size={16} weight="bold" className={className} />;
-}
-
-function ArrowUpRightIcon({ className }: IconProps) {
-  return <ArrowSquareOut size={16} weight="bold" className={className} />;
 }
 
 function SignOutIcon({ className }: IconProps) {
@@ -1399,11 +1389,6 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     await window.electronAPI.bustlyOpenSettings();
   };
 
-  const handleOpenHomepage = () => {
-    setIsUserMenuOpen(false);
-    void navigate("/chat");
-  };
-
   const handleOpenWorkspaceSettings = (workspaceId: string) => {
     void window.electronAPI.bustlyOpenWorkspaceSettings(workspaceId);
   };
@@ -1808,15 +1793,6 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
               >
                 <GearIcon className="h-4 w-4 text-gray-500" />
                 Settings
-              </button>
-              <button
-                type="button"
-                onClick={handleOpenHomepage}
-                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
-              >
-                <HouseIcon className="h-4 w-4 text-gray-500" />
-                <span className="flex-1">Homepage</span>
-                <ArrowUpRightIcon className="h-4 w-4 text-gray-400" />
               </button>
               <div className="mx-2 my-1 h-px bg-gray-100" />
               <button
