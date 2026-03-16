@@ -653,6 +653,10 @@ function resolveBustlyWorkspaceAgentSessionKey(workspaceId: string): string {
   return buildAgentMainSessionKey({ agentId: buildBustlyWorkspaceAgentId(workspaceId) });
 }
 
+function resolveBustlyWorkspaceIdFromOAuthState(): string {
+  return BustlyOAuth.readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
+}
+
 async function ensureBustlyPresetChannels(params: { agentId: string }): Promise<void> {
   const legacyPresetIcons = new Set(["ChartBar", "TrendUp", "ChatCircleText"]);
   const presets = BUSTLY_PRESET_CHANNELS

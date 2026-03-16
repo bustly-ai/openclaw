@@ -1,7 +1,10 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  listAgentIds,
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
@@ -320,5 +323,40 @@ describe("resolveAgentConfig", () => {
 
     const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
     expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
+  });
+
+  it("includes dynamic bustly workspace agents from local state", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bustly-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    fs.mkdirSync(path.join(stateDir, "workspaces", "bustly-local-workspace"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "bustlyOauth.json"),
+      JSON.stringify({
+        user: {
+          workspaceId: "9A85BCBE-A783-4B37-81D1-229D176E9D87",
+        },
+      }),
+      "utf8",
+    );
+
+    expect(listAgentIds({} as OpenClawConfig)).toEqual(
+      expect.arrayContaining([
+        "bustly-local-workspace",
+        "bustly-9a85bcbe-a783-4b37-81d1-229d176e9d87",
+      ]),
+    );
+  });
+
+  it("uses the Bustly workspaces directory for dynamic workspace agents", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bustly-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const workspace = resolveAgentWorkspaceDir(
+      { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig,
+      "bustly-9a85bcbe-a783-4b37-81d1-229d176e9d87",
+    );
+    expect(workspace).toBe(
+      path.join(stateDir, "workspaces", "bustly-9a85bcbe-a783-4b37-81d1-229d176e9d87"),
+    );
   });
 });

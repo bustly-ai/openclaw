@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
@@ -12,6 +13,8 @@ import { resolveUserPath } from "../utils.js";
 import { normalizeSkillFilter } from "./skills/filter.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 const log = createSubsystemLogger("agent-scope");
+const BUSTLY_AGENT_PREFIX = "bustly-";
+const BUSTLY_WORKSPACES_DIRNAME = "workspaces";
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {
@@ -51,9 +54,6 @@ export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
 
 export function listAgentIds(cfg: OpenClawConfig): string[] {
   const agents = listAgentEntries(cfg);
-  if (agents.length === 0) {
-    return [DEFAULT_AGENT_ID];
-  }
   const seen = new Set<string>();
   const ids: string[] = [];
   for (const entry of agents) {
@@ -63,6 +63,16 @@ export function listAgentIds(cfg: OpenClawConfig): string[] {
     }
     seen.add(id);
     ids.push(id);
+  }
+  for (const id of listDynamicBustlyWorkspaceAgentIds()) {
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    ids.push(id);
+  }
+  if (ids.length === 0) {
+    return [DEFAULT_AGENT_ID];
   }
   return ids.length > 0 ? ids : [DEFAULT_AGENT_ID];
 }
@@ -111,6 +121,56 @@ export function resolveSessionAgentId(params: {
 function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
   const id = normalizeAgentId(agentId);
   return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
+}
+
+function buildBustlyWorkspaceAgentId(workspaceId: string | undefined): string | null {
+  const trimmed = workspaceId?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return normalizeAgentId(`${BUSTLY_AGENT_PREFIX}${trimmed}`);
+}
+
+function listDynamicBustlyWorkspaceAgentIds(): string[] {
+  const ids = new Set<string>();
+  const oauthWorkspaceAgentId = readBustlyWorkspaceAgentIdFromStateDir();
+  if (oauthWorkspaceAgentId) {
+    ids.add(oauthWorkspaceAgentId);
+  }
+
+  const workspacesDir = path.join(resolveStateDir(process.env), BUSTLY_WORKSPACES_DIRNAME);
+  try {
+    const entries = fs.readdirSync(workspacesDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const id = normalizeAgentId(entry.name);
+      if (id.startsWith(BUSTLY_AGENT_PREFIX) && id.length > BUSTLY_AGENT_PREFIX.length) {
+        ids.add(id);
+      }
+    }
+  } catch {
+    // Best-effort compatibility for local Bustly workspace state.
+  }
+  return [...ids];
+}
+
+function readBustlyWorkspaceAgentIdFromStateDir(): string | null {
+  try {
+    const statePath = path.join(resolveStateDir(process.env), "bustlyOauth.json");
+    const raw = fs.readFileSync(statePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      user?: {
+        workspaceId?: unknown;
+      };
+    };
+    return buildBustlyWorkspaceAgentId(
+      typeof parsed.user?.workspaceId === "string" ? parsed.user.workspaceId : undefined,
+    );
+  } catch {
+    return null;
+  }
 }
 
 export function resolveAgentConfig(
@@ -221,6 +281,11 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
   if (configured) {
     return stripNullBytes(resolveUserPath(configured));
+  }
+  if (id.startsWith(BUSTLY_AGENT_PREFIX) && id.length > BUSTLY_AGENT_PREFIX.length) {
+    return stripNullBytes(
+      path.join(resolveStateDir(process.env), BUSTLY_WORKSPACES_DIRNAME, id),
+    );
   }
   const defaultAgentId = resolveDefaultAgentId(cfg);
   if (id === defaultAgentId) {

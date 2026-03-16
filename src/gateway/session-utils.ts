@@ -6,7 +6,7 @@ import type {
   GatewaySessionsDefaults,
   SessionsListResult,
 } from "./session-utils.types.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -310,9 +310,10 @@ function listExistingAgentIdsFromDisk(): string[] {
 }
 
 function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
+  const knownAgentIds = new Set(listAgentIds(cfg));
   const agents = cfg.agents?.list ?? [];
   if (agents.length > 0) {
-    const ids = new Set<string>();
+    const ids = new Set<string>(knownAgentIds);
     for (const entry of agents) {
       if (entry?.id) {
         ids.add(normalizeAgentId(entry.id));
@@ -327,7 +328,7 @@ function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
       : sorted;
   }
 
-  const ids = new Set<string>();
+  const ids = new Set<string>(knownAgentIds);
   const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
   ids.add(defaultId);
   for (const id of listExistingAgentIdsFromDisk()) {

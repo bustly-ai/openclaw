@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -10,6 +10,7 @@ import {
   deriveSessionTitle,
   listAgentsForGateway,
   listSessionsFromStore,
+  loadCombinedSessionStoreForGateway,
   parseGroupKey,
   pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -38,6 +39,10 @@ function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig {
     },
   } as OpenClawConfig;
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("gateway session utils", () => {
   test("capArrayByJsonBytes trims from the front", () => {
@@ -205,6 +210,33 @@ describe("gateway session utils", () => {
     expect(target.storeKeys).toEqual(
       expect.arrayContaining(["agent:ops:mysession", "agent:ops:MySession"]),
     );
+  });
+
+  test("loadCombinedSessionStoreForGateway includes dynamic Bustly workspace stores", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-bustly-state-"));
+    const storeTemplate = path.join(stateDir, "stores", "{agentId}", "sessions.json");
+    const bustlyAgentId = "bustly-9a85bcbe-a783-4b37-81d1-229d176e9d87";
+    const storePath = path.join(stateDir, "stores", bustlyAgentId, "sessions.json");
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.mkdirSync(path.join(stateDir, "workspaces", bustlyAgentId), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        main: { sessionId: "s1", updatedAt: 1, displayName: "Bustly main" },
+      }),
+      "utf8",
+    );
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const cfg = {
+      session: { mainKey: "main", store: storeTemplate },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const result = loadCombinedSessionStoreForGateway(cfg);
+    expect(result.store["agent:bustly-9a85bcbe-a783-4b37-81d1-229d176e9d87:main"]).toMatchObject({
+      sessionId: "s1",
+      displayName: "Bustly main",
+    });
   });
 
   test("resolveGatewaySessionStoreTarget finds legacy main alias key when mainKey is customized", () => {
