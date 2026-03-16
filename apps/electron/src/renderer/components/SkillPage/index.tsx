@@ -2,6 +2,7 @@ import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { GatewayBrowserClient } from "../../lib/gateway-client";
+import { buildBustlyWorkspaceAgentId } from "../../../shared/bustly-agent";
 import Skeleton from "../ui/Skeleton";
 import collapsedLogo from "../../assets/imgs/collapsed_logo_clean.svg";
 import uploadIcon from "../../assets/imgs/download_simple_bold.svg";
@@ -276,13 +277,24 @@ function SkillCardSkeleton() {
 
 const BUILD_WITH_BUSTLY_PROMPT =
   "/skill-creator Help me create a skill together. First ask me what the skill should do.";
+function buildUploadSkillPrompt(fileName: string): string {
+  return `Help me install a local skill together. I just selected a skill package named "${fileName}". First help me verify it and then guide me through installation.`;
+}
+
+function buildImportGithubSkillPrompt(url: string): string {
+  return `Help me install a skill from GitHub together. I want to use this repository: ${url}`;
+}
+
+type PendingChatContext = {
+  path: string;
+  name: string;
+  kind: "file" | "directory";
+};
 
 function UploadSkillModal(props: {
   isOpen: boolean;
   onClose: () => void;
-  onUpload: (file: File) => void | Promise<void>;
-  busy?: boolean;
-  error?: string | null;
+  onUpload: (file: File) => void;
 }) {
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -307,29 +319,19 @@ function UploadSkillModal(props: {
               isDragging ? "border-[#1A162F] bg-[#1A162F]/5" : "border-gray-200 hover:border-[#1A162F]/50 hover:bg-gray-50"
             }`}
             onDragOver={(event) => {
-              if (props.busy) {
-                return;
-              }
               event.preventDefault();
               setIsDragging(true);
             }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={(event) => {
-              if (props.busy) {
-                return;
-              }
               event.preventDefault();
               setIsDragging(false);
               const file = event.dataTransfer.files?.[0];
               if (file) {
-                void props.onUpload(file);
+                props.onUpload(file);
               }
             }}
-            onClick={() => {
-              if (!props.busy) {
-                inputRef.current?.click();
-              }
-            }}
+            onClick={() => inputRef.current?.click()}
           >
             <div className="mb-4 flex gap-[-8px]">
               <FileZipIcon className="h-8 w-8 translate-x-2 rotate-[-6deg] text-gray-400" />
@@ -340,18 +342,16 @@ function UploadSkillModal(props: {
             <input
               ref={inputRef}
               type="file"
-              accept=".zip,.skill,.tar,.tgz,.gz,.tar.gz"
+              accept=".zip,.skill"
               className="hidden"
               onChange={(event: ChangeEvent<HTMLInputElement>) => {
                 const file = event.target.files?.[0];
                 if (file) {
-                  void props.onUpload(file);
+                  props.onUpload(file);
                 }
               }}
             />
           </div>
-          {props.error ? <div className="mt-3 text-sm text-red-600">{props.error}</div> : null}
-          {props.busy ? <div className="mt-3 text-sm text-[#6B7280]">Installing skill...</div> : null}
 
           <div className="mt-6 space-y-3">
             <h3 className="text-sm font-bold text-[#1A162F]">File requirements</h3>
@@ -375,9 +375,7 @@ function UploadSkillModal(props: {
 function GithubImportModal(props: {
   isOpen: boolean;
   onClose: () => void;
-  onImport: (url: string) => void | Promise<void>;
-  busy?: boolean;
-  error?: string | null;
+  onImport: (url: string) => void;
 }) {
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
@@ -430,35 +428,20 @@ function GithubImportModal(props: {
 
           <button
             type="button"
-            disabled={!url || Boolean(props.busy)}
+            disabled={!url}
             onClick={() => {
-              if (props.busy) {
-                return;
-              }
               const normalized = url.trim();
-              let parsed: URL | null = null;
-              try {
-                parsed = new URL(normalized);
-              } catch {
-                parsed = null;
-              }
-              const pathParts = parsed?.pathname.split("/").filter(Boolean) ?? [];
-              const isValid =
-                Boolean(parsed) &&
-                /^https?:$/i.test(parsed.protocol) &&
-                parsed.hostname.toLowerCase() === "github.com" &&
-                pathParts.length >= 2;
+              const isValid = /^https?:\/\/github\.com\/[^/\s]+\/[^/\s]+(?:\.git)?\/?$/.test(normalized);
               if (!isValid) {
                 setError("Please enter a valid GitHub repository URL.");
                 return;
               }
-              void props.onImport(normalized);
+              props.onImport(normalized);
             }}
             className="h-10 w-full rounded-lg bg-[#1A162F] text-sm font-bold text-white shadow-sm transition-all hover:bg-[#1A162F]/90 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {props.busy ? "Importing..." : "Import"}
+            Import
           </button>
-          {props.error ? <div className="mt-3 text-left text-sm text-red-600">{props.error}</div> : null}
         </div>
       </div>
     </ModalShell>
@@ -472,26 +455,19 @@ export default function SkillPage() {
   const [skills, setSkills] = useState<SkillItemData[]>([]);
   const [loadingSkills, setLoadingSkills] = useState(true);
   const [skillsError, setSkillsError] = useState<string | null>(null);
-  const [skillActionBusy, setSkillActionBusy] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [githubImportError, setGithubImportError] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showGithubModal, setShowGithubModal] = useState(false);
 
-  const navigateToChatWithPrompt = (prompt: string) => {
+  const navigateToChatWithPrompt = (prompt: string, context?: PendingChatContext) => {
     const searchParams = new URLSearchParams();
     searchParams.set("prompt", prompt);
-    void navigate(`/chat?${searchParams.toString()}`);
-  };
-
-  const refreshSkillsStatus = async () => {
-    const client = clientRef.current;
-    if (!client) {
-      throw new Error("Gateway is not connected.");
+    if (context) {
+      searchParams.set("contextPath", context.path);
+      searchParams.set("contextName", context.name);
+      searchParams.set("contextKind", context.kind);
     }
-    const report = await client.request<SkillStatusReport>("skills.status", {});
-    setSkills(report.skills.map(toSkillItem));
+    void navigate(`/chat?${searchParams.toString()}`);
   };
 
   useEffect(() => {
@@ -509,6 +485,8 @@ export default function SkillPage() {
 
     const connectGateway = async () => {
       try {
+        const supabaseConfig = await window.electronAPI.bustlyGetSupabaseConfig();
+        const agentId = buildBustlyWorkspaceAgentId(supabaseConfig.workspaceId);
         const status = await window.electronAPI.gatewayStatus();
         if (!status.running) {
           if (!disposed) {
@@ -538,7 +516,7 @@ export default function SkillPage() {
             }
             setSkillsError(null);
             void client
-              .request<SkillStatusReport>("skills.status", {})
+              .request<SkillStatusReport>("skills.status", { agentId })
               .then((report) => {
                 if (disposed) {
                   return;
@@ -584,64 +562,6 @@ export default function SkillPage() {
       clientRef.current = null;
     };
   }, []);
-
-  const handleUploadSkill = async (file: File) => {
-    if (skillActionBusy) {
-      return;
-    }
-    const fileName = file.name.trim();
-    if (!/\.(zip|skill|tar|tgz|tar\.gz)$/i.test(fileName)) {
-      setUploadError("Unsupported file type. Use .zip, .skill, .tar, .tgz, or .tar.gz.");
-      return;
-    }
-
-    setUploadError(null);
-    setGithubImportError(null);
-    setSkillsError(null);
-    setSkillActionBusy(true);
-    setLoadingSkills(true);
-    try {
-      const result = await window.electronAPI.skillsInstallFromArchive(file);
-      if (!result?.success) {
-        throw new Error(result?.error || "Failed to install skill archive.");
-      }
-      await refreshSkillsStatus();
-      setShowUploadModal(false);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setUploadError(message);
-      setSkillsError(message);
-    } finally {
-      setSkillActionBusy(false);
-      setLoadingSkills(false);
-    }
-  };
-
-  const handleImportGithubSkill = async (url: string) => {
-    if (skillActionBusy) {
-      return;
-    }
-    setUploadError(null);
-    setGithubImportError(null);
-    setSkillsError(null);
-    setSkillActionBusy(true);
-    setLoadingSkills(true);
-    try {
-      const result = await window.electronAPI.skillsImportFromGithub(url);
-      if (!result?.success) {
-        throw new Error(result?.error || "Failed to import skill from GitHub.");
-      }
-      await refreshSkillsStatus();
-      setShowGithubModal(false);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setGithubImportError(message);
-      setSkillsError(message);
-    } finally {
-      setSkillActionBusy(false);
-      setLoadingSkills(false);
-    }
-  };
   const skillRows = useMemo(() => skills, [skills]);
 
   return (
@@ -686,7 +606,6 @@ export default function SkillPage() {
                     type="button"
                     onClick={() => {
                       setIsDropdownOpen(false);
-                      setUploadError(null);
                       setShowUploadModal(true);
                     }}
                     className="group flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[#1A162F]/5"
@@ -695,7 +614,7 @@ export default function SkillPage() {
                     <div>
                       <span className="block text-sm font-semibold text-[#1A162F]">Upload a skill</span>
                       <span className="mt-0.5 block text-xs text-[#6B7280] transition-colors group-hover:text-[#1A162F]">
-                        Upload .zip, .skill, or tar archive
+                        Upload .zip, .skill, or folder
                       </span>
                     </div>
                   </button>
@@ -703,7 +622,6 @@ export default function SkillPage() {
                     type="button"
                     onClick={() => {
                       setIsDropdownOpen(false);
-                      setGithubImportError(null);
                       setShowGithubModal(true);
                     }}
                     className="group flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[#1A162F]/5"
@@ -778,30 +696,33 @@ export default function SkillPage() {
 
       <UploadSkillModal
         isOpen={showUploadModal}
-        onClose={() => {
-          if (skillActionBusy) {
+        onClose={() => setShowUploadModal(false)}
+        onUpload={async (file) => {
+          if (!file.name.endsWith(".zip") && !file.name.endsWith(".skill")) {
             return;
           }
+          const resolved = await window.electronAPI.resolvePastedPath({
+            file,
+            fallbackKind: "file",
+          });
           setShowUploadModal(false);
-          setUploadError(null);
+          navigateToChatWithPrompt(buildUploadSkillPrompt(file.name), resolved.path
+            ? {
+                path: resolved.path,
+                name: file.name,
+                kind: resolved.kind === "directory" ? "directory" : "file",
+              }
+            : undefined);
         }}
-        onUpload={handleUploadSkill}
-        busy={skillActionBusy}
-        error={uploadError}
       />
 
       <GithubImportModal
         isOpen={showGithubModal}
-        onClose={() => {
-          if (skillActionBusy) {
-            return;
-          }
+        onClose={() => setShowGithubModal(false)}
+        onImport={(url) => {
           setShowGithubModal(false);
-          setGithubImportError(null);
+          navigateToChatWithPrompt(buildImportGithubSkillPrompt(url));
         }}
-        onImport={handleImportGithubSkill}
-        busy={skillActionBusy}
-        error={githubImportError}
       />
     </div>
   );

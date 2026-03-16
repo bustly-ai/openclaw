@@ -1330,6 +1330,18 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     if (prompt) {
       nextSearchParams.set("prompt", prompt);
     }
+    const contextPath = searchParams.get("contextPath")?.trim();
+    const contextName = searchParams.get("contextName")?.trim();
+    const contextKind = searchParams.get("contextKind")?.trim();
+    if (contextPath) {
+      nextSearchParams.set("contextPath", contextPath);
+    }
+    if (contextName) {
+      nextSearchParams.set("contextName", contextName);
+    }
+    if (contextKind) {
+      nextSearchParams.set("contextKind", contextKind);
+    }
     void navigate(`/chat?${nextSearchParams.toString()}`, {
       replace: true,
     });

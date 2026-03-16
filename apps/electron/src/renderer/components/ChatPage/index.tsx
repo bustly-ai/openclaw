@@ -672,6 +672,7 @@ export default function ChatPage() {
   const shouldStickToBottomRef = useRef(true);
   const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
   const lastAppliedPromptRef = useRef<string | null>(null);
+  const lastAppliedContextRef = useRef<string | null>(null);
   const pendingPromptFocusRef = useRef(false);
   const currentSessionKey = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
@@ -1689,28 +1690,83 @@ export default function ChatPage() {
       });
     void loadSessionUsage(client, currentSessionKey).catch((err) => {
       setError(err instanceof Error ? err.message : String(err));
-    });
+      });
   }, [connected, currentSessionKey, loadHistory, loadSessionUsage, location.search]);
+
+  const appendContextSelections = useCallback((selected: ChatContextPathSelection[]) => {
+    if (selected.length > 0) {
+      console.log("[electron-chat] context paths added", selected);
+    }
+    setContextPaths((prev) => {
+      const seen = new Set(prev.map((entry) => entry.path));
+      const nextEntries = selected
+        .filter((entry): entry is ChatContextPathSelection => Boolean(entry?.path && entry?.name))
+        .filter((entry) => {
+          if (seen.has(entry.path)) {
+            return false;
+          }
+          seen.add(entry.path);
+          return true;
+        })
+        .map((entry) => ({
+          id: nextId("ctx"),
+          path: entry.path,
+          name: entry.name,
+          kind: inferInputArtifactKind(entry),
+          imageUrl: entry.imageUrl,
+        }));
+      return nextEntries.length > 0 ? [...prev, ...nextEntries] : prev;
+    });
+  }, []);
 
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search);
     const explicitSessionKey = searchParams.get("session")?.trim();
     const prompt = searchParams.get("prompt")?.trim();
-    if (!prompt || !explicitSessionKey || lastAppliedPromptRef.current === prompt) {
+    const contextPath = searchParams.get("contextPath")?.trim();
+    const contextName = searchParams.get("contextName")?.trim();
+    const contextKind = searchParams.get("contextKind")?.trim();
+    if (!explicitSessionKey) {
       return;
     }
-    lastAppliedPromptRef.current = prompt;
-    pendingPromptFocusRef.current = true;
-    setDraft(prompt);
-    window.requestAnimationFrame(() => {
-      composerRef.current?.focus();
-      composerRef.current?.setSelectionRange(prompt.length, prompt.length);
-    });
-    window.setTimeout(() => {
-      composerRef.current?.focus();
-      composerRef.current?.setSelectionRange(prompt.length, prompt.length);
-    }, 80);
+
+    let applied = false;
+    if (prompt && lastAppliedPromptRef.current !== prompt) {
+      lastAppliedPromptRef.current = prompt;
+      pendingPromptFocusRef.current = true;
+      setDraft(prompt);
+      window.requestAnimationFrame(() => {
+        composerRef.current?.focus();
+        composerRef.current?.setSelectionRange(prompt.length, prompt.length);
+      });
+      window.setTimeout(() => {
+        composerRef.current?.focus();
+        composerRef.current?.setSelectionRange(prompt.length, prompt.length);
+      }, 80);
+      applied = true;
+    }
+
+    const contextSignature = contextPath ? `${contextPath}::${contextName || ""}::${contextKind || ""}` : null;
+    if (contextPath && contextSignature !== lastAppliedContextRef.current) {
+      lastAppliedContextRef.current = contextSignature;
+      appendContextSelections([
+        {
+          path: contextPath,
+          name: contextName || contextPath.split(/[\\/]/).pop() || contextPath,
+          kind: contextKind === "directory" ? "directory" : "file",
+        },
+      ]);
+      applied = true;
+    }
+
+    if (!applied) {
+      return;
+    }
+
     searchParams.delete("prompt");
+    searchParams.delete("contextPath");
+    searchParams.delete("contextName");
+    searchParams.delete("contextKind");
     void navigate(
       {
         pathname: location.pathname,
@@ -1718,7 +1774,7 @@ export default function ChatPage() {
       },
       { replace: true },
     );
-  }, [location.pathname, location.search, navigate]);
+  }, [appendContextSelections, location.pathname, location.search, navigate]);
 
   useEffect(() => {
     if (!pendingPromptFocusRef.current || !connected || sending || subscriptionExpired || !draft.trim()) {
@@ -2070,32 +2126,6 @@ export default function ChatPage() {
     }
     await window.electronAPI.bustlyOpenWorkspacePricing(activeWorkspaceId);
   }, [activeWorkspaceId]);
-
-  const appendContextSelections = useCallback((selected: ChatContextPathSelection[]) => {
-    if (selected.length > 0) {
-      console.log("[electron-chat] context paths added", selected);
-    }
-    setContextPaths((prev) => {
-      const seen = new Set(prev.map((entry) => entry.path));
-      const nextEntries = selected
-        .filter((entry): entry is ChatContextPathSelection => Boolean(entry?.path && entry?.name))
-        .filter((entry) => {
-          if (seen.has(entry.path)) {
-            return false;
-          }
-          seen.add(entry.path);
-          return true;
-        })
-        .map((entry) => ({
-          id: nextId("ctx"),
-          path: entry.path,
-          name: entry.name,
-          kind: inferInputArtifactKind(entry),
-          imageUrl: entry.imageUrl,
-        }));
-      return nextEntries.length > 0 ? [...prev, ...nextEntries] : prev;
-    });
-  }, []);
 
   const handleAttachmentFiles = useCallback(async (
     input: FileList | DataTransferItemList | null,
