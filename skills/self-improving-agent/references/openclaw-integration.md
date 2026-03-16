@@ -6,25 +6,42 @@ Complete setup and usage guide for integrating the self-improvement skill with O
 
 OpenClaw uses workspace-based prompt injection combined with event-driven hooks. Context is injected from workspace files at session start, and hooks can trigger on lifecycle events.
 
+For Bustly Electron, prefer native integration over explicit skill use:
+
+- create `.learnings/` inside each workspace automatically
+- embed the learning rules directly in `AGENTS.md`
+- use hooks only as a light fallback reminder
+
 ## Workspace Structure
 
 ```
-~/.openclaw/                      
-├── workspace/                   # Working directory
-│   ├── AGENTS.md               # Multi-agent coordination patterns
-│   ├── SOUL.md                 # Behavioral guidelines and personality
-│   ├── TOOLS.md                # Tool capabilities and gotchas
-│   ├── MEMORY.md               # Long-term memory (main session only)
-│   └── memory/                 # Daily memory files
-│       └── YYYY-MM-DD.md
-├── skills/                      # Installed skills
+~/.bustly/
+├── workspaces/
+│   └── <agent-id>/
+│       ├── AGENTS.md
+│       ├── BOOTSTRAP.md
+│       ├── HEARTBEAT.md
+│       ├── IDENTITY.md
+│       ├── MEMORY.md
+│       ├── SOUL.md
+│       ├── TOOLS.md
+│       ├── USER.md
+│       ├── memory/
+│       │   └── YYYY-MM-DD.md
+│       └── .learnings/
+│           ├── LEARNINGS.md
+│           ├── ERRORS.md
+│           └── FEATURE_REQUESTS.md
+├── skills/
 │   └── <skill-name>/
 │       └── SKILL.md
-└── hooks/                       # Custom hooks
+└── hooks/
     └── <hook-name>/
         ├── HOOK.md
         └── handler.ts
 ```
+
+Some OpenClaw setups still use a single default workspace. The important rule is that `.learnings/` belongs to the active workspace root, not to a fixed global path.
 
 ## Quick Setup
 
@@ -56,17 +73,13 @@ openclaw hooks enable self-improvement
 
 ### 3. Create Learning Files
 
-Create the `.learnings/` directory in your workspace:
+Create the `.learnings/` directory in the active workspace:
 
 ```bash
-mkdir -p ~/.openclaw/workspace/.learnings
+mkdir -p <workspace-root>/.learnings
 ```
 
-Or in the skill directory:
-
-```bash
-mkdir -p ~/.openclaw/skills/self-improving-agent/.learnings
-```
+For native product integration, do this during workspace initialization so the user never needs to install or trigger the skill manually.
 
 ## Injected Prompt Files
 
@@ -87,6 +100,13 @@ When delegating to another session:
 1. Provide full context in the handoff message
 2. Include relevant file paths
 3. Specify expected output format
+
+## Continuous Improvement
+- Log durable corrections and workflow lessons to `.learnings/`
+- Promote behavioral rules to `SOUL.md`
+- Promote workflow rules to `AGENTS.md`
+- Promote tool-specific gotchas to `TOOLS.md`
+- Promote merchant facts to `MEMORY.md`
 ```
 
 ### SOUL.md

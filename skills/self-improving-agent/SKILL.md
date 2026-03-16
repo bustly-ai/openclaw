@@ -8,6 +8,12 @@ metadata:
 
 Log learnings and errors to markdown files for continuous improvement. Coding agents can later process these into fixes, and important learnings get promoted to project memory.
 
+For Bustly/OpenClaw Electron workspaces, prefer a native workspace integration:
+
+- keep `.learnings/` at the root of each agent workspace
+- embed the operating rules directly in that workspace's `AGENTS.md`
+- use this skill as the reference format and extraction workflow, not as a user-triggered feature
+
 ## Quick Reference
 
 | Situation | Action |
@@ -20,7 +26,7 @@ Log learnings and errors to markdown files for continuous improvement. Coding ag
 | Found better approach | Log to `.learnings/LEARNINGS.md` with category `best_practice` |
 | Simplify/Harden recurring patterns | Log/update `.learnings/LEARNINGS.md` with `Source: simplify-and-harden` and a stable `Pattern-Key` |
 | Similar to existing entry | Link with `**See Also**`, consider priority bump |
-| Broadly applicable learning | Promote to `CLAUDE.md`, `AGENTS.md`, and/or `.github/copilot-instructions.md` |
+| Broadly applicable learning | Promote to `AGENTS.md`, `TOOLS.md`, `SOUL.md`, `MEMORY.md`, and/or `.github/copilot-instructions.md` |
 | Workflow improvements | Promote to `AGENTS.md` (OpenClaw workspace) |
 | Tool gotchas | Promote to `TOOLS.md` (OpenClaw workspace) |
 | Behavioral patterns | Promote to `SOUL.md` (OpenClaw workspace) |
@@ -28,6 +34,8 @@ Log learnings and errors to markdown files for continuous improvement. Coding ag
 ## OpenClaw Setup (Recommended)
 
 OpenClaw is the primary platform for this skill. It uses workspace-based prompt injection with automatic skill loading.
+
+In Bustly's Electron client, the preferred experience is native and per-workspace. The agent should not wait for the user to explicitly invoke this skill.
 
 ### Installation
 
@@ -45,32 +53,40 @@ Remade for openclaw from original repo : https://github.com/pskoett/pskoett-ai-s
 
 ### Workspace Structure
 
-OpenClaw injects these files into every session:
+OpenClaw now supports multiple agent workspaces. In Bustly Electron, each merchant workspace gets its own agent workspace under the Electron state directory, for example:
 
 ```
-~/.openclaw/workspace/
-├── AGENTS.md          # Multi-agent workflows, delegation patterns
-├── SOUL.md            # Behavioral guidelines, personality, principles
-├── TOOLS.md           # Tool capabilities, integration gotchas
-├── MEMORY.md          # Long-term memory (main session only)
-├── memory/            # Daily memory files
+~/.bustly/workspaces/<agent-id>/
+├── AGENTS.md
+├── BOOTSTRAP.md
+├── HEARTBEAT.md
+├── IDENTITY.md
+├── MEMORY.md
+├── SOUL.md
+├── TOOLS.md
+├── USER.md
+├── memory/
 │   └── YYYY-MM-DD.md
-└── .learnings/        # This skill's log files
+└── .learnings/
     ├── LEARNINGS.md
     ├── ERRORS.md
     └── FEATURE_REQUESTS.md
 ```
 
+The exact workspace path is owned by the host app. Treat `.learnings/` as relative to the active workspace root rather than assuming a single global workspace path.
+
 ### Create Learning Files
 
 ```bash
-mkdir -p ~/.openclaw/workspace/.learnings
+mkdir -p <workspace-root>/.learnings
 ```
 
 Then create the log files (or copy from `assets/`):
 - `LEARNINGS.md` — corrections, knowledge gaps, best practices
 - `ERRORS.md` — command failures, exceptions
 - `FEATURE_REQUESTS.md` — user-requested capabilities
+
+For native Bustly/OpenClaw integrations, create these automatically when the workspace is initialized.
 
 ### Promotion Targets
 
@@ -81,6 +97,7 @@ When learnings prove broadly applicable, promote them to workspace files:
 | Behavioral patterns | `SOUL.md` | "Be concise, avoid disclaimers" |
 | Workflow improvements | `AGENTS.md` | "Spawn sub-agents for long tasks" |
 | Tool gotchas | `TOOLS.md` | "Git push needs auth configured first" |
+| Workspace facts | `MEMORY.md` | "Merchant prefers weekly summaries on Monday" |
 
 ### Inter-Session Communication
 
@@ -92,6 +109,8 @@ OpenClaw provides tools to share learnings across sessions:
 - **sessions_spawn** — Spawn a sub-agent for background work
 
 ### Optional: Enable Hook
+
+Hooks are reminders only. For Electron products, prefer embedding the behavior in `AGENTS.md` and auto-creating `.learnings/` during workspace bootstrap.
 
 For automatic reminders at session start:
 

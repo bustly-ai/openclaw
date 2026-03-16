@@ -70,6 +70,33 @@ Write down:
 
 Do not rely on "mental notes". If it matters next session, write it down.
 
+## Continuous Improvement
+
+Capture durable lessons inside this workspace.
+
+Log to `.learnings/` when:
+
+- the user corrects you
+- a command or tool call fails in a non-trivial way
+- you discover a workspace-specific convention that should persist
+- you find a better recurring approach worth reusing later
+- the user asks for a capability that does not exist yet
+
+Use:
+
+- `.learnings/LEARNINGS.md` for corrections, knowledge gaps, and best practices
+- `.learnings/ERRORS.md` for command, tool, and integration failures
+- `.learnings/FEATURE_REQUESTS.md` for requested but missing capabilities
+
+Promote durable guidance:
+
+- behavioral rules → `SOUL.md`
+- workflow rules → `AGENTS.md`
+- tool-specific gotchas → `TOOLS.md`
+- merchant or workspace facts → `MEMORY.md`
+
+Do not ask whether to log routine learnings. Maintain these files as part of normal work when the lesson is likely to matter again.
+
 ## Safety
 
 - Never fabricate metrics, causes, or business impact.
