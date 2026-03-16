@@ -214,6 +214,7 @@ function resolvePastedPath(params: {
   directPath?: string;
   entryPath?: string;
   entryName?: string;
+  transferPaths?: string[];
   fallbackKind: "file" | "directory";
 }): { path: string; kind: "file" | "directory" | null } {
   const directPath = typeof params.directPath === "string" ? params.directPath.trim() : "";
@@ -228,7 +229,13 @@ function resolvePastedPath(params: {
     }
   }
 
-  const clipboardPaths = readNativeClipboardFilePaths();
+  const transferPaths = Array.isArray(params.transferPaths)
+    ? params.transferPaths
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    : [];
+  const clipboardPaths = transferPaths.length > 0 ? transferPaths : readNativeClipboardFilePaths();
   const entryPath = typeof params.entryPath === "string" ? params.entryPath.trim() : "";
   const entryName = typeof params.entryName === "string" ? params.entryName.trim() : "";
 

@@ -308,10 +308,51 @@ function looksLikeImagePath(pathOrName: string | undefined): boolean {
   return /\.(avif|bmp|gif|heic|jpeg|jpg|png|svg|tiff|webp)$/i.test(pathOrName ?? "");
 }
 
+function parseTransferredFilePaths(raw: string | undefined): string[] {
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split("\0")
+    .join("\n")
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      if (entry.startsWith("file://")) {
+        try {
+          return decodeURIComponent(new URL(entry).pathname);
+        } catch {
+          return entry;
+        }
+      }
+      return entry;
+    })
+    .filter((entry) => entry.startsWith("/"));
+}
+
+function extractNativeTransferPaths(dataTransfer?: DataTransfer | null): string[] {
+  if (!dataTransfer) {
+    return [];
+  }
+  const candidates = [
+    dataTransfer.getData("text/uri-list"),
+    dataTransfer.getData("text/plain"),
+  ];
+  const paths = new Set<string>();
+  for (const candidate of candidates) {
+    for (const path of parseTransferredFilePaths(candidate)) {
+      paths.add(path);
+    }
+  }
+  return [...paths];
+}
+
 async function resolvePastedSelection(params: {
   file?: File;
   entryPath?: string;
   entryName?: string;
+  transferPaths?: string[];
   fallbackKind: "file" | "directory";
 }): Promise<{ path: string; kind: "file" | "directory" }> {
   if (typeof window.electronAPI?.resolvePastedPath !== "function") {
@@ -576,7 +617,7 @@ function PlaceholderTicker({ items }: { items: string[] }) {
   }
 
   return (
-    <div className="pointer-events-none absolute top-5 left-5 right-14 h-6 overflow-hidden">
+    <div className="pointer-events-none absolute top-1 left-1 right-14 h-6 overflow-hidden">
       <div
         className="flex flex-col"
         style={{
@@ -625,6 +666,7 @@ export default function ChatPage() {
   const [previewZoom, setPreviewZoom] = useState(0.67);
   const [previewMinZoom, setPreviewMinZoom] = useState(0.67);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [subscriptionExpired, setSubscriptionExpired] = useState(false);
   const [subscriptionActionText, setSubscriptionActionText] = useState("Upgrade");
   const [modelMenuPos, setModelMenuPos] = useState<{
@@ -2150,6 +2192,7 @@ export default function ChatPage() {
       return;
     }
 
+    const transferPaths = extractNativeTransferPaths(clipboardData);
     const contextSelections: ChatContextPathSelection[] = [];
     const files: File[] = [];
     for (const entry of inputEntries) {
@@ -2170,6 +2213,7 @@ export default function ChatPage() {
               ? String((directFile as File & { path?: string }).path)
               : undefined,
           entryName: directFile.name,
+          transferPaths,
           fallbackKind: "file",
         });
         if (resolvedSelection.path) {
@@ -2224,9 +2268,13 @@ export default function ChatPage() {
           ? (clipboardItem as unknown as { webkitGetAsEntry: () => { isDirectory?: boolean; fullPath?: string; name?: string } | null }).webkitGetAsEntry()
           : null;
       if (entryHandle?.isDirectory && entryHandle.fullPath) {
+        const directoryFile =
+          clipboardItem && typeof clipboardItem.getAsFile === "function" ? clipboardItem.getAsFile() : null;
         const resolvedSelection = await resolvePastedSelection({
+          file: directoryFile ?? undefined,
           entryPath: entryHandle.fullPath,
           entryName: entryHandle.name,
+          transferPaths,
           fallbackKind: "directory",
         });
         contextSelections.push({
@@ -2248,6 +2296,7 @@ export default function ChatPage() {
               ? String((file as File & { path?: string }).path)
               : undefined,
           entryName: file.name,
+          transferPaths,
           fallbackKind: "file",
         });
         if (resolvedSelection.path) {
@@ -2706,11 +2755,53 @@ export default function ChatPage() {
                 className={`group relative rounded-[28px] border bg-white p-4 shadow-sm transition-all duration-300 ${
                   subscriptionExpired
                     ? "cursor-not-allowed border-[#ECECEC] bg-[#FAFAFA]"
+                    : isDraggingFiles
+                      ? "border-[#1A162F] bg-[#1A162F]/5 shadow-[0_18px_44px_rgba(26,22,47,0.08)] ring-1 ring-[#1A162F]"
                     : "border-gray-200 hover:border-gray-300 focus-within:border-gray-400 focus-within:shadow-md"
                 }`}
+                onDragOver={(event) => {
+                  if (subscriptionExpired) {
+                    return;
+                  }
+                  event.preventDefault();
+                  setIsDraggingFiles(true);
+                }}
+                onDragLeave={(event) => {
+                  event.preventDefault();
+                  if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                    return;
+                  }
+                  setIsDraggingFiles(false);
+                }}
+                onDrop={(event) => {
+                  if (subscriptionExpired) {
+                    return;
+                  }
+                  event.preventDefault();
+                  setIsDraggingFiles(false);
+                  const source =
+                    event.dataTransfer.items && event.dataTransfer.items.length > 0
+                      ? event.dataTransfer.items
+                      : event.dataTransfer.files;
+                  if (!source || source.length === 0) {
+                    return;
+                  }
+                  void handleAttachmentFiles(source, event.dataTransfer).catch((error) => {
+                    console.error("[electron-chat] drop attachment handling failed", error);
+                  });
+                }}
               >
+                {isDraggingFiles && !subscriptionExpired ? (
+                  <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+                    <div className="animate-in zoom-in-95 fade-in flex items-center gap-2 text-[#1A162F] duration-200">
+                      <Paperclip size={20} weight="bold" />
+                      <span className="text-base font-medium">Drop files here</span>
+                    </div>
+                  </div>
+                ) : null}
+
                 {attachments.length > 0 || contextPaths.length > 0 ? (
-                  <div className="relative z-10 mb-3 flex flex-wrap gap-2">
+                  <div className={`relative z-10 mb-3 flex flex-wrap gap-2 transition-opacity duration-200 ${isDraggingFiles ? "opacity-20" : ""}`}>
                     {attachments.map((att) => (
                       <InputArtifactCard
                         key={att.id}
@@ -2749,56 +2840,58 @@ export default function ChatPage() {
                   </div>
                 ) : null}
 
-                <textarea
-                  ref={composerRef}
-                  rows={1}
-                  value={draft}
-                  disabled={!connected || sending || subscriptionExpired}
-                  placeholder={
-                    subscriptionExpired
-                      ? "Renew your plan to continue..."
-                      : connected
-                        ? showPlaceholderTicker
-                          ? ""
-                          : "Ask for follow-up changes..."
-                        : "Connect to gateway to chat..."
-                  }
-                  className="relative z-10 min-h-[44px] max-h-[200px] w-full resize-none border-none bg-transparent px-1 py-1 pr-14 text-base font-normal leading-6 text-text-main outline-none placeholder:text-text-sub/70 disabled:cursor-not-allowed disabled:text-[#8B93AA]"
-                  onChange={(e) => setDraft(e.target.value)}
-                  onCompositionStart={() => {
-                    composerIsComposingRef.current = true;
-                  }}
-                  onCompositionEnd={() => {
-                    composerIsComposingRef.current = false;
-                  }}
-                  onKeyDown={(e) => {
-                    const nativeEvent = e.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number };
-                    const isComposing =
-                      composerIsComposingRef.current ||
-                      nativeEvent.isComposing === true ||
-                      nativeEvent.keyCode === 229;
-                    if (isComposing) {
-                      return;
+                <div className={`relative z-10 transition-opacity duration-200 ${isDraggingFiles ? "opacity-20" : ""}`}>
+                  <textarea
+                    ref={composerRef}
+                    rows={1}
+                    value={draft}
+                    disabled={!connected || sending || subscriptionExpired}
+                    placeholder={
+                      subscriptionExpired
+                        ? "Renew your plan to continue..."
+                        : connected
+                          ? showPlaceholderTicker
+                            ? ""
+                            : "Ask for follow-up changes..."
+                          : "Connect to gateway to chat..."
                     }
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void handleSend();
-                    }
-                  }}
-                  onPaste={(e) => {
-                    const files = e.clipboardData.files;
-                    const items = e.clipboardData.items;
-                    const source = files && files.length > 0 ? files : items;
-                    if (!source || source.length === 0) {
-                      return;
-                    }
-                    void handleAttachmentFiles(source, e.clipboardData).catch((error) => {
-                      console.error("[electron-chat] paste attachment handling failed", error);
-                    });
-                  }}
-                />
+                    className="min-h-[44px] max-h-[200px] w-full resize-none border-none bg-transparent px-1 py-1 pr-14 text-base font-normal leading-6 text-text-main outline-none placeholder:text-text-sub/70 disabled:cursor-not-allowed disabled:text-[#8B93AA]"
+                    onChange={(e) => setDraft(e.target.value)}
+                    onCompositionStart={() => {
+                      composerIsComposingRef.current = true;
+                    }}
+                    onCompositionEnd={() => {
+                      composerIsComposingRef.current = false;
+                    }}
+                    onKeyDown={(e) => {
+                      const nativeEvent = e.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number };
+                      const isComposing =
+                        composerIsComposingRef.current ||
+                        nativeEvent.isComposing === true ||
+                        nativeEvent.keyCode === 229;
+                      if (isComposing) {
+                        return;
+                      }
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        void handleSend();
+                      }
+                    }}
+                    onPaste={(e) => {
+                      const files = e.clipboardData.files;
+                      const items = e.clipboardData.items;
+                      const source = files && files.length > 0 ? files : items;
+                      if (!source || source.length === 0) {
+                        return;
+                      }
+                      void handleAttachmentFiles(source, e.clipboardData).catch((error) => {
+                        console.error("[electron-chat] paste attachment handling failed", error);
+                      });
+                    }}
+                  />
 
-                {showPlaceholderTicker ? <PlaceholderTicker items={COMPOSER_PLACEHOLDERS} /> : null}
+                  {showPlaceholderTicker ? <PlaceholderTicker items={COMPOSER_PLACEHOLDERS} /> : null}
+                </div>
 
                 {activeRunId ? (
                   <div className="absolute right-3 bottom-3 z-20">

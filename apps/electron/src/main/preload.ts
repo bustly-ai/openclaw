@@ -43,12 +43,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     file?: File;
     entryPath?: string;
     entryName?: string;
+    transferPaths?: string[];
     fallbackKind: "file" | "directory";
   }) =>
     ipcRenderer.invoke("resolve-pasted-path", {
       directPath: params.file ? webUtils.getPathForFile(params.file) : "",
       entryPath: params.entryPath,
       entryName: params.entryName,
+      transferPaths: params.transferPaths,
       fallbackKind: params.fallbackKind,
     }),
   selectChatContextPaths: () => ipcRenderer.invoke("dialog-select-chat-context-paths"),

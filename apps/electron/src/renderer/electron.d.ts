@@ -120,6 +120,7 @@ interface ElectronAPI {
     file?: File;
     entryPath?: string;
     entryName?: string;
+    transferPaths?: string[];
     fallbackKind: "file" | "directory";
   }) => Promise<{ path: string; kind: "file" | "directory" | null }>;
   selectChatContextPaths: () => Promise<ChatContextPathSelection[]>;
