@@ -10,8 +10,8 @@ import {
   Gear,
   House,
   Lightning,
+  PencilSimple,
   Plus,
-  PencilSimpleLine,
   SquaresFour,
   SignOut,
   Trash,
@@ -399,9 +399,9 @@ function TaskItem(props: {
         ? createPortal(
             <div
               ref={menuRef}
-              className="fixed z-[11000] min-w-[160px] rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl"
+              className="fixed z-[11000] w-48 rounded-xl border border-gray-100 bg-white p-1.5 shadow-xl"
               style={{
-                top: triggerRef.current.getBoundingClientRect().bottom + 6,
+                top: triggerRef.current.getBoundingClientRect().bottom + 4,
                 left: triggerRef.current.getBoundingClientRect().left,
               }}
               onMouseDown={(event) => event.stopPropagation()}
@@ -425,8 +425,12 @@ function TaskItem(props: {
                   props.onRename();
                 }}
               >
+                <PencilSimple size={16} weight="bold" />
                 Rename
               </button>
+              {!props.task.isMain ? (
+                <div className="my-1 h-px bg-gray-100" />
+              ) : null}
               {!props.task.isMain ? (
                 <button
                   type="button"
@@ -436,7 +440,8 @@ function TaskItem(props: {
                     props.onDelete();
                   }}
                 >
-                  Delete scenario
+                  <Trash size={16} weight="bold" />
+                  Delete
                 </button>
               ) : null}
             </div>,
@@ -652,7 +657,7 @@ function CollapsedScenariosButton(props: {
                 }}
                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-[#666F8D] transition-colors hover:bg-[#F5F7FB] hover:text-[#1A162F]"
               >
-                <PencilSimpleLine size={16} weight="bold" />
+                <PencilSimple size={16} weight="bold" />
                 Rename
               </button>
               {!menuTask.isMain ? <div className="my-1 h-px bg-[#EEF1F6]" /> : null}

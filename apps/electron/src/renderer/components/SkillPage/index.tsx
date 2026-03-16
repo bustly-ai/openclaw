@@ -4,7 +4,6 @@ import { useNavigate } from "react-router-dom";
 import { GatewayBrowserClient } from "../../lib/gateway-client";
 import Skeleton from "../ui/Skeleton";
 import collapsedLogo from "../../assets/imgs/collapsed_logo_clean.svg";
-import trashIcon from "../../assets/imgs/Trash.svg";
 import uploadIcon from "../../assets/imgs/download_simple_bold.svg";
 
 type SkillIconComponent = (props: { className?: string }) => ReactNode;
@@ -21,7 +20,6 @@ type SkillItemData = {
   homepage?: string;
   primaryEnv?: string;
   loading?: boolean;
-  canDelete?: boolean;
 };
 
 type SkillStatusEntry = {
@@ -207,7 +205,6 @@ function toSkillItem(skill: SkillStatusEntry, index: number): SkillItemData {
     filePath: skill.filePath,
     homepage: skill.homepage,
     primaryEnv: skill.primaryEnv,
-    canDelete: false,
   };
 }
 
@@ -235,7 +232,6 @@ function ModalShell(props: {
 function SkillCard(props: {
   skill: SkillItemData;
   onToggle: (id: SkillItemData["id"]) => void;
-  onDelete: (id: SkillItemData["id"]) => void;
 }) {
   const Icon = props.skill.icon;
 
@@ -256,17 +252,6 @@ function SkillCard(props: {
           disabled={props.skill.loading}
           onClick={() => props.onToggle(props.skill.id)}
         />
-        <button
-          type="button"
-          onClick={() => props.onDelete(props.skill.id)}
-          disabled={!props.skill.canDelete}
-          className={`rounded-md p-1 transition-opacity focus:opacity-100 group-hover:opacity-100 ${
-            props.skill.canDelete ? "opacity-0 hover:bg-red-50" : "cursor-not-allowed opacity-0"
-          }`}
-          title={props.skill.canDelete ? "Delete skill" : "Delete is not available yet"}
-        >
-          <img src={trashIcon} alt="Delete" className="h-[18px] w-[18px]" />
-        </button>
       </div>
     </div>
   );
@@ -284,7 +269,6 @@ function SkillCardSkeleton() {
       </div>
       <div className="flex shrink-0 items-center gap-4">
         <Skeleton className="h-[22px] w-[38px]" />
-        <Skeleton className="h-[18px] w-[18px] rounded-md" />
       </div>
     </div>
   );
@@ -494,10 +478,6 @@ export default function SkillPage() {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showGithubModal, setShowGithubModal] = useState(false);
-  const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; id: SkillItemData["id"] | null }>({
-    isOpen: false,
-    id: null,
-  });
 
   const navigateToChatWithPrompt = (prompt: string) => {
     const searchParams = new URLSearchParams();
@@ -786,13 +766,6 @@ export default function SkillPage() {
                       setSkillsError(error instanceof Error ? error.message : String(error));
                     });
                 }}
-                onDelete={(id) => {
-                  const target = skills.find((item) => item.id === id);
-                  if (!target?.canDelete) {
-                    return;
-                  }
-                  setDeleteModal({ isOpen: true, id });
-                }}
               />
             ))
           ) : (
@@ -830,39 +803,6 @@ export default function SkillPage() {
         busy={skillActionBusy}
         error={githubImportError}
       />
-
-      <ModalShell
-        isOpen={deleteModal.isOpen}
-        onClose={() => setDeleteModal({ isOpen: false, id: null })}
-        maxWidth="max-w-md"
-      >
-        <div className="rounded-2xl bg-white p-6 shadow-2xl">
-          <h2 className="mb-4 text-xl font-bold text-[#1A162F]">Delete Skill</h2>
-          <p className="leading-relaxed text-gray-600">Are you sure you want to delete this skill? This action cannot be undone.</p>
-          <div className="flex justify-end gap-3 pt-8">
-            <button
-              type="button"
-              onClick={() => setDeleteModal({ isOpen: false, id: null })}
-              className="rounded-xl px-4 py-2 text-sm font-bold text-gray-500 transition-colors hover:bg-gray-100"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (deleteModal.id == null) {
-                  return;
-                }
-                setSkills((previous) => previous.filter((item) => item.id !== deleteModal.id));
-                setDeleteModal({ isOpen: false, id: null });
-              }}
-              className="rounded-xl bg-red-600 px-6 py-2 text-sm font-bold text-white shadow-sm transition-colors hover:bg-red-700"
-            >
-              Delete
-            </button>
-          </div>
-        </div>
-      </ModalShell>
     </div>
   );
 }
