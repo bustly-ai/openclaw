@@ -39,6 +39,7 @@ import {
   isAgentMainSessionKey,
 } from "../../../shared/bustly-agent";
 import Skeleton from "../ui/Skeleton";
+import PortalTooltip from "../ui/PortalTooltip";
 
 type ClientAppSidebarProps = {
   collapsed: boolean;
@@ -174,41 +175,6 @@ function LightningIcon({ className }: IconProps) {
   return <Lightning size={18} weight="bold" className={className} />;
 }
 
-function PencilSimpleLineIcon({ className }: IconProps) {
-  return <PencilSimpleLine size={18} weight="bold" className={className} />;
-}
-
-function PortalTooltip(props: {
-  visible: boolean;
-  anchor: HTMLElement | null;
-  side?: "right" | "bottom";
-  children: ReactNode;
-}) {
-  if (!props.visible || !props.anchor) {
-    return null;
-  }
-  const rect = props.anchor.getBoundingClientRect();
-  const side = props.side ?? "right";
-  const style =
-    side === "bottom"
-      ? { top: rect.bottom + 8, left: rect.left + rect.width / 2, transform: "translateX(-50%)" }
-      : { top: rect.top + rect.height / 2, left: rect.right + 12, transform: "translateY(-50%)" };
-  const arrowClass =
-    side === "bottom"
-      ? "-top-1 left-1/2 -translate-x-1/2"
-      : "top-1/2 -left-1 -translate-y-1/2";
-  return createPortal(
-    <div
-      className="fixed z-[9999] rounded-lg bg-[#1A162F] px-3 py-1.5 text-sm font-medium whitespace-nowrap text-white shadow-lg pointer-events-none animate-in fade-in zoom-in-95 duration-200"
-      style={style}
-    >
-      {props.children}
-      <div className={`absolute h-2 w-2 rotate-45 bg-[#1A162F] ${arrowClass}`} />
-    </div>,
-    document.body,
-  );
-}
-
 function SidebarModal(props: {
   open: boolean;
   title: string;
@@ -318,9 +284,12 @@ function SidebarItem(props: {
           <div className="absolute top-1/2 right-4 z-10 flex -translate-y-1/2 items-center">{props.rightSlot}</div>
         ) : null}
       </div>
-      <PortalTooltip visible={!!props.collapsed && !!props.showTooltip && isHovered} anchor={itemRef.current}>
-        {props.label}
-      </PortalTooltip>
+      <PortalTooltip
+        open={!!props.collapsed && !!props.showTooltip && isHovered}
+        anchor={itemRef.current}
+        side="right"
+        content={props.label}
+      />
     </>
   );
 }
@@ -1647,29 +1616,33 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
             {!props.collapsed ? (
               <div className="flex w-full items-center justify-between">
                 <img src={bustlyWordmark} alt="Bustly" className="h-10 w-auto object-contain" />
-                <button
-                  type="button"
-                  onClick={props.onToggleCollapsed}
-                  className="[-webkit-app-region:no-drag] rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-gray-100"
-                >
-                  <img src={openSidebarIcon} alt="Collapse sidebar" className="h-[18px] w-[18px] shrink-0" />
-                </button>
+                <PortalTooltip content="Collapse Sidebar" side="bottom">
+                  <button
+                    type="button"
+                    onClick={props.onToggleCollapsed}
+                    className="[-webkit-app-region:no-drag] rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-gray-100"
+                  >
+                    <img src={openSidebarIcon} alt="Collapse sidebar" className="h-[18px] w-[18px] shrink-0" />
+                  </button>
+                </PortalTooltip>
               </div>
             ) : null}
             <div className={`transition-all duration-300 ${props.collapsed ? "flex w-full flex-col items-center gap-2" : "w-full"}`}>
               {props.collapsed ? (
-                <button
-                  type="button"
-                  onClick={props.onToggleCollapsed}
-                  className="[-webkit-app-region:no-drag] group relative flex h-10 w-10 items-center justify-center rounded-lg transition-colors hover:bg-gray-100"
-                >
-                  <img src={logoIcon} alt="Bustly" className="absolute h-8 w-8 transition-opacity duration-200 group-hover:opacity-0" />
-                  <img
-                    src={openSidebarIcon}
-                    alt="Expand sidebar"
-                    className="absolute h-[18px] w-[18px] opacity-0 transition-opacity duration-200 group-hover:opacity-100"
-                  />
-                </button>
+                <PortalTooltip content="Expand Sidebar" side="right">
+                  <button
+                    type="button"
+                    onClick={props.onToggleCollapsed}
+                    className="[-webkit-app-region:no-drag] group relative flex h-10 w-10 items-center justify-center rounded-lg transition-colors hover:bg-gray-100"
+                  >
+                    <img src={logoIcon} alt="Bustly" className="absolute h-8 w-8 transition-opacity duration-200 group-hover:opacity-0" />
+                    <img
+                      src={openSidebarIcon}
+                      alt="Expand sidebar"
+                      className="absolute h-[18px] w-[18px] opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+                    />
+                  </button>
+                </PortalTooltip>
               ) : null}
               <WorkspaceSwitcher
                 collapsed={props.collapsed}
@@ -1773,19 +1746,20 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                   }}
                 />
               ) : null}
-              <button
-                type="button"
-                onClick={() => {
-                  openCreateModal();
-                }}
-                className="flex h-10 w-10 items-center justify-center rounded-xl text-text-sub transition-all hover:bg-[#1A162F]/5 hover:text-text-main"
-                aria-label="New scenario"
-                title="New scenario"
-              >
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent bg-gray-50 transition-colors hover:border-[#1A162F]/10 hover:bg-white">
-                  <Plus size={18} weight="bold" />
-                </div>
-              </button>
+              <PortalTooltip content="New scenario" side="right">
+                <button
+                  type="button"
+                  onClick={() => {
+                    openCreateModal();
+                  }}
+                  className="flex h-10 w-10 items-center justify-center rounded-xl text-text-sub transition-all hover:bg-[#1A162F]/5 hover:text-text-main"
+                  aria-label="New scenario"
+                >
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent bg-gray-50 transition-colors hover:border-[#1A162F]/10 hover:bg-white">
+                    <Plus size={18} weight="bold" />
+                  </div>
+                </button>
+              </PortalTooltip>
             </div>
 
             <div className="w-full space-y-2 border-t border-[#E5E7EB] px-2 pt-4">

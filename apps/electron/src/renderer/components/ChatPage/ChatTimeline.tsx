@@ -37,6 +37,7 @@ import {
   Wrench,
 } from "@phosphor-icons/react";
 import loadingAnimation from "../../assets/lottie/thinking.json";
+import PortalTooltip from "../ui/PortalTooltip";
 import {
   parseInputArtifactsFromMessage,
   type ChatInputArtifact,
@@ -464,17 +465,19 @@ const TextNode = memo(function TextNode({
           ) : null}
         </div>
         <div className="mt-1.5 flex min-h-[24px] items-center gap-2 px-1">
-          <button
-            type="button"
-            aria-label="Copy message"
-            className="rounded-md p-1 text-gray-500 opacity-0 transition hover:bg-gray-100 hover:text-gray-900 group-hover/user:opacity-100"
-            onClick={async () => {
-              void copyText(node.text, onCopyText);
-              setCopied(true);
-            }}
-          >
-            {copied ? <Check size={14} weight="bold" /> : <Copy size={14} weight="bold" />}
-          </button>
+          <PortalTooltip content="Copy">
+            <button
+              type="button"
+              aria-label="Copy message"
+              className="rounded-md p-1 text-gray-500 opacity-0 transition hover:bg-gray-100 hover:text-gray-900 group-hover/user:opacity-100"
+              onClick={async () => {
+                void copyText(node.text, onCopyText);
+                setCopied(true);
+              }}
+            >
+              {copied ? <Check size={14} weight="bold" /> : <Copy size={14} weight="bold" />}
+            </button>
+          </PortalTooltip>
           {timeLabel ? <span className="text-[11px] font-medium text-gray-400">{timeLabel}</span> : null}
         </div>
       </div>

@@ -23,6 +23,7 @@ import {
 import { buildBustlyWorkspaceMainSessionKey } from "../../../shared/bustly-agent";
 import { extractText, extractThinking } from "../../lib/chat-extract";
 import Skeleton from "../ui/Skeleton";
+import PortalTooltip from "../ui/PortalTooltip";
 import { ChatTimeline, ChatTimelineWaitingIndicator } from "./ChatTimeline";
 import {
   buildInputArtifactsMessage,
@@ -525,6 +526,74 @@ function InputArtifactCard({
   );
 }
 
+const COMPOSER_PLACEHOLDERS = [
+  "Compare this month's revenue with last year...",
+  "Identify my most loyal customers...",
+  "Which products are low on stock?",
+  "Summarize the latest campaign performance...",
+  "Draft a marketing email for the new collection...",
+];
+
+function PlaceholderTicker({ items }: { items: string[] }) {
+  const list = useMemo(() => {
+    const trimmed = items.map((item) => item.trim()).filter(Boolean);
+    if (trimmed.length === 0) {
+      return [];
+    }
+    return [...trimmed, trimmed[0]];
+  }, [items]);
+  const [index, setIndex] = useState(0);
+  const [transitionEnabled, setTransitionEnabled] = useState(true);
+
+  useEffect(() => {
+    if (list.length <= 1) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      setIndex((value) => value + 1);
+      setTransitionEnabled(true);
+    }, 2600);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [list.length]);
+
+  useEffect(() => {
+    if (list.length <= 1 || index !== list.length - 1) {
+      return undefined;
+    }
+    const timeout = window.setTimeout(() => {
+      setTransitionEnabled(false);
+      setIndex(0);
+    }, 520);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [index, list.length]);
+
+  if (list.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="pointer-events-none absolute top-5 left-5 right-14 h-6 overflow-hidden">
+      <div
+        className="flex flex-col"
+        style={{
+          transform: `translateY(-${index * 24}px)`,
+          transition: transitionEnabled ? "transform 0.5s cubic-bezier(0.4, 0, 0.2, 1)" : "none",
+        }}
+      >
+        {list.map((item, itemIndex) => (
+          <div key={`${itemIndex}-${item}`} className="flex h-6 items-center truncate text-base font-normal leading-6 text-text-sub/40">
+            {item}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function ChatPage() {
   const { ensureGatewayReady, gatewayReady } = useAppState();
   const location = useLocation();
@@ -612,6 +681,8 @@ export default function ChatPage() {
     const searchParams = new URLSearchParams(location.search);
     return deriveScenarioLabel(currentSessionKey, searchParams.get("label"));
   }, [currentSessionKey, location.search]);
+  const showPlaceholderTicker =
+    connected && !subscriptionExpired && !draft && attachments.length === 0 && contextPaths.length === 0;
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search);
     setCurrentScenarioIconId(searchParams.get("icon"));
@@ -2657,10 +2728,12 @@ export default function ChatPage() {
                     subscriptionExpired
                       ? "Renew your plan to continue..."
                       : connected
-                        ? "Ask for follow-up changes..."
+                        ? showPlaceholderTicker
+                          ? ""
+                          : "Ask for follow-up changes..."
                         : "Connect to gateway to chat..."
                   }
-                  className="relative z-10 min-h-[44px] max-h-[200px] w-full resize-none border-none bg-transparent px-1 pr-14 text-base font-light text-text-main outline-none placeholder:text-text-sub/70 disabled:cursor-not-allowed disabled:text-[#8B93AA]"
+                  className="relative z-10 min-h-[44px] max-h-[200px] w-full resize-none border-none bg-transparent px-1 py-1 pr-14 text-base font-normal leading-6 text-text-main outline-none placeholder:text-text-sub/70 disabled:cursor-not-allowed disabled:text-[#8B93AA]"
                   onChange={(e) => setDraft(e.target.value)}
                   onCompositionStart={() => {
                     composerIsComposingRef.current = true;
@@ -2695,29 +2768,36 @@ export default function ChatPage() {
                   }}
                 />
 
+                {showPlaceholderTicker ? <PlaceholderTicker items={COMPOSER_PLACEHOLDERS} /> : null}
+
                 {activeRunId ? (
-                  <button
-                    type="button"
-                    className="absolute right-3 bottom-3 z-20 flex h-9 w-9 items-center justify-center rounded-full bg-[#17152F] text-white shadow-[0_8px_18px_rgba(23,21,47,0.18)] transition-transform duration-150 hover:scale-[1.02] active:scale-95"
-                    onClick={handleAbort}
-                    aria-label="Stop"
-                  >
-                    <Stop size={14} weight="fill" />
-                  </button>
+                  <div className="absolute right-3 bottom-3 z-20">
+                    <PortalTooltip content="Stop">
+                      <button
+                        type="button"
+                        className="flex h-9 w-9 items-center justify-center rounded-full bg-[#17152F] text-white shadow-[0_8px_18px_rgba(23,21,47,0.18)] transition-transform duration-150 hover:scale-[1.02] active:scale-95"
+                        onClick={handleAbort}
+                        aria-label="Stop"
+                      >
+                        <Stop size={14} weight="fill" />
+                      </button>
+                    </PortalTooltip>
+                  </div>
                 ) : null}
 
                 <div className="mt-1 flex items-center justify-between pt-2">
                   <div className={`flex items-center gap-2 ${subscriptionExpired ? "pointer-events-none opacity-50" : ""}`}>
-                    <button
-                      type="button"
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-text-sub transition-all duration-200 hover:bg-gray-100 hover:text-text-main active:bg-gray-200"
-                      onClick={() => {
-                        void handleSelectContextPaths();
-                      }}
-                      title="Add photos & files"
-                    >
-                      <Paperclip size={18} weight="bold" />
-                    </button>
+                    <PortalTooltip content="Add photos & files">
+                      <button
+                        type="button"
+                        className="flex h-8 w-8 items-center justify-center rounded-lg text-text-sub transition-all duration-200 hover:bg-gray-100 hover:text-text-main active:bg-gray-200"
+                        onClick={() => {
+                          void handleSelectContextPaths();
+                        }}
+                      >
+                        <Paperclip size={18} weight="bold" />
+                      </button>
+                    </PortalTooltip>
                   </div>
 
                   {activeRunId ? (
