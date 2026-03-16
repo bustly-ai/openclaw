@@ -47,7 +47,7 @@ import * as BustlyOAuth from "./bustly-oauth.js";
 import { resolveOpenClawAgentDir } from "../../../../src/agents/agent-paths";
 import { ensureAgentWorkspace } from "../../../../src/agents/workspace";
 import { loadConfig } from "../../../../src/config/config";
-import { updateSessionStore } from "../../../../src/config/sessions";
+import { loadSessionStore, updateSessionStore } from "../../../../src/config/sessions";
 import { resolveDefaultSessionStorePath } from "../../../../src/config/sessions/paths";
 import { applyAgentConfig, listAgentEntries } from "../../../../src/commands/agents.config";
 import { resolveGatewayLaunchAgentLabel } from "../../../../src/daemon/constants";
@@ -657,12 +657,28 @@ function resolveBustlyWorkspaceIdFromOAuthState(): string {
   return BustlyOAuth.readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
 }
 
-async function ensureBustlyPresetChannels(params: { agentId: string }): Promise<void> {
-  const legacyPresetIcons = new Set(["ChartBar", "TrendUp", "ChatCircleText"]);
-  const presets = BUSTLY_PRESET_CHANNELS
+function listEnabledBustlyPresetChannels() {
+  return BUSTLY_PRESET_CHANNELS
     .filter((entry) => entry.enabled !== false)
     .slice()
     .toSorted((a, b) => a.order - b.order);
+}
+
+function hasMissingBustlyPresetChannels(agentId: string): boolean {
+  const presets = listEnabledBustlyPresetChannels();
+  if (presets.length === 0) {
+    return false;
+  }
+  const store = loadSessionStore(resolveDefaultSessionStorePath(agentId));
+  return presets.some((preset) => {
+    const storeKey = buildBustlyAgentPresetChannelSessionKey(agentId, preset.slug);
+    return !store[storeKey];
+  });
+}
+
+async function ensureBustlyPresetChannels(params: { agentId: string }): Promise<void> {
+  const legacyPresetIcons = new Set(["ChartBar", "TrendUp", "ChatCircleText"]);
+  const presets = listEnabledBustlyPresetChannels();
   if (presets.length === 0) {
     return;
   }
@@ -2934,6 +2950,22 @@ void app.whenReady().then(async () => {
   } else {
     console.log("[Init] Configuration already exists and is valid");
     writeMainLog("Configuration already exists and is valid");
+    if (bustlyLoggedIn) {
+      const workspaceId = resolveBustlyWorkspaceIdFromOAuthState();
+      const agentId = workspaceId ? buildBustlyWorkspaceAgentId(workspaceId) : "";
+      if (agentId && hasMissingBustlyPresetChannels(agentId)) {
+        try {
+          await synchronizeBustlyWorkspaceContext();
+          writeMainLog("Synchronized Bustly workspace context for missing preset channels");
+        } catch (error) {
+          writeMainLog(
+            `Bustly workspace sync failed while restoring preset channels: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      } else {
+        writeMainLog("Skipped Bustly workspace sync; preset channels already exist");
+      }
+    }
     // Load existing config to get port and token
     const existingConfig = loadGatewayConfig();
     if (existingConfig) {
