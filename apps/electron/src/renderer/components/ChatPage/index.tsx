@@ -724,6 +724,8 @@ export default function ChatPage() {
     const searchParams = new URLSearchParams(location.search);
     return deriveScenarioLabel(currentSessionKey, searchParams.get("label"));
   }, [currentSessionKey, location.search]);
+  const canSendMessage =
+    connected && !subscriptionExpired && !sending && (draft.trim() || attachments.length > 0 || contextPaths.length > 0);
   const showPlaceholderTicker =
     connected && !subscriptionExpired && !draft && attachments.length === 0 && contextPaths.length === 0;
   useEffect(() => {
@@ -2872,6 +2874,9 @@ export default function ChatPage() {
                       if (isComposing) {
                         return;
                       }
+                      if (!canSendMessage) {
+                        return;
+                      }
                       if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();
                         void handleSend();
@@ -2929,19 +2934,11 @@ export default function ChatPage() {
                     <button
                       type="button"
                       className={`flex h-7 w-7 items-center justify-center rounded-lg shadow-sm transition-all active:scale-95 ${
-                        connected &&
-                        !subscriptionExpired &&
-                        !sending &&
-                        (draft.trim() || attachments.length > 0 || contextPaths.length > 0)
+                        canSendMessage
                           ? "bg-black text-white hover:bg-black/90 hover:shadow-md"
                           : "cursor-not-allowed bg-gray-100 text-gray-300"
                       }`}
-                      disabled={
-                        !connected ||
-                        subscriptionExpired ||
-                        sending ||
-                        (!draft.trim() && attachments.length === 0 && contextPaths.length === 0)
-                      }
+                      disabled={!canSendMessage}
                       onClick={() => {
                         void handleSend();
                       }}
