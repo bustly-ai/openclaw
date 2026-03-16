@@ -27,7 +27,6 @@ Before acting:
 1. Read `SOUL.md`
 2. Read `USER.md`
 3. Read `memory/YYYY-MM-DD.md` for today and yesterday if present
-4. In the main merchant session, also read `MEMORY.md`
 
 Do this first. Store operations are context-sensitive.
 

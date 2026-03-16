@@ -471,7 +471,7 @@ Notes:
 
 - `main` is the canonical direct-chat key; global/unknown are hidden.
 - `messageLimit > 0` fetches last N messages per session (tool messages filtered).
-- Session targeting is controlled by `tools.sessions.visibility` (default `tree`: current session + spawned subagent sessions). If you run a shared agent for multiple users, consider setting `tools.sessions.visibility: "self"` to prevent cross-session browsing.
+- Session targeting is controlled by `tools.sessions.visibility` (default `agent`: any session in the current agent id). If you run a shared agent for multiple users, consider setting `tools.sessions.visibility: "self"` to prevent cross-session browsing.
 - `sessions_send` waits for final completion when `timeoutSeconds > 0`.
 - Delivery/announce happens after completion and is best-effort; `status: "ok"` confirms the agent run finished, not that the announce was delivered.
 - `sessions_spawn` starts a sub-agent run and posts an announce reply back to the requester chat.

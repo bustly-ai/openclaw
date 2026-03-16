@@ -50,7 +50,7 @@ function mockGatewayWithHistory(
 }
 
 describe("sessions tools visibility", () => {
-  it("defaults to tree visibility (self + spawned) for sessions_history", async () => {
+  it("defaults to agent visibility for sessions_history", async () => {
     mockConfig = {
       session: { mainKey: "main", scope: "per-sender" },
       tools: { agentToAgent: { enabled: false } },
@@ -69,13 +69,15 @@ describe("sessions tools visibility", () => {
     const tool = getSessionsHistoryTool();
 
     const denied = await tool.execute("call1", {
-      sessionKey: "agent:main:discord:direct:someone-else",
+      sessionKey: "agent:other:discord:direct:someone-else",
     });
     expect(denied.details).toMatchObject({ status: "forbidden" });
 
-    const allowed = await tool.execute("call2", { sessionKey: "subagent:child-1" });
+    const allowed = await tool.execute("call2", {
+      sessionKey: "agent:main:discord:direct:someone-else",
+    });
     expect(allowed.details).toMatchObject({
-      sessionKey: "subagent:child-1",
+      sessionKey: "agent:main:discord:direct:someone-else",
     });
   });
 

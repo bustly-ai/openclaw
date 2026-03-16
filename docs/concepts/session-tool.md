@@ -185,7 +185,7 @@ Session tools can be scoped to reduce cross-session access.
 
 Default behavior:
 
-- `tools.sessions.visibility` defaults to `tree` (current session + spawned subagent sessions).
+- `tools.sessions.visibility` defaults to `agent` (any session in the current agent id).
 - For sandboxed sessions, `agents.defaults.sandbox.sessionToolsVisibility` can hard-clamp visibility.
 
 Config:
@@ -195,8 +195,8 @@ Config:
   tools: {
     sessions: {
       // "self" | "tree" | "agent" | "all"
-      // default: "tree"
-      visibility: "tree",
+      // default: "agent"
+      visibility: "agent",
     },
   },
   agents: {

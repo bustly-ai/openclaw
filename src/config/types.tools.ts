@@ -547,7 +547,7 @@ export type ToolsConfig = {
    * Session tool visibility controls which sessions can be targeted by session tools
    * (sessions_list, sessions_history, sessions_send).
    *
-   * Default: "tree" (current session + spawned subagent sessions).
+   * Default: "agent" (any session in the current agent id).
    */
   sessions?: {
     /**

@@ -27,7 +27,7 @@ export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionTools
   if (value === "self" || value === "tree" || value === "agent" || value === "all") {
     return value;
   }
-  return "tree";
+  return "agent";
 }
 
 export function resolveEffectiveSessionToolsVisibility(params: {
