@@ -599,6 +599,7 @@ export default function ChatPage() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const composerAreaRef = useRef<HTMLDivElement | null>(null);
+  const composerIsComposingRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
   const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
   const lastAppliedPromptRef = useRef<string | null>(null);
@@ -2661,7 +2662,21 @@ export default function ChatPage() {
                   }
                   className="relative z-10 min-h-[44px] max-h-[200px] w-full resize-none border-none bg-transparent px-1 pr-14 text-base font-light text-text-main outline-none placeholder:text-text-sub/70 disabled:cursor-not-allowed disabled:text-[#8B93AA]"
                   onChange={(e) => setDraft(e.target.value)}
+                  onCompositionStart={() => {
+                    composerIsComposingRef.current = true;
+                  }}
+                  onCompositionEnd={() => {
+                    composerIsComposingRef.current = false;
+                  }}
                   onKeyDown={(e) => {
+                    const nativeEvent = e.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number };
+                    const isComposing =
+                      composerIsComposingRef.current ||
+                      nativeEvent.isComposing === true ||
+                      nativeEvent.keyCode === 229;
+                    if (isComposing) {
+                      return;
+                    }
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
                       void handleSend();

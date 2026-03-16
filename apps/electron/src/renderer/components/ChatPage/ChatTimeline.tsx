@@ -591,11 +591,13 @@ const ToolNode = memo(function ToolNode({
         <div
           className={cx(
             "ml-11 overflow-hidden transition-all duration-300 ease-in-out",
-            expanded ? "mb-4 max-h-[1000px] opacity-100" : "max-h-0 opacity-0",
+            expanded ? "mb-4 max-h-[360px] opacity-100" : "max-h-0 opacity-0",
           )}
         >
           <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-3">
-            <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-gray-500">{node.detail}</pre>
+            <pre className="max-h-[300px] overflow-auto whitespace-pre-wrap break-words pr-1 text-xs leading-relaxed text-gray-500">
+              {node.detail}
+            </pre>
           </div>
         </div>
       </div>
