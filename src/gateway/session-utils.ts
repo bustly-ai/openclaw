@@ -821,8 +821,7 @@ export function listSessionsFromStore(params: {
         lastTo: deliveryFields.lastTo ?? entry?.lastTo,
         lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
       };
-    })
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    });
 
   if (search) {
     sessions = sessions.filter((s) => {

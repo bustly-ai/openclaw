@@ -508,6 +508,36 @@ describe("listSessionsFromStore search", () => {
     }
   });
 
+  test("preserves store insertion order", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:first": {
+        sessionId: "sess-first",
+        updatedAt: Date.now() - 1_000,
+      } as SessionEntry,
+      "agent:main:second": {
+        sessionId: "sess-second",
+        updatedAt: Date.now(),
+      } as SessionEntry,
+      "agent:main:third": {
+        sessionId: "sess-third",
+        updatedAt: Date.now() - 2_000,
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual([
+      "agent:main:first",
+      "agent:main:second",
+      "agent:main:third",
+    ]);
+  });
+
   test("filters sessions across display metadata and key fields", () => {
     const cases = [
       { search: "WORK PROJECT", expectedKey: "agent:main:work-project" },

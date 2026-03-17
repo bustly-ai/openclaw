@@ -300,7 +300,7 @@ describe("gateway server sessions", () => {
     });
     expect(limited.ok).toBe(true);
     expect(limited.payload?.sessions).toHaveLength(1);
-    expect(limited.payload?.sessions[0]?.key).toBe("global");
+    expect(limited.payload?.sessions[0]?.key).toBe("agent:main:main");
 
     const patched = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
       key: "agent:main:main",
