@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
@@ -104,9 +104,54 @@ type ReconnectStatus = {
   runId: string;
 };
 
+type RetryPayload = {
+  draft: string;
+  attachments: Attachment[];
+  contextPaths: ContextPath[];
+};
+
+type StreamSegmentState = {
+  assistant: number;
+  assistantClosed: boolean;
+  thinking: number;
+  thinkingOpen: boolean;
+};
+
+type SessionViewState = {
+  loading: boolean;
+  sending: boolean;
+  timeline: TimelineItem[];
+  draft: string;
+  attachments: Attachment[];
+  contextPaths: ContextPath[];
+  activeRunId: string | null;
+  compactingRunId: string | null;
+  reconnectStatus: ReconnectStatus | null;
+  sessionUsage: SessionUsageSummary;
+};
+
+type SessionRuntimeState = {
+  view: SessionViewState;
+  seqCounter: number;
+  toolTimers: Map<string, number>;
+  runSeqBase: Map<string, number>;
+  settledRunIds: Set<string>;
+  discardedRunIds: Set<string>;
+  retryPayloads: Map<string, RetryPayload>;
+  streamSegments: Map<string, StreamSegmentState>;
+  historyLoaded: boolean;
+  usageLoaded: boolean;
+};
+
 const TOOL_RUNNING_MIN_VISIBLE_MS = 600;
 const SIDEBAR_TASKS_REFRESH_EVENT = "openclaw:sidebar-refresh-tasks";
+const SIDEBAR_TASK_RUN_STATE_EVENT = "openclaw:sidebar-task-run-state";
 const CHAT_MODEL_LEVEL_STORAGE_KEY = "bustly.chat.model-level.v1";
+const INITIAL_SESSION_USAGE: SessionUsageSummary = {
+  totalTokens: null,
+  contextTokens: null,
+  remainingTokens: null,
+};
 
 const CHAT_MODEL_LEVELS = [
   { id: "lite", modelRef: "bustly/chat.lite", label: "Bustly Lite", description: "Fast & efficient for daily tasks." },
@@ -125,6 +170,18 @@ function nextId(prefix: string) {
 
 function notifySidebarTasksRefresh() {
   window.dispatchEvent(new Event(SIDEBAR_TASKS_REFRESH_EVENT));
+}
+
+function isSessionViewRunning(view: SessionViewState): boolean {
+  return Boolean(view.sending || view.activeRunId || view.compactingRunId || view.reconnectStatus);
+}
+
+function notifySidebarTaskRunState(sessionKey: string, running: boolean) {
+  window.dispatchEvent(
+    new CustomEvent(SIDEBAR_TASK_RUN_STATE_EVENT, {
+      detail: { sessionKey, running },
+    }),
+  );
 }
 
 function hashString(value: string): number {
@@ -185,6 +242,40 @@ function formatTokenCount(value: number | null | undefined): string {
     return `${Math.round(value / 100) / 10}k`;
   }
   return String(Math.round(value));
+}
+
+function resolveStateUpdate<T>(action: SetStateAction<T>, prev: T): T {
+  return typeof action === "function" ? (action as (current: T) => T)(prev) : action;
+}
+
+function createInitialSessionViewState(): SessionViewState {
+  return {
+    loading: true,
+    sending: false,
+    timeline: [],
+    draft: "",
+    attachments: [],
+    contextPaths: [],
+    activeRunId: null,
+    compactingRunId: null,
+    reconnectStatus: null,
+    sessionUsage: { ...INITIAL_SESSION_USAGE },
+  };
+}
+
+function createSessionRuntimeState(): SessionRuntimeState {
+  return {
+    view: createInitialSessionViewState(),
+    seqCounter: 1_000_000_000,
+    toolTimers: new Map(),
+    runSeqBase: new Map(),
+    settledRunIds: new Set(),
+    discardedRunIds: new Set(),
+    retryPayloads: new Map(),
+    streamSegments: new Map(),
+    historyLoaded: false,
+    usageLoaded: false,
+  };
 }
 
 function resolveChatTerminalState(payload: {
@@ -654,11 +745,7 @@ export default function ChatPage() {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [compactingRunId, setCompactingRunId] = useState<string | null>(null);
   const [reconnectStatus, setReconnectStatus] = useState<ReconnectStatus | null>(null);
-  const [sessionUsage, setSessionUsage] = useState<SessionUsageSummary>({
-    totalTokens: null,
-    contextTokens: null,
-    remainingTokens: null,
-  });
+  const [sessionUsage, setSessionUsage] = useState<SessionUsageSummary>({ ...INITIAL_SESSION_USAGE });
   const [modelLevelOpen, setModelLevelOpen] = useState(false);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [composerAreaHeight, setComposerAreaHeight] = useState(176);
@@ -684,29 +771,14 @@ export default function ChatPage() {
   });
 
   const clientRef = useRef<GatewayBrowserClient | null>(null);
-  const seqCounterRef = useRef(1_000_000_000);
-  const toolTimersRef = useRef<Map<string, number>>(new Map());
-  const runSeqBaseRef = useRef<Map<string, number>>(new Map());
-  const settledRunIdsRef = useRef<Set<string>>(new Set());
-  const discardedRunIdsRef = useRef<Set<string>>(new Set());
-  const retryPayloadsRef = useRef<Map<string, { draft: string; attachments: Attachment[]; contextPaths: ContextPath[] }>>(new Map());
+  const sessionRuntimesRef = useRef<Map<string, SessionRuntimeState>>(new Map());
+  const currentSessionKeyRef = useRef("");
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const modelTriggerRef = useRef<HTMLButtonElement | null>(null);
   const previewViewportRef = useRef<HTMLDivElement | null>(null);
   const previewImageRef = useRef<HTMLImageElement | null>(null);
   const previewWheelDeltaRef = useRef(0);
   const previewWheelLastStepAtRef = useRef(0);
-  const streamSegmentsRef = useRef<
-    Map<
-      string,
-      {
-        assistant: number;
-        assistantClosed: boolean;
-        thinking: number;
-        thinkingOpen: boolean;
-      }
-    >
-  >(new Map());
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const composerAreaRef = useRef<HTMLDivElement | null>(null);
@@ -728,6 +800,107 @@ export default function ChatPage() {
     connected && !subscriptionExpired && !sending && (draft.trim() || attachments.length > 0 || contextPaths.length > 0);
   const showPlaceholderTicker =
     connected && !subscriptionExpired && !draft && attachments.length === 0 && contextPaths.length === 0;
+
+  const getSessionRuntime = useCallback((sessionKey: string) => {
+    const normalized = sessionKey.trim();
+    let runtime = sessionRuntimesRef.current.get(normalized);
+    if (!runtime) {
+      runtime = createSessionRuntimeState();
+      sessionRuntimesRef.current.set(normalized, runtime);
+    }
+    return runtime;
+  }, []);
+
+  const applyVisibleSessionView = useCallback((view: SessionViewState) => {
+    setLoading(view.loading);
+    setSending(view.sending);
+    setTimeline(view.timeline);
+    setDraft(view.draft);
+    setAttachments(view.attachments);
+    setContextPaths(view.contextPaths);
+    setActiveRunId(view.activeRunId);
+    setCompactingRunId(view.compactingRunId);
+    setReconnectStatus(view.reconnectStatus);
+    setSessionUsage(view.sessionUsage);
+  }, []);
+
+  const replaceSessionView = useCallback((sessionKey: string, nextView: SessionViewState) => {
+    const runtime = getSessionRuntime(sessionKey);
+    const wasRunning = isSessionViewRunning(runtime.view);
+    const isRunning = isSessionViewRunning(nextView);
+    runtime.view = nextView;
+    if (wasRunning !== isRunning) {
+      notifySidebarTaskRunState(sessionKey, isRunning);
+    }
+    if (currentSessionKeyRef.current === sessionKey) {
+      applyVisibleSessionView(nextView);
+    }
+    return runtime;
+  }, [applyVisibleSessionView, getSessionRuntime]);
+
+  const updateSessionView = useCallback((
+    sessionKey: string,
+    updater: (view: SessionViewState) => SessionViewState,
+  ) => {
+    const runtime = getSessionRuntime(sessionKey);
+    return replaceSessionView(sessionKey, updater(runtime.view));
+  }, [getSessionRuntime, replaceSessionView]);
+
+  const setSessionLoading = useCallback((sessionKey: string, action: SetStateAction<boolean>) => {
+    updateSessionView(sessionKey, (view) => ({ ...view, loading: resolveStateUpdate(action, view.loading) }));
+  }, [updateSessionView]);
+
+  const setSessionSending = useCallback((sessionKey: string, action: SetStateAction<boolean>) => {
+    updateSessionView(sessionKey, (view) => ({ ...view, sending: resolveStateUpdate(action, view.sending) }));
+  }, [updateSessionView]);
+
+  const setSessionTimeline = useCallback((sessionKey: string, action: SetStateAction<TimelineItem[]>) => {
+    updateSessionView(sessionKey, (view) => ({ ...view, timeline: resolveStateUpdate(action, view.timeline) }));
+  }, [updateSessionView]);
+
+  const setSessionDraft = useCallback((sessionKey: string, action: SetStateAction<string>) => {
+    updateSessionView(sessionKey, (view) => ({ ...view, draft: resolveStateUpdate(action, view.draft) }));
+  }, [updateSessionView]);
+
+  const setSessionAttachments = useCallback((sessionKey: string, action: SetStateAction<Attachment[]>) => {
+    updateSessionView(sessionKey, (view) => ({ ...view, attachments: resolveStateUpdate(action, view.attachments) }));
+  }, [updateSessionView]);
+
+  const setSessionContextPaths = useCallback((sessionKey: string, action: SetStateAction<ContextPath[]>) => {
+    updateSessionView(sessionKey, (view) => ({ ...view, contextPaths: resolveStateUpdate(action, view.contextPaths) }));
+  }, [updateSessionView]);
+
+  const setSessionActiveRunId = useCallback((sessionKey: string, action: SetStateAction<string | null>) => {
+    updateSessionView(sessionKey, (view) => ({ ...view, activeRunId: resolveStateUpdate(action, view.activeRunId) }));
+  }, [updateSessionView]);
+
+  const setSessionCompactingRunId = useCallback((sessionKey: string, action: SetStateAction<string | null>) => {
+    updateSessionView(sessionKey, (view) => ({
+      ...view,
+      compactingRunId: resolveStateUpdate(action, view.compactingRunId),
+    }));
+  }, [updateSessionView]);
+
+  const setSessionReconnectStatus = useCallback((sessionKey: string, action: SetStateAction<ReconnectStatus | null>) => {
+    updateSessionView(sessionKey, (view) => ({
+      ...view,
+      reconnectStatus: resolveStateUpdate(action, view.reconnectStatus),
+    }));
+  }, [updateSessionView]);
+
+  const setSessionUsageState = useCallback((sessionKey: string, action: SetStateAction<SessionUsageSummary>) => {
+    updateSessionView(sessionKey, (view) => ({
+      ...view,
+      sessionUsage: resolveStateUpdate(action, view.sessionUsage),
+    }));
+  }, [updateSessionView]);
+  useEffect(() => {
+    currentSessionKeyRef.current = currentSessionKey;
+    const runtime = getSessionRuntime(currentSessionKey);
+    setCurrentScenarioIconId(null);
+    applyVisibleSessionView(runtime.view);
+  }, [applyVisibleSessionView, currentSessionKey, getSessionRuntime]);
+
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search);
     setCurrentScenarioIconId(searchParams.get("icon"));
@@ -802,9 +975,13 @@ export default function ChatPage() {
       typeof totalTokens === "number" && typeof contextTokens === "number"
         ? Math.max(0, contextTokens - totalTokens)
         : null;
-    setCurrentScenarioIconId(typeof row?.icon === "string" ? row.icon : null);
-    setSessionUsage({ totalTokens, contextTokens, remainingTokens });
-  }, []);
+    const runtime = getSessionRuntime(sessionKey);
+    runtime.usageLoaded = true;
+    if (currentSessionKeyRef.current === sessionKey) {
+      setCurrentScenarioIconId(typeof row?.icon === "string" ? row.icon : null);
+    }
+    setSessionUsageState(sessionKey, { totalTokens, contextTokens, remainingTokens });
+  }, [getSessionRuntime, setSessionUsageState]);
 
   const refreshSessionUsage = useCallback(
     (client: GatewayBrowserClient, sessionKey: string) => {
@@ -816,6 +993,7 @@ export default function ChatPage() {
   );
 
   const appendOrUpdateText = useCallback((params: {
+    sessionKey: string;
     key: string;
     role: ChatRole;
     runId?: string;
@@ -827,7 +1005,7 @@ export default function ChatPage() {
     streaming?: boolean;
     final?: boolean;
   }) => {
-    setTimeline((prev) => {
+    setSessionTimeline(params.sessionKey, (prev) => {
       const idx = prev.findIndex((item) => item.kind === "text" && item.id === params.key);
       const ts = params.timestamp ?? Date.now();
       if (idx === -1) {
@@ -865,13 +1043,13 @@ export default function ChatPage() {
       };
       return next;
     });
-  }, []);
+  }, [setSessionTimeline]);
 
-  const markRunFinished = useCallback((runId: string | null) => {
+  const markRunFinished = useCallback((sessionKey: string, runId: string | null) => {
     if (!runId) {
       return;
     }
-    setTimeline((prev) =>
+    setSessionTimeline(sessionKey, (prev) =>
       prev.map((item) => {
         if (item.kind !== "text") {
           return item;
@@ -885,13 +1063,13 @@ export default function ChatPage() {
         return { ...item, streaming: false };
       }),
     );
-  }, []);
+  }, [setSessionTimeline]);
 
-  const markLastAssistantAsFinal = useCallback((runId: string | null) => {
+  const markLastAssistantAsFinal = useCallback((sessionKey: string, runId: string | null) => {
     if (!runId) {
       return;
     }
-    setTimeline((prev) => {
+    setSessionTimeline(sessionKey, (prev) => {
       let targetId: string | null = null;
       for (const item of prev) {
         if (item.kind !== "text") {
@@ -932,13 +1110,13 @@ export default function ChatPage() {
       });
       return changed ? next : prev;
     });
-  }, []);
+  }, [setSessionTimeline]);
 
-  const settleToolsForRun = useCallback((runId: string | null, status: ToolStatus) => {
+  const settleToolsForRun = useCallback((sessionKey: string, runId: string | null, status: ToolStatus) => {
     if (!runId) {
       return;
     }
-    setTimeline((prev) => {
+    setSessionTimeline(sessionKey, (prev) => {
       let changed = false;
       const next = prev.map((item) => {
         if (item.kind !== "tool" || item.runId !== runId || item.status !== "running") {
@@ -949,21 +1127,23 @@ export default function ChatPage() {
       });
       return changed ? next : prev;
     });
-  }, []);
+  }, [setSessionTimeline]);
 
-  const finalizeRunState = useCallback((runId: string | null, toolStatus: ToolStatus = "completed") => {
-    markRunFinished(runId);
-    settleToolsForRun(runId, toolStatus);
-    setActiveRunId((prev) => (prev === runId ? null : prev));
-    setCompactingRunId((prev) => (prev === runId ? null : prev));
+  const finalizeRunState = useCallback((sessionKey: string, runId: string | null, toolStatus: ToolStatus = "completed") => {
+    const runtime = getSessionRuntime(sessionKey);
+    markRunFinished(sessionKey, runId);
+    settleToolsForRun(sessionKey, runId, toolStatus);
+    setSessionActiveRunId(sessionKey, (prev) => (prev === runId ? null : prev));
+    setSessionCompactingRunId(sessionKey, (prev) => (prev === runId ? null : prev));
     if (runId) {
-      settledRunIdsRef.current.add(runId);
-      runSeqBaseRef.current.delete(runId);
+      runtime.settledRunIds.add(runId);
+      runtime.runSeqBase.delete(runId);
     }
-    streamSegmentsRef.current.delete(runId ?? "__unknown__");
-  }, [markRunFinished, settleToolsForRun]);
+    runtime.streamSegments.delete(runId ?? "__unknown__");
+  }, [getSessionRuntime, markRunFinished, setSessionActiveRunId, setSessionCompactingRunId, settleToolsForRun]);
 
   const upsertRunError = useCallback((params: {
+    sessionKey: string;
     runId?: string;
     seq: number;
     timestamp: number;
@@ -973,7 +1153,7 @@ export default function ChatPage() {
     const key = params.runId ? `run:${params.runId}:error` : nextId("run-error");
     const reason = params.reason.trim() || "Execution error.";
     const description = params.description?.trim() || describeExecutionError(reason);
-    setTimeline((prev) => {
+    setSessionTimeline(params.sessionKey, (prev) => {
       const idx = prev.findIndex((item) => item.kind === "error" && item.id === key);
       if (idx === -1) {
         const next: ErrorItem = {
@@ -1001,21 +1181,21 @@ export default function ChatPage() {
       };
       return next;
     });
-  }, []);
+  }, [setSessionTimeline]);
 
-  const removeRunError = useCallback((runId: string | null | undefined) => {
+  const removeRunError = useCallback((sessionKey: string, runId: string | null | undefined) => {
     if (!runId) {
       return;
     }
     const errorKey = `run:${runId}:error`;
-    setTimeline((prev) => {
+    setSessionTimeline(sessionKey, (prev) => {
       const next = prev.filter((item) => item.id !== errorKey);
       return next.length === prev.length ? prev : next;
     });
-  }, []);
+  }, [setSessionTimeline]);
 
-  const clearReconnectStatus = useCallback((runId?: string | null) => {
-    setReconnectStatus((prev) => {
+  const clearReconnectStatus = useCallback((sessionKey: string, runId?: string | null) => {
+    setSessionReconnectStatus(sessionKey, (prev) => {
       if (!prev) {
         return prev;
       }
@@ -1024,9 +1204,10 @@ export default function ChatPage() {
       }
       return null;
     });
-  }, []);
+  }, [setSessionReconnectStatus]);
 
   const upsertTool = useCallback((params: {
+    sessionKey: string;
     runId?: string;
     toolCallId: string;
     seq: number;
@@ -1038,8 +1219,9 @@ export default function ChatPage() {
     isError?: boolean;
   }) => {
     const key = `tool:${params.toolCallId}`;
+    const runtime = getSessionRuntime(params.sessionKey);
     const applyCompletion = (status: ToolStatus, output?: string) => {
-      setTimeline((prev) => {
+      setSessionTimeline(params.sessionKey, (prev) => {
         const idx = prev.findIndex((item) => item.kind === "tool" && item.id === key);
         if (idx === -1) {
           return prev;
@@ -1055,7 +1237,7 @@ export default function ChatPage() {
       });
     };
 
-    setTimeline((prev) => {
+    setSessionTimeline(params.sessionKey, (prev) => {
       const idx = prev.findIndex((item) => item.kind === "tool" && item.id === key);
       if (idx === -1) {
         const created: ToolItem = {
@@ -1093,7 +1275,7 @@ export default function ChatPage() {
     });
 
     if (params.phase === "result") {
-      const timerMap = toolTimersRef.current;
+      const timerMap = runtime.toolTimers;
       const existing = timerMap.get(key);
       if (existing != null) {
         window.clearTimeout(existing);
@@ -1115,7 +1297,7 @@ export default function ChatPage() {
       }, TOOL_RUNNING_MIN_VISIBLE_MS + 20);
 
       // If tool already visible long enough, complete immediately
-      setTimeline((prev) => {
+      setSessionTimeline(params.sessionKey, (prev) => {
         const idx = prev.findIndex((item) => item.kind === "tool" && item.id === key);
         if (idx === -1) {
           return prev;
@@ -1138,34 +1320,7 @@ export default function ChatPage() {
         return next;
       });
     }
-  }, []);
-
-  const resetSessionView = useCallback(() => {
-    setTimeline([]);
-    setDraft("");
-    setAttachments([]);
-    setContextPaths([]);
-    setActiveRunId(null);
-    setCompactingRunId(null);
-    setSessionUsage({
-      totalTokens: null,
-      contextTokens: null,
-      remainingTokens: null,
-    });
-    setError(null);
-    setConnectionNotice(null);
-    setReconnectStatus(null);
-    seqCounterRef.current = 1_000_000_000;
-    streamSegmentsRef.current.clear();
-    runSeqBaseRef.current.clear();
-    settledRunIdsRef.current.clear();
-    discardedRunIdsRef.current.clear();
-    retryPayloadsRef.current.clear();
-    for (const timer of toolTimersRef.current.values()) {
-      window.clearTimeout(timer);
-    }
-    toolTimersRef.current.clear();
-  }, []);
+  }, [getSessionRuntime, setSessionTimeline]);
 
   const loadHistory = useCallback(async (client: GatewayBrowserClient, sessionKey: string) => {
     const res = await client.request<{ messages?: unknown[] }>("chat.history", {
@@ -1287,12 +1442,15 @@ export default function ChatPage() {
     }
 
     items.push(...toolsByCallId.values());
-    setTimeline((prev) => {
+    const runtime = getSessionRuntime(sessionKey);
+    runtime.historyLoaded = true;
+    setSessionTimeline(sessionKey, (prev) => {
       const localErrors = prev.filter((item): item is ErrorItem => item.kind === "error");
       const merged = [...items, ...localErrors];
       return merged.toSorted(compareTimeline);
     });
-  }, []);
+    setSessionLoading(sessionKey, false);
+  }, [getSessionRuntime, setSessionLoading, setSessionTimeline]);
 
   const connectGateway = useCallback(
     async (status: GatewayStatus) => {
@@ -1329,10 +1487,16 @@ export default function ChatPage() {
           setConnected(true);
           setError(null);
           setConnectionNotice(null);
-          void loadHistory(client, currentSessionKey).catch((err) => {
-            setError(err instanceof Error ? err.message : String(err));
-          });
-          void loadSessionUsage(client, currentSessionKey).catch((err) => {
+          const sessionKey = currentSessionKeyRef.current;
+          const runtime = getSessionRuntime(sessionKey);
+          if (!runtime.historyLoaded) {
+            void loadHistory(client, sessionKey).catch((err) => {
+              setError(err instanceof Error ? err.message : String(err));
+            });
+          } else {
+            setSessionLoading(sessionKey, false);
+          }
+          void loadSessionUsage(client, sessionKey).catch((err) => {
             setError(err instanceof Error ? err.message : String(err));
           });
         },
@@ -1367,14 +1531,16 @@ export default function ChatPage() {
               message?: unknown;
               errorMessage?: string;
             };
-            if (!payload || payload.sessionKey !== currentSessionKey) {
+            const sessionKey = typeof payload?.sessionKey === "string" ? payload.sessionKey : "";
+            if (!payload || !sessionKey) {
               return;
             }
+            const runtime = getSessionRuntime(sessionKey);
             const runId = typeof payload.runId === "string" ? payload.runId : null;
-            if (runId && discardedRunIdsRef.current.has(runId)) {
+            if (runId && runtime.discardedRunIds.has(runId)) {
               return;
             }
-            if (runId && settledRunIdsRef.current.has(runId) && payload.state !== "final" && payload.state !== "aborted" && payload.state !== "error") {
+            if (runId && runtime.settledRunIds.has(runId) && payload.state !== "final" && payload.state !== "aborted" && payload.state !== "error") {
               return;
             }
             const terminalState = resolveChatTerminalState(payload);
@@ -1382,8 +1548,8 @@ export default function ChatPage() {
               return;
             }
             if (terminalState === "final") {
-              finalizeRunState(runId, "completed");
-              clearReconnectStatus(runId);
+              finalizeRunState(sessionKey, runId, "completed");
+              clearReconnectStatus(sessionKey, runId);
               if (!payload.message) {
                 return;
               }
@@ -1400,39 +1566,41 @@ export default function ChatPage() {
               const command = isCommandMessage(payload.message);
               const role = command ? "system" : readMessageRole(payload.message);
               appendOrUpdateText({
+                sessionKey,
                 key: command && runId ? `run:${runId}:command:status` : `chat:${runId ?? nextId("final")}`,
                 role,
                 runId: runId ?? undefined,
-                seq: seqCounterRef.current++,
+                seq: runtime.seqCounter++,
                 text: messageText,
                 timestamp,
                 streaming: false,
                 final: role === "assistant",
               });
               if (role === "assistant") {
-                markLastAssistantAsFinal(runId);
+                markLastAssistantAsFinal(sessionKey, runId);
               }
               if (command) {
-                void loadHistory(client, currentSessionKey).catch((err) => {
+                void loadHistory(client, sessionKey).catch((err) => {
                   setError(err instanceof Error ? err.message : String(err));
                 });
-                refreshSessionUsage(client, currentSessionKey);
+                refreshSessionUsage(client, sessionKey);
               }
               notifySidebarTasksRefresh();
               return;
             }
             if (terminalState === "aborted" || terminalState === "error") {
-              finalizeRunState(runId, "error");
-              clearReconnectStatus(runId);
+              finalizeRunState(sessionKey, runId, "error");
+              clearReconnectStatus(sessionKey, runId);
               if (terminalState === "error") {
                 upsertRunError({
+                  sessionKey,
                   runId: runId ?? undefined,
-                  seq: seqCounterRef.current++,
+                  seq: runtime.seqCounter++,
                   timestamp: Date.now(),
                   reason: payload.errorMessage ?? "Execution error.",
                 });
               }
-              refreshSessionUsage(client, currentSessionKey);
+              refreshSessionUsage(client, sessionKey);
               notifySidebarTasksRefresh();
               return;
             }
@@ -1447,28 +1615,30 @@ export default function ChatPage() {
               sessionKey?: string;
               data?: Record<string, unknown>;
             };
-            if (!payload || payload.sessionKey !== currentSessionKey) {
+            const sessionKey = typeof payload?.sessionKey === "string" ? payload.sessionKey : "";
+            if (!payload || !sessionKey) {
               return;
             }
+            const runtime = getSessionRuntime(sessionKey);
             const runId = typeof payload.runId === "string" ? payload.runId : null;
-            if (runId && discardedRunIdsRef.current.has(runId)) {
+            if (runId && runtime.discardedRunIds.has(runId)) {
               return;
             }
-            if (runId && settledRunIdsRef.current.has(runId) && payload.stream !== "lifecycle" && payload.stream !== "error") {
+            if (runId && runtime.settledRunIds.has(runId) && payload.stream !== "lifecycle" && payload.stream !== "error") {
               return;
             }
-            let seq = seqCounterRef.current++;
+            let seq = runtime.seqCounter++;
             if (runId) {
-              let base = runSeqBaseRef.current.get(runId);
+              let base = runtime.runSeqBase.get(runId);
               if (base == null) {
-                base = seqCounterRef.current;
-                runSeqBaseRef.current.set(runId, base);
-                seqCounterRef.current += 100_000;
+                base = runtime.seqCounter;
+                runtime.runSeqBase.set(runId, base);
+                runtime.seqCounter += 100_000;
               }
               if (typeof payload.seq === "number" && Number.isFinite(payload.seq)) {
                 seq = base + payload.seq;
               } else {
-                seq = base + (seqCounterRef.current++ % 100_000);
+                seq = base + (runtime.seqCounter++ % 100_000);
               }
             } else if (typeof payload.seq === "number" && Number.isFinite(payload.seq)) {
               seq = payload.seq;
@@ -1478,7 +1648,7 @@ export default function ChatPage() {
             const data = payload.data ?? {};
             const runKey = runId ?? "__unknown__";
             const segmentState =
-              streamSegmentsRef.current.get(runKey) ??
+              runtime.streamSegments.get(runKey) ??
               { assistant: 0, assistantClosed: true, thinking: 0, thinkingOpen: false };
 
             if (
@@ -1486,15 +1656,15 @@ export default function ChatPage() {
               stream !== "lifecycle" &&
               stream !== "error"
             ) {
-              setActiveRunId(runId);
+              setSessionActiveRunId(sessionKey, runId);
             }
 
             if (runId && (stream === "assistant" || stream === "thinking" || stream === "tool")) {
-              clearReconnectStatus(runId);
+              clearReconnectStatus(sessionKey, runId);
             }
 
             if (stream === "lifecycle" && data.phase === "reconnecting" && runId) {
-              setReconnectStatus({
+              setSessionReconnectStatus(sessionKey, {
                 runId,
               });
               return;
@@ -1506,8 +1676,9 @@ export default function ChatPage() {
                 segmentState.assistant += 1;
                 segmentState.assistantClosed = false;
               }
-              streamSegmentsRef.current.set(runKey, segmentState);
+              runtime.streamSegments.set(runKey, segmentState);
               appendOrUpdateText({
+                sessionKey,
                 key: `run:${runId ?? "unknown"}:assistant:${segmentState.assistant}`,
                 role: "assistant",
                 runId: runId ?? undefined,
@@ -1520,7 +1691,7 @@ export default function ChatPage() {
               });
               if (isFinalChunk) {
                 segmentState.assistantClosed = true;
-                streamSegmentsRef.current.set(runKey, segmentState);
+                runtime.streamSegments.set(runKey, segmentState);
               }
               return;
             }
@@ -1530,8 +1701,9 @@ export default function ChatPage() {
                 segmentState.thinking += 1;
                 segmentState.thinkingOpen = true;
               }
-              streamSegmentsRef.current.set(runKey, segmentState);
+              runtime.streamSegments.set(runKey, segmentState);
               appendOrUpdateText({
+                sessionKey,
                 key: `run:${runId ?? "unknown"}:thinking:${segmentState.thinking}`,
                 role: "thinking",
                 runId: runId ?? undefined,
@@ -1546,7 +1718,7 @@ export default function ChatPage() {
 
             if (stream === "tool") {
               segmentState.thinkingOpen = false;
-              streamSegmentsRef.current.set(runKey, segmentState);
+              runtime.streamSegments.set(runKey, segmentState);
               const phase =
                 data.phase === "start" || data.phase === "update" || data.phase === "result"
                   ? data.phase
@@ -1556,6 +1728,7 @@ export default function ChatPage() {
                 return;
               }
               upsertTool({
+                sessionKey,
                 runId: runId ?? undefined,
                 toolCallId,
                 seq,
@@ -1572,11 +1745,11 @@ export default function ChatPage() {
             if (stream === "compaction") {
               const phase = typeof data.phase === "string" ? data.phase : "";
               if (phase === "start" && runId) {
-                setCompactingRunId(runId);
+                setSessionCompactingRunId(sessionKey, runId);
               }
               if (phase === "end" || phase === "error") {
-                setCompactingRunId((prev) => (prev === runId ? null : prev));
-                refreshSessionUsage(client, currentSessionKey);
+                setSessionCompactingRunId(sessionKey, (prev) => (prev === runId ? null : prev));
+                refreshSessionUsage(client, sessionKey);
               }
               return;
             }
@@ -1587,14 +1760,14 @@ export default function ChatPage() {
 
             const terminalState = resolveAgentTerminalState({ stream, data });
             if (terminalState) {
-              finalizeRunState(runId, terminalState === "final" ? "completed" : "error");
+              finalizeRunState(sessionKey, runId, terminalState === "final" ? "completed" : "error");
               if (terminalState === "aborted" && runId) {
-                discardedRunIdsRef.current.add(runId);
+                runtime.discardedRunIds.add(runId);
               }
               if (terminalState === "final") {
-                markLastAssistantAsFinal(runId);
+                markLastAssistantAsFinal(sessionKey, runId);
               }
-              refreshSessionUsage(client, currentSessionKey);
+              refreshSessionUsage(client, sessionKey);
               notifySidebarTasksRefresh();
               return;
             }
@@ -1612,15 +1785,19 @@ export default function ChatPage() {
     },
     [
       appendOrUpdateText,
-      currentSessionKey,
-      finalizeRunState,
-      loadHistory,
-      refreshSessionUsage,
-      markLastAssistantAsFinal,
       clearReconnectStatus,
+      finalizeRunState,
+      getSessionRuntime,
+      loadHistory,
+      loadSessionUsage,
+      markLastAssistantAsFinal,
+      refreshSessionUsage,
+      setSessionActiveRunId,
+      setSessionCompactingRunId,
+      setSessionLoading,
+      setSessionReconnectStatus,
       upsertRunError,
       upsertTool,
-      ensureGatewayReady,
     ],
   );
 
@@ -1661,7 +1838,7 @@ export default function ChatPage() {
   useEffect(() => {
     if (!gatewayReady) {
       setConnected(false);
-      setLoading(true);
+      setSessionLoading(currentSessionKeyRef.current, true);
       setConnectionNotice({
         message: "Waiting for gateway...",
         tone: "warning",
@@ -1683,7 +1860,7 @@ export default function ChatPage() {
         }
       } finally {
         if (!cancelled) {
-          setLoading(false);
+          setSessionLoading(currentSessionKeyRef.current, false);
         }
       }
     })();
@@ -1707,41 +1884,38 @@ export default function ChatPage() {
       window.clearInterval(interval);
       clientRef.current?.stop();
       clientRef.current = null;
-      for (const timer of toolTimersRef.current.values()) {
-        window.clearTimeout(timer);
+      for (const runtime of sessionRuntimesRef.current.values()) {
+        for (const timer of runtime.toolTimers.values()) {
+          window.clearTimeout(timer);
+        }
+        runtime.toolTimers.clear();
       }
-      toolTimersRef.current.clear();
     };
-  }, [connectGateway, ensureGatewayReady, gatewayReady, loadGatewayStatus]);
-
-  useEffect(() => {
-    resetSessionView();
-    setLoading(true);
-  }, [currentSessionKey, resetSessionView]);
+  }, [connectGateway, ensureGatewayReady, gatewayReady, loadGatewayStatus, setSessionLoading]);
 
   useEffect(() => {
     const client = clientRef.current;
+    const runtime = getSessionRuntime(currentSessionKey);
     if (!connected || !client) {
-      setLoading(false);
+      setSessionLoading(currentSessionKey, false);
       return;
     }
-    void loadHistory(client, currentSessionKey)
-      .catch((err) => {
+    if (!runtime.historyLoaded) {
+      setSessionLoading(currentSessionKey, true);
+      void loadHistory(client, currentSessionKey).catch((err) => {
         setError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => {
-        setLoading(false);
       });
+    }
     void loadSessionUsage(client, currentSessionKey).catch((err) => {
       setError(err instanceof Error ? err.message : String(err));
-      });
-  }, [connected, currentSessionKey, loadHistory, loadSessionUsage, location.search]);
+    });
+  }, [connected, currentSessionKey, getSessionRuntime, loadHistory, loadSessionUsage, location.search, setSessionLoading]);
 
   const appendContextSelections = useCallback((selected: ChatContextPathSelection[]) => {
     if (selected.length > 0) {
       console.log("[electron-chat] context paths added", selected);
     }
-    setContextPaths((prev) => {
+    setSessionContextPaths(currentSessionKey, (prev) => {
       const seen = new Set(prev.map((entry) => entry.path));
       const nextEntries = selected
         .filter((entry): entry is ChatContextPathSelection => Boolean(entry?.path && entry?.name))
@@ -1778,7 +1952,7 @@ export default function ChatPage() {
     if (prompt && lastAppliedPromptRef.current !== prompt) {
       lastAppliedPromptRef.current = prompt;
       pendingPromptFocusRef.current = true;
-      setDraft(prompt);
+      setSessionDraft(currentSessionKey, prompt);
       window.requestAnimationFrame(() => {
         composerRef.current?.focus();
         composerRef.current?.setSelectionRange(prompt.length, prompt.length);
@@ -1818,7 +1992,7 @@ export default function ChatPage() {
       },
       { replace: true },
     );
-  }, [appendContextSelections, location.pathname, location.search, navigate]);
+  }, [appendContextSelections, currentSessionKey, location.pathname, location.search, navigate, setSessionDraft]);
 
   useEffect(() => {
     if (!pendingPromptFocusRef.current || !connected || sending || subscriptionExpired || !draft.trim()) {
@@ -1949,7 +2123,7 @@ export default function ChatPage() {
     ];
     const outgoingMessage = buildInputArtifactsMessage(draft, outgoingArtifacts);
 
-    const localSeq = seqCounterRef.current++;
+    const localSeq = getSessionRuntime(currentSessionKey).seqCounter++;
     const userItem: TextItem = {
       kind: "text",
       id: nextId("user"),
@@ -1966,22 +2140,22 @@ export default function ChatPage() {
       timelineArtifacts,
       outgoingArtifacts,
     });
-    setTimeline((prev) => [...prev, userItem].sort(compareTimeline));
-    setDraft("");
-    setAttachments([]);
-    setContextPaths([]);
-    setSending(true);
+    setSessionTimeline(currentSessionKey, (prev) => [...prev, userItem].sort(compareTimeline));
+    setSessionDraft(currentSessionKey, "");
+    setSessionAttachments(currentSessionKey, []);
+    setSessionContextPaths(currentSessionKey, []);
+    setSessionSending(currentSessionKey, true);
     setError(null);
 
     const idempotencyKey = nextId("run");
-    retryPayloadsRef.current.set(idempotencyKey, {
+    getSessionRuntime(currentSessionKey).retryPayloads.set(idempotencyKey, {
       draft: msg,
       attachments: attachments.map((attachment) => ({ ...attachment })),
       contextPaths: contextPaths.map((entry) => ({ ...entry })),
     });
-    settledRunIdsRef.current.delete(idempotencyKey);
-    setActiveRunId(idempotencyKey);
-    setCompactingRunId(null);
+    getSessionRuntime(currentSessionKey).settledRunIds.delete(idempotencyKey);
+    setSessionActiveRunId(currentSessionKey, idempotencyKey);
+    setSessionCompactingRunId(currentSessionKey, null);
 
     try {
       const apiAttachments = attachments
@@ -2009,12 +2183,30 @@ export default function ChatPage() {
       void loadSessionUsage(clientRef.current, currentSessionKey).catch(() => {});
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setActiveRunId(null);
-      setCompactingRunId(null);
+      setSessionActiveRunId(currentSessionKey, null);
+      setSessionCompactingRunId(currentSessionKey, null);
     } finally {
-      setSending(false);
+      setSessionSending(currentSessionKey, false);
     }
-  }, [attachments, connected, contextPaths, currentSessionKey, draft, modelLevel, sending, subscriptionExpired]);
+  }, [
+    attachments,
+    connected,
+    contextPaths,
+    currentSessionKey,
+    draft,
+    getSessionRuntime,
+    loadSessionUsage,
+    modelLevel,
+    sending,
+    setSessionActiveRunId,
+    setSessionAttachments,
+    setSessionCompactingRunId,
+    setSessionContextPaths,
+    setSessionDraft,
+    setSessionSending,
+    setSessionTimeline,
+    subscriptionExpired,
+  ]);
 
   const handleSend = useCallback(async () => {
     await sendChatMessage();
@@ -2022,11 +2214,11 @@ export default function ChatPage() {
 
   const handleRetryRun = useCallback(async (runId?: string) => {
     const retryPayload =
-      (runId ? retryPayloadsRef.current.get(runId) : undefined) ??
-      Array.from(retryPayloadsRef.current.values()).at(-1);
+      (runId ? getSessionRuntime(currentSessionKey).retryPayloads.get(runId) : undefined) ??
+      Array.from(getSessionRuntime(currentSessionKey).retryPayloads.values()).at(-1);
     const retryRunId =
       runId ??
-      Array.from(retryPayloadsRef.current.keys()).at(-1);
+      Array.from(getSessionRuntime(currentSessionKey).retryPayloads.keys()).at(-1);
     if (!retryPayload || !retryRunId || !clientRef.current || !connected || subscriptionExpired || sending) {
       return;
     }
@@ -2063,13 +2255,13 @@ export default function ChatPage() {
       })
       .filter((att): att is { type: "image"; mimeType: string; content: string } => Boolean(att));
 
-    clearReconnectStatus(retryRunId);
-    removeRunError(retryRunId);
-    discardedRunIdsRef.current.delete(retryRunId);
-    settledRunIdsRef.current.delete(retryRunId);
-    setActiveRunId(retryRunId);
-    setCompactingRunId(null);
-    setSending(true);
+    clearReconnectStatus(currentSessionKey, retryRunId);
+    removeRunError(currentSessionKey, retryRunId);
+    getSessionRuntime(currentSessionKey).discardedRunIds.delete(retryRunId);
+    getSessionRuntime(currentSessionKey).settledRunIds.delete(retryRunId);
+    setSessionActiveRunId(currentSessionKey, retryRunId);
+    setSessionCompactingRunId(currentSessionKey, null);
+    setSessionSending(currentSessionKey, true);
     setError(null);
     try {
       await clientRef.current.request("chat.retry", {
@@ -2085,13 +2277,13 @@ export default function ChatPage() {
       const message = err instanceof Error ? err.message : String(err);
       if (message.toLowerCase().includes("unknown method: chat.retry")) {
         const fallbackRunId = nextId("run");
-        retryPayloadsRef.current.set(fallbackRunId, {
+        getSessionRuntime(currentSessionKey).retryPayloads.set(fallbackRunId, {
           draft: retryPayload.draft,
           attachments: retryPayload.attachments.map((attachment) => ({ ...attachment })),
           contextPaths: retryPayload.contextPaths.map((entry) => ({ ...entry })),
         });
-        settledRunIdsRef.current.delete(fallbackRunId);
-        setActiveRunId(fallbackRunId);
+        getSessionRuntime(currentSessionKey).settledRunIds.delete(fallbackRunId);
+        setSessionActiveRunId(currentSessionKey, fallbackRunId);
         await clientRef.current.request("chat.send", {
           sessionKey: currentSessionKey,
           message: outgoingMessage,
@@ -2104,12 +2296,25 @@ export default function ChatPage() {
         return;
       }
       setError(message);
-      setActiveRunId(null);
-      setCompactingRunId(null);
+      setSessionActiveRunId(currentSessionKey, null);
+      setSessionCompactingRunId(currentSessionKey, null);
     } finally {
-      setSending(false);
+      setSessionSending(currentSessionKey, false);
     }
-  }, [clearReconnectStatus, connected, currentSessionKey, modelLevel, removeRunError, sending, subscriptionExpired]);
+  }, [
+    clearReconnectStatus,
+    connected,
+    currentSessionKey,
+    getSessionRuntime,
+    loadSessionUsage,
+    modelLevel,
+    removeRunError,
+    sending,
+    setSessionActiveRunId,
+    setSessionCompactingRunId,
+    setSessionSending,
+    subscriptionExpired,
+  ]);
 
   const handleAbort = useCallback(async () => {
     const client = clientRef.current;
@@ -2117,13 +2322,13 @@ export default function ChatPage() {
 
     // Abort must clear the local running state immediately so the UI cannot get stuck
     // behind an RPC response that is delayed, missing runIds, or races with reconnects.
-    setSending(false);
-    setActiveRunId(null);
-    setCompactingRunId(null);
-    clearReconnectStatus(runId);
+    setSessionSending(currentSessionKey, false);
+    setSessionActiveRunId(currentSessionKey, null);
+    setSessionCompactingRunId(currentSessionKey, null);
+    clearReconnectStatus(currentSessionKey, runId);
     if (runId) {
-      discardedRunIdsRef.current.add(runId);
-      finalizeRunState(runId, "error");
+      getSessionRuntime(currentSessionKey).discardedRunIds.add(runId);
+      finalizeRunState(currentSessionKey, runId, "error");
     }
 
     if (!connected || !client) {
@@ -2154,15 +2359,26 @@ export default function ChatPage() {
       }
 
       for (const abortedRunId of abortedRunIds) {
-        discardedRunIdsRef.current.add(abortedRunId);
-        finalizeRunState(abortedRunId, "error");
+        getSessionRuntime(currentSessionKey).discardedRunIds.add(abortedRunId);
+        finalizeRunState(currentSessionKey, abortedRunId, "error");
       }
       refreshSessionUsage(client, currentSessionKey);
       notifySidebarTasksRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [activeRunId, clearReconnectStatus, connected, currentSessionKey, finalizeRunState, refreshSessionUsage]);
+  }, [
+    activeRunId,
+    clearReconnectStatus,
+    connected,
+    currentSessionKey,
+    finalizeRunState,
+    getSessionRuntime,
+    refreshSessionUsage,
+    setSessionActiveRunId,
+    setSessionCompactingRunId,
+    setSessionSending,
+  ]);
 
   const handleOpenPricing = useCallback(async () => {
     if (!activeWorkspaceId) {
@@ -2387,9 +2603,9 @@ export default function ChatPage() {
         "[electron-chat] image attachments added",
         next.map((entry) => ({ name: entry.name, mimeType: entry.mimeType })),
       );
-      setAttachments((prev) => [...prev, ...next]);
+      setSessionAttachments(currentSessionKey, (prev) => [...prev, ...next]);
     }
-  }, [appendContextSelections, subscriptionExpired]);
+  }, [appendContextSelections, currentSessionKey, setSessionAttachments, subscriptionExpired]);
 
   const handleSelectContextPaths = useCallback(async () => {
     if (subscriptionExpired) {
@@ -2816,7 +3032,7 @@ export default function ChatPage() {
                         }}
                         onRemove={() => {
                           setPreviewImage(null);
-                          setAttachments((prev) => prev.filter((p) => p.id !== att.id));
+                          setSessionAttachments(currentSessionKey, (prev) => prev.filter((p) => p.id !== att.id));
                         }}
                       />
                     ))}
@@ -2835,7 +3051,7 @@ export default function ChatPage() {
                             : undefined
                         }
                         onRemove={() => {
-                          setContextPaths((prev) => prev.filter((p) => p.id !== entry.id));
+                          setSessionContextPaths(currentSessionKey, (prev) => prev.filter((p) => p.id !== entry.id));
                         }}
                       />
                     ))}
@@ -2858,7 +3074,7 @@ export default function ChatPage() {
                           : "Connect to gateway to chat..."
                     }
                     className="min-h-[44px] max-h-[200px] w-full resize-none border-none bg-transparent px-1 py-1 pr-14 text-base font-normal leading-6 text-text-main outline-none placeholder:text-text-sub/70 disabled:cursor-not-allowed disabled:text-[#8B93AA]"
-                    onChange={(e) => setDraft(e.target.value)}
+                    onChange={(e) => setSessionDraft(currentSessionKey, e.target.value)}
                     onCompositionStart={() => {
                       composerIsComposingRef.current = true;
                     }}

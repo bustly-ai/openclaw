@@ -5,6 +5,7 @@ import {
   CaretDown,
   CaretRight,
   Check,
+  CircleNotch,
   DotsThree,
   Gear,
   Lightning,
@@ -49,6 +50,7 @@ type SidebarTask = {
   name: string;
   icon?: string;
   isMain?: boolean;
+  running?: boolean;
 };
 
 type GatewaySessionRow = {
@@ -65,10 +67,15 @@ type SessionsListResult = {
 };
 
 const SIDEBAR_TASKS_REFRESH_EVENT = "openclaw:sidebar-refresh-tasks";
+const SIDEBAR_TASK_RUN_STATE_EVENT = "openclaw:sidebar-task-run-state";
 const SIDEBAR_CUSTOM_LABELS_STORAGE_KEY = "bustly.sidebar.custom-labels.v1";
 
 function notifySidebarTasksRefresh() {
   window.dispatchEvent(new Event(SIDEBAR_TASKS_REFRESH_EVENT));
+}
+
+function SpinnerIcon({ className }: { className?: string }) {
+  return <CircleNotch size={14} weight="bold" className={className} />;
 }
 
 function readCustomSessionLabels(): Record<string, string> {
@@ -329,28 +336,34 @@ function TaskItem(props: {
         onClick={props.onClick}
         collapsed={props.collapsed}
         showTooltip
-        rightSlotVisible={isHovered || menuOpen}
+        rightSlotVisible={props.task.running || isHovered || menuOpen}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         rightSlot={
           !props.collapsed ? (
-            <button
-              ref={triggerRef}
-              type="button"
-              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md p-1 transition-all ${
-                isHovered || menuOpen ? "opacity-100" : "opacity-0"
-              } ${
-                menuOpen ? "bg-white/88 shadow-sm backdrop-blur-sm" : ""
-              } ${
-                props.active ? "text-[#1A162F] hover:bg-[#1A162F]/6" : "text-text-sub hover:bg-black/[0.04]"
-              }`}
-              onClick={(event) => {
-                event.stopPropagation();
-                setMenuOpen((prev) => !prev);
-              }}
-            >
-              <DotsThreeIcon className="h-4 w-4" />
-            </button>
+            props.task.running && !isHovered && !menuOpen ? (
+              <div className="flex h-8 w-8 items-center justify-center text-[#666F8D]">
+                <SpinnerIcon className="h-4 w-4 animate-spin" />
+              </div>
+            ) : (
+              <button
+                ref={triggerRef}
+                type="button"
+                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md p-1 transition-all ${
+                  isHovered || menuOpen ? "opacity-100" : "opacity-0"
+                } ${
+                  menuOpen ? "bg-white/88 shadow-sm backdrop-blur-sm" : ""
+                } ${
+                  props.active ? "text-[#1A162F] hover:bg-[#1A162F]/6" : "text-text-sub hover:bg-black/[0.04]"
+                }`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setMenuOpen((prev) => !prev);
+                }}
+              >
+                <DotsThreeIcon className="h-4 w-4" />
+              </button>
+            )
           ) : null
         }
       />
@@ -1077,6 +1090,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [selectedIcon, setSelectedIcon] = useState<SessionIconId>("SquaresFour");
   const [iconPickerMode, setIconPickerMode] = useState<"create" | "edit">("edit");
   const [pendingSessionKey, setPendingSessionKey] = useState<string | null>(null);
+  const [runningTasks, setRunningTasks] = useState<Record<string, boolean>>({});
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
@@ -1166,6 +1180,33 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   }, [loadWorkspaces]);
 
   useEffect(() => {
+    const handleRunStateChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionKey?: string; running?: boolean }>).detail;
+      const sessionKey = typeof detail?.sessionKey === "string" ? detail.sessionKey.trim() : "";
+      if (!sessionKey) {
+        return;
+      }
+      setRunningTasks((prev) => {
+        const nextRunning = detail?.running === true;
+        if ((prev[sessionKey] ?? false) === nextRunning) {
+          return prev;
+        }
+        if (!nextRunning) {
+          const next = { ...prev };
+          delete next[sessionKey];
+          return next;
+        }
+        return { ...prev, [sessionKey]: true };
+      });
+    };
+
+    window.addEventListener(SIDEBAR_TASK_RUN_STATE_EVENT, handleRunStateChange as EventListener);
+    return () => {
+      window.removeEventListener(SIDEBAR_TASK_RUN_STATE_EVENT, handleRunStateChange as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
     if (checking || !initialized || !gatewayReady) {
       return;
     }
@@ -1233,6 +1274,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                       name: resolveSessionDisplayName(session, customSessionLabels),
                       icon: session.icon,
                       isMain: session.key === activeMainSessionKey,
+                      running: runningTasks[session.key] === true,
                     })),
                 );
                 setHasLoadedTasks(true);
@@ -1290,6 +1332,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     initialized,
     location.pathname,
     location.search,
+    runningTasks,
   ]);
 
   useEffect(() => {
