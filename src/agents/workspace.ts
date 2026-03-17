@@ -107,7 +107,7 @@ function stripFrontMatter(content: string): string {
   return trimmed;
 }
 
-async function loadTemplate(name: string): Promise<string> {
+export async function loadWorkspaceTemplate(name: string): Promise<string> {
   const cached = workspaceTemplateCache.get(name);
   if (cached) {
     return cached;
@@ -253,6 +253,34 @@ export async function isWorkspaceOnboardingCompleted(dir: string): Promise<boole
   );
 }
 
+export async function completeWorkspaceOnboarding(
+  dir: string,
+  options?: { removeBootstrap?: boolean },
+): Promise<void> {
+  const resolvedDir = resolveUserPath(dir);
+  const statePath = resolveWorkspaceStatePath(resolvedDir);
+  const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
+  const state = await readWorkspaceOnboardingState(statePath);
+  const now = new Date().toISOString();
+
+  if (options?.removeBootstrap !== false) {
+    try {
+      await fs.unlink(bootstrapPath);
+    } catch (err) {
+      const anyErr = err as { code?: string };
+      if (anyErr.code !== "ENOENT") {
+        throw err;
+      }
+    }
+  }
+
+  await writeWorkspaceOnboardingState(statePath, {
+    version: WORKSPACE_STATE_VERSION,
+    bootstrapSeededAt: state.bootstrapSeededAt ?? now,
+    onboardingCompletedAt: state.onboardingCompletedAt ?? now,
+  });
+}
+
 async function writeWorkspaceOnboardingState(
   statePath: string,
   state: WorkspaceOnboardingState,
@@ -315,6 +343,7 @@ async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
 export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
+  createBootstrapFile?: boolean;
 }): Promise<{
   dir: string;
   agentsPath?: string;
@@ -361,12 +390,12 @@ export async function ensureAgentWorkspace(params?: {
     return existing.every((v) => !v);
   })();
 
-  const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
-  const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
-  const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
-  const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
-  const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
-  const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
+  const agentsTemplate = await loadWorkspaceTemplate(DEFAULT_AGENTS_FILENAME);
+  const soulTemplate = await loadWorkspaceTemplate(DEFAULT_SOUL_FILENAME);
+  const toolsTemplate = await loadWorkspaceTemplate(DEFAULT_TOOLS_FILENAME);
+  const identityTemplate = await loadWorkspaceTemplate(DEFAULT_IDENTITY_FILENAME);
+  const userTemplate = await loadWorkspaceTemplate(DEFAULT_USER_FILENAME);
+  const heartbeatTemplate = await loadWorkspaceTemplate(DEFAULT_HEARTBEAT_FILENAME);
   await writeFileIfMissing(agentsPath, agentsTemplate);
   await writeFileIfMissing(soulPath, soulTemplate);
   await writeFileIfMissing(toolsPath, toolsTemplate);
@@ -406,8 +435,8 @@ export async function ensureAgentWorkspace(params?: {
       identityContent !== identityTemplate || userContent !== userTemplate;
     if (legacyOnboardingCompleted) {
       markState({ onboardingCompletedAt: nowIso() });
-    } else {
-      const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
+    } else if (params?.createBootstrapFile !== false) {
+      const bootstrapTemplate = await loadWorkspaceTemplate(DEFAULT_BOOTSTRAP_FILENAME);
       const wroteBootstrap = await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
       if (!wroteBootstrap) {
         bootstrapExists = await fileExists(bootstrapPath);
@@ -417,6 +446,8 @@ export async function ensureAgentWorkspace(params?: {
       if (bootstrapExists && !state.bootstrapSeededAt) {
         markState({ bootstrapSeededAt: nowIso() });
       }
+    } else {
+      markState({ onboardingCompletedAt: nowIso() });
     }
   }
 

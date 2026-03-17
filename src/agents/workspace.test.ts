@@ -14,6 +14,7 @@ import {
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
+  completeWorkspaceOnboarding,
   ensureAgentWorkspace,
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
@@ -107,6 +108,37 @@ describe("ensureAgentWorkspace", () => {
     await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_USER_FILENAME, content: "custom" });
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const state = await readOnboardingState(tempDir);
+    expect(state.bootstrapSeededAt).toBeUndefined();
+    expect(state.onboardingCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("marks onboarding complete and removes BOOTSTRAP.md when finalized programmatically", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await completeWorkspaceOnboarding(tempDir);
+
+    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const state = await readOnboardingState(tempDir);
+    expect(state.bootstrapSeededAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+    expect(state.onboardingCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("can initialize workspace files without creating BOOTSTRAP.md", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await ensureAgentWorkspace({
+      dir: tempDir,
+      ensureBootstrapFiles: true,
+      createBootstrapFile: false,
+    });
 
     await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
       code: "ENOENT",

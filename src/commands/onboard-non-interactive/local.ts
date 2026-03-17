@@ -34,6 +34,18 @@ export async function runNonInteractiveOnboardingLocal(params: {
   });
 
   let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+  if (opts.skipBootstrap) {
+    nextConfig = {
+      ...nextConfig,
+      agents: {
+        ...nextConfig.agents,
+        defaults: {
+          ...nextConfig.agents?.defaults,
+          skipBootstrap: true,
+        },
+      },
+    };
+  }
 
   const inferredAuthChoice = inferAuthChoiceFromFlags(opts);
   if (!opts.authChoice && inferredAuthChoice.matches.length > 1) {

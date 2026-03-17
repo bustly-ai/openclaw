@@ -335,6 +335,18 @@ export async function runOnboardingWizard(
 
   const { applyOnboardingLocalWorkspaceConfig } = await import("../commands/onboard-config.js");
   let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+  if (opts.skipBootstrap) {
+    nextConfig = {
+      ...nextConfig,
+      agents: {
+        ...nextConfig.agents,
+        defaults: {
+          ...nextConfig.agents?.defaults,
+          skipBootstrap: true,
+        },
+      },
+    };
+  }
 
   const { ensureAuthProfileStore } = await import("../agents/auth-profiles.js");
   const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");

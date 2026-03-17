@@ -16,7 +16,6 @@ import {
   readFileSync,
   writeFileSync,
   mkdirSync,
-  rmSync,
   appendFileSync,
   cpSync,
   statSync,
@@ -44,6 +43,7 @@ import {
   cancelOAuthFlow,
 } from "./oauth-handler.js";
 import * as BustlyOAuth from "./bustly-oauth.js";
+import { initializeBustlyWorkspaceBootstrap } from "./bustly-bootstrap.js";
 import { resolveOpenClawAgentDir } from "../../../../src/agents/agent-paths";
 import { ensureAgentWorkspace } from "../../../../src/agents/workspace";
 import { loadConfig } from "../../../../src/config/config";
@@ -741,7 +741,8 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
   const agentId = buildBustlyWorkspaceAgentId(workspaceId);
   const sessionKey = resolveBustlyWorkspaceAgentSessionKey(workspaceId);
   const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
-  const nextName = params.workspaceName?.trim() || workspaceId;
+  const providedWorkspaceName = params.workspaceName?.trim();
+  const nextName = providedWorkspaceName || workspaceId;
   const updated = applyAgentConfig(config, {
     agentId,
     name: nextName,
@@ -774,6 +775,11 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
   await ensureAgentWorkspace({
     dir: workspaceDir,
     ensureBootstrapFiles: true,
+  });
+  await initializeBustlyWorkspaceBootstrap({
+    workspaceDir,
+    workspaceId,
+    workspaceName: providedWorkspaceName,
   });
 
   await ensureBustlyPresetChannels({ agentId });

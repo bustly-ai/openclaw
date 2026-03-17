@@ -5,49 +5,62 @@ read_when:
   - Bootstrapping a workspace manually
 ---
 
-# TOOLS.md - Workspace System Notes
+# TOOLS.md - Local Notes
 
-Skills define how tools work. This file is for workspace-specific operating notes.
+Skills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup.
 
-## What Belongs Here
+## What Goes Here
 
-Document the systems and references the agent needs to operate the store well, for example:
+Things like:
 
-- store platform names and URLs
-- analytics sources
-- ad accounts and naming conventions
-- support tools
-- fulfillment or warehouse systems
-- spreadsheet or dashboard links
-- channel ownership notes
+- Which Bustly skill to use for which kind of task
+- Platform-specific gotchas you keep forgetting
+- Naming conventions used in ad accounts or stores
+- Workspace-specific thresholds or filters
+- Safe defaults for repeated tool calls
+- Anything environment-specific
 
-## Suggested Sections
+## Examples
 
 ```markdown
-### Commerce Stack
+### source-product
 
-- Storefront: Shopify
-- Analytics: GA4, internal BI
-- Paid media: Meta Ads, Google Ads
-- Support: Zendesk
+- Use `source-product` first for supplier discovery, product search, and AliExpress detail lookup
+- If the user shows a product image but there is no usable file path, ask for an image URL before using image search
+- Prefer `get:product` when you already have an AliExpress URL or product ID
+- Treat sourcing results as candidate supply, not final merchandising decisions
+
+### ads_core_ops
+
+- Use `ads_core_ops` for campaign reads, account inspection, and performance diagnosis
+- Google Ads queries require the correct `customer-id`; do not guess
+- Klaviyo is usually CRM / lifecycle marketing, not paid media
+- Meta Ads credentials are local to this machine; if they are missing, report a setup gap directly
+
+### commerce_core_ops
+
+- Use `commerce_core_ops` for unified store reads and operational actions across Shopify / BigCommerce / WooCommerce / Magento
+- Before claiming "no store connected", consider auth, membership, and billing blockers first
+- Prefer read operations first; ask before live writes
+- For product updates, switch to platform-native payloads when schema mismatch appears
 
 ### Naming Conventions
 
 - "NC" = new customer
 - "Ret" = retargeting
-- "AOV" = average order value
+- "Hero SKU" = top-priority product to watch closely
 
-### Alert Thresholds
+### Alert Heuristics
 
-- Refund rate spike: > 2x 7-day baseline
-- ROAS drop: > 20% WoW
-- Stockout risk: < 10 days cover on top SKUs
-
-### Owners
-
-- Paid media: growth@brand.com
-- Inventory: ops@brand.com
-- Support: cx@brand.com
+- Refund spike = abnormal vs recent baseline, not just one bad day
+- ROAS drop should be checked with spend and conversion together
+- Inventory risk should consider days of cover, not only raw stock count
 ```
 
-Keep this file practical. It should help the agent move faster without guessing.
+## Why Separate?
+
+Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.
+
+---
+
+Add whatever helps you do your job. This is your cheat sheet.
