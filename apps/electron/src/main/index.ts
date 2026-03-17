@@ -664,15 +664,32 @@ function listEnabledBustlyPresetChannels() {
     .toSorted((a, b) => a.order - b.order);
 }
 
-function hasMissingBustlyPresetChannels(agentId: string): boolean {
+function hasMissingBustlyWorkspaceSessions(agentId: string): boolean {
   const presets = listEnabledBustlyPresetChannels();
-  if (presets.length === 0) {
-    return false;
-  }
   const store = loadSessionStore(resolveDefaultSessionStorePath(agentId));
+  const mainSessionKey = buildAgentMainSessionKey({ agentId });
+  if (!store[mainSessionKey]) {
+    return true;
+  }
   return presets.some((preset) => {
     const storeKey = buildBustlyAgentPresetChannelSessionKey(agentId, preset.slug);
     return !store[storeKey];
+  });
+}
+
+async function ensureBustlyMainSession(params: { agentId: string }): Promise<void> {
+  const storePath = resolveDefaultSessionStorePath(params.agentId);
+  const mainSessionKey = buildAgentMainSessionKey({ agentId: params.agentId });
+  await updateSessionStore(storePath, (store) => {
+    if (store[mainSessionKey]) {
+      return store;
+    }
+    store[mainSessionKey] = {
+      sessionId: randomUUID(),
+      updatedAt: Date.now(),
+      label: "Overview",
+    };
+    return store;
   });
 }
 
@@ -782,6 +799,7 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
     workspaceName: providedWorkspaceName,
   });
 
+  await ensureBustlyMainSession({ agentId });
   await ensureBustlyPresetChannels({ agentId });
 
   return { agentId, sessionKey, workspaceDir };
@@ -2515,6 +2533,7 @@ function setupIpcHandlers(): void {
   ipcMain.handle(
     "bustly-set-active-workspace",
     async (_event, workspaceId: string, workspaceName?: string) => {
+    emitGatewayLifecycle("starting", "Switching workspace...");
     try {
       BustlyOAuth.setActiveWorkspaceId(workspaceId);
       syncBustlyConfigFile(resolveElectronConfigPath());
@@ -2535,6 +2554,7 @@ function setupIpcHandlers(): void {
         sessionKey: agentBinding?.sessionKey,
       };
     } catch (error) {
+      emitGatewayLifecycle("ready", null);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -2959,17 +2979,17 @@ void app.whenReady().then(async () => {
     if (bustlyLoggedIn) {
       const workspaceId = resolveBustlyWorkspaceIdFromOAuthState();
       const agentId = workspaceId ? buildBustlyWorkspaceAgentId(workspaceId) : "";
-      if (agentId && hasMissingBustlyPresetChannels(agentId)) {
+      if (agentId && hasMissingBustlyWorkspaceSessions(agentId)) {
         try {
           await synchronizeBustlyWorkspaceContext();
-          writeMainLog("Synchronized Bustly workspace context for missing preset channels");
+          writeMainLog("Synchronized Bustly workspace context for missing main session or preset channels");
         } catch (error) {
           writeMainLog(
-            `Bustly workspace sync failed while restoring preset channels: ${error instanceof Error ? error.message : String(error)}`,
+            `Bustly workspace sync failed while restoring main session or preset channels: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
       } else {
-        writeMainLog("Skipped Bustly workspace sync; preset channels already exist");
+        writeMainLog("Skipped Bustly workspace sync; main session and preset channels already exist");
       }
     }
     // Load existing config to get port and token

@@ -181,7 +181,7 @@ export function deriveScenarioLabel(sessionKey: string, rawLabel?: string | null
     return trimmed;
   }
   if (sessionKey === DEFAULT_SESSION_KEY || /^agent:[a-z0-9_-]+:main$/i.test(sessionKey)) {
-    return "Bustly AI";
+    return "Overview";
   }
   return "Scenario";
 }
