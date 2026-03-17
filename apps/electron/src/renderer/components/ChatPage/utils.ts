@@ -1015,13 +1015,13 @@ export function collapseStreamingEvents(
     return nodes;
   }
 
-  const firstEventIndex = eventIndices[0];
   const lastEventIndex = eventIndices[eventIndices.length - 1];
-  if (firstEventIndex === lastEventIndex) {
+  if (lastEventIndex == null) {
     return nodes;
   }
 
-  const hiddenIndices = eventIndices.slice(1, -1);
+  // Keep only the latest event visible and collapse every earlier event into the fold capsule.
+  const hiddenIndices = eventIndices.slice(0, -1);
   if (hiddenIndices.length === 0) {
     return nodes;
   }

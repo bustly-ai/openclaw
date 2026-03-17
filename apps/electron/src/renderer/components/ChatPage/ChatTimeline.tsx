@@ -785,13 +785,26 @@ const TimelineItem = memo(function TimelineItem({
   }
 });
 
-function WaitingLiveIndicator({ label }: { label: string }) {
+function WaitingLiveIndicator({
+  label,
+  visible = true,
+}: {
+  label?: string | null;
+  visible?: boolean;
+}) {
   return (
-    <div className="flex items-center gap-1.5 animate-in fade-in duration-500">
+    <div className="min-h-[28px] pl-3">
+      <div
+        className={cx(
+          "flex items-center gap-1.5",
+          visible ? "animate-in fade-in duration-500" : "invisible",
+        )}
+      >
       <div className="flex h-4 w-4 items-center justify-center overflow-hidden">
         <Lottie animationData={loadingAnimation} loop style={{ width: 20, height: 20 }} className="scale-[0.8]" />
       </div>
-      <span className="text-[14px] font-medium tracking-tight text-gray-500">{label}</span>
+      <span className="text-[14px] font-medium tracking-tight text-gray-500">{label ?? ""}</span>
+      </div>
     </div>
   );
 }
@@ -845,8 +858,10 @@ export const ChatTimeline = memo(function ChatTimeline({
 
 export const ChatTimelineWaitingIndicator = memo(function ChatTimelineWaitingIndicator({
   label,
+  visible = true,
 }: {
-  label: string;
+  label?: string | null;
+  visible?: boolean;
 }) {
-  return <WaitingLiveIndicator label={label} />;
+  return <WaitingLiveIndicator label={label} visible={visible} />;
 });

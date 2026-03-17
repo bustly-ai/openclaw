@@ -216,6 +216,10 @@ function normalizeTextDelta(current: string, text?: string, delta?: string): str
   return current;
 }
 
+function normalizeComparableMessageText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
 function resolvePreviewMinZoom(viewportWidth: number, viewportHeight: number, imageWidth: number, imageHeight: number): number {
   if (viewportWidth <= 0 || viewportHeight <= 0 || imageWidth <= 0 || imageHeight <= 0) {
     return PREVIEW_ZOOM_STEPS[0];
@@ -1112,6 +1116,53 @@ export default function ChatPage() {
     });
   }, [setSessionTimeline]);
 
+  const finalizeExistingAssistantMessage = useCallback((params: {
+    sessionKey: string;
+    runId: string | null;
+    text: string;
+    seq: number;
+    timestamp: number;
+  }) => {
+    if (!params.runId) {
+      return false;
+    }
+    const comparableText = normalizeComparableMessageText(params.text);
+    if (!comparableText) {
+      return false;
+    }
+    let matched = false;
+    setSessionTimeline(params.sessionKey, (prev) => {
+      let targetIndex = -1;
+      for (let index = prev.length - 1; index >= 0; index -= 1) {
+        const item = prev[index];
+        if (item.kind !== "text" || item.role !== "assistant" || item.runId !== params.runId) {
+          continue;
+        }
+        if (normalizeComparableMessageText(item.text) !== comparableText) {
+          continue;
+        }
+        targetIndex = index;
+        break;
+      }
+      if (targetIndex === -1) {
+        return prev;
+      }
+      matched = true;
+      const current = prev[targetIndex] as TextItem;
+      const next = [...prev];
+      next[targetIndex] = {
+        ...current,
+        text: params.text,
+        sortSeq: Math.min(current.sortSeq, params.seq),
+        timestamp: Math.min(current.timestamp, params.timestamp),
+        streaming: false,
+        final: true,
+      };
+      return next;
+    });
+    return matched;
+  }, [setSessionTimeline]);
+
   const settleToolsForRun = useCallback((sessionKey: string, runId: string | null, status: ToolStatus) => {
     if (!runId) {
       return;
@@ -1565,12 +1616,27 @@ export default function ChatPage() {
                   : Date.now();
               const command = isCommandMessage(payload.message);
               const role = command ? "system" : readMessageRole(payload.message);
+              const nextSeq = runtime.seqCounter++;
+              if (
+                role === "assistant" &&
+                finalizeExistingAssistantMessage({
+                  sessionKey,
+                  runId,
+                  text: messageText,
+                  seq: nextSeq,
+                  timestamp,
+                })
+              ) {
+                markLastAssistantAsFinal(sessionKey, runId);
+                notifySidebarTasksRefresh();
+                return;
+              }
               appendOrUpdateText({
                 sessionKey,
                 key: command && runId ? `run:${runId}:command:status` : `chat:${runId ?? nextId("final")}`,
                 role,
                 runId: runId ?? undefined,
-                seq: runtime.seqCounter++,
+                seq: nextSeq,
                 text: messageText,
                 timestamp,
                 streaming: false,
@@ -2715,6 +2781,14 @@ export default function ChatPage() {
   }, [activeRunId, sending, timeline]);
 
   const activeRunningToolKey = activeRunningToolId ? activeRunningToolId : null;
+  const liveIndicatorLabel = compactingRunId
+    ? "Compacting conversation"
+    : reconnectStatus
+      ? "Reconnect"
+      : (sending || activeRunId) && runningTools === 0
+        ? "Thinking"
+        : null;
+  const shouldReserveLiveIndicatorSpace = Boolean(compactingRunId || reconnectStatus || sending || activeRunId);
   const contextUsageLabel = useMemo(() => {
     if (sessionUsage.contextTokens == null) {
       return "Context left: ?";
@@ -2908,19 +2982,12 @@ export default function ChatPage() {
               onRetryRun={handleRetryRun}
               onPreviewImage={setPreviewImage}
             />
-            {compactingRunId ? (
-              <div className="py-2">
-                <ChatTimelineWaitingIndicator label="Compacting conversation" />
-              </div>
-            ) : reconnectStatus ? (
+            {shouldReserveLiveIndicatorSpace ? (
               <div className="py-2">
                 <ChatTimelineWaitingIndicator
-                  label="Reconnect"
+                  label={liveIndicatorLabel}
+                  visible={liveIndicatorLabel !== null}
                 />
-              </div>
-            ) : (sending || activeRunId) && runningTools === 0 ? (
-              <div className="py-2">
-                <ChatTimelineWaitingIndicator label="Thinking" />
               </div>
             ) : null}
           </div>
