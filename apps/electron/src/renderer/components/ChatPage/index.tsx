@@ -760,6 +760,7 @@ export default function ChatPage() {
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [subscriptionExpired, setSubscriptionExpired] = useState(false);
   const [subscriptionActionText, setSubscriptionActionText] = useState("Upgrade");
+  const [pendingBootstrapWakeSessionKey, setPendingBootstrapWakeSessionKey] = useState<string | null>(null);
   const [modelMenuPos, setModelMenuPos] = useState<{
     top: number;
     left: number;
@@ -788,6 +789,7 @@ export default function ChatPage() {
   const composerAreaRef = useRef<HTMLDivElement | null>(null);
   const composerIsComposingRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
+  const bootstrapWakeAttemptedSessionsRef = useRef<Set<string>>(new Set());
   const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
   const lastAppliedPromptRef = useRef<string | null>(null);
   const lastAppliedContextRef = useRef<string | null>(null);
@@ -1495,6 +1497,9 @@ export default function ChatPage() {
     items.push(...toolsByCallId.values());
     const runtime = getSessionRuntime(sessionKey);
     runtime.historyLoaded = true;
+    if (history.length === 0 && /^agent:[a-z0-9_-]+:main$/i.test(sessionKey)) {
+      setPendingBootstrapWakeSessionKey((prev) => (prev === sessionKey ? prev : sessionKey));
+    }
     setSessionTimeline(sessionKey, (prev) => {
       const localErrors = prev.filter((item): item is ErrorItem => item.kind === "error");
       const merged = [...items, ...localErrors];
@@ -2146,50 +2151,56 @@ export default function ChatPage() {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
   }, [draft]);
 
-  const sendChatMessage = useCallback(async () => {
-    const msg = draft.trim();
+  const sendPreparedChatMessage = useCallback(async (params: {
+    sessionKey: string;
+    draftText: string;
+    attachments: Attachment[];
+    contextPaths: ContextPath[];
+    clearComposer: boolean;
+  }) => {
+    const msg = params.draftText.trim();
     if (
       subscriptionExpired ||
       !connected ||
-      (!msg && attachments.length === 0 && contextPaths.length === 0) ||
+      (!msg && params.attachments.length === 0 && params.contextPaths.length === 0) ||
       sending ||
       !clientRef.current
     ) {
-      return;
+      return false;
     }
     const selectedModelRef =
       (CHAT_MODEL_LEVELS.find((entry) => entry.id === modelLevel) ?? CHAT_MODEL_LEVELS[0]).modelRef;
-    const patchModelResult = await window.electronAPI.gatewayPatchSessionModel(currentSessionKey, selectedModelRef);
+    const patchModelResult = await window.electronAPI.gatewayPatchSessionModel(params.sessionKey, selectedModelRef);
     if (!patchModelResult.success) {
       setError(patchModelResult.error ?? "Failed to apply model selection.");
-      return;
+      return false;
     }
     const outgoingArtifacts: ChatInputArtifact[] = [
-      ...attachments.map((attachment) => ({
+      ...params.attachments.map((attachment) => ({
         kind: "image" as const,
         name: attachment.name,
       })),
-      ...contextPaths.map((entry) => ({
+      ...params.contextPaths.map((entry) => ({
         kind: entry.kind,
         name: entry.name,
         path: entry.path,
       })),
     ];
     const timelineArtifacts: TimelineArtifact[] = [
-      ...attachments.map((attachment) => ({
+      ...params.attachments.map((attachment) => ({
         kind: "image" as const,
         name: attachment.name,
         imageUrl: attachment.dataUrl,
       })),
-      ...contextPaths.map((entry) => ({
+      ...params.contextPaths.map((entry) => ({
         kind: entry.kind,
         name: entry.name,
         path: entry.path,
       })),
     ];
-    const outgoingMessage = buildInputArtifactsMessage(draft, outgoingArtifacts);
+    const outgoingMessage = buildInputArtifactsMessage(msg, outgoingArtifacts);
 
-    const localSeq = getSessionRuntime(currentSessionKey).seqCounter++;
+    const localSeq = getSessionRuntime(params.sessionKey).seqCounter++;
     const userItem: TextItem = {
       kind: "text",
       id: nextId("user"),
@@ -2201,30 +2212,32 @@ export default function ChatPage() {
       streaming: false,
     };
     console.log("[electron-chat] local user message", {
-      sessionKey: currentSessionKey,
+      sessionKey: params.sessionKey,
       outgoingMessage,
       timelineArtifacts,
       outgoingArtifacts,
     });
-    setSessionTimeline(currentSessionKey, (prev) => [...prev, userItem].sort(compareTimeline));
-    setSessionDraft(currentSessionKey, "");
-    setSessionAttachments(currentSessionKey, []);
-    setSessionContextPaths(currentSessionKey, []);
-    setSessionSending(currentSessionKey, true);
+    setSessionTimeline(params.sessionKey, (prev) => [...prev, userItem].sort(compareTimeline));
+    if (params.clearComposer) {
+      setSessionDraft(params.sessionKey, "");
+      setSessionAttachments(params.sessionKey, []);
+      setSessionContextPaths(params.sessionKey, []);
+    }
+    setSessionSending(params.sessionKey, true);
     setError(null);
 
     const idempotencyKey = nextId("run");
-    getSessionRuntime(currentSessionKey).retryPayloads.set(idempotencyKey, {
+    getSessionRuntime(params.sessionKey).retryPayloads.set(idempotencyKey, {
       draft: msg,
-      attachments: attachments.map((attachment) => ({ ...attachment })),
-      contextPaths: contextPaths.map((entry) => ({ ...entry })),
+      attachments: params.attachments.map((attachment) => ({ ...attachment })),
+      contextPaths: params.contextPaths.map((entry) => ({ ...entry })),
     });
-    getSessionRuntime(currentSessionKey).settledRunIds.delete(idempotencyKey);
-    setSessionActiveRunId(currentSessionKey, idempotencyKey);
-    setSessionCompactingRunId(currentSessionKey, null);
+    getSessionRuntime(params.sessionKey).settledRunIds.delete(idempotencyKey);
+    setSessionActiveRunId(params.sessionKey, idempotencyKey);
+    setSessionCompactingRunId(params.sessionKey, null);
 
     try {
-      const apiAttachments = attachments
+      const apiAttachments = params.attachments
         .map((att) => {
           const parsed = parseDataUrl(att.dataUrl);
           if (!parsed) {
@@ -2239,27 +2252,25 @@ export default function ChatPage() {
         .filter((att): att is { type: "image"; mimeType: string; content: string } => Boolean(att));
 
       await clientRef.current.request("chat.send", {
-        sessionKey: currentSessionKey,
+        sessionKey: params.sessionKey,
         message: outgoingMessage,
         deliver: false,
         idempotencyKey,
         attachments: apiAttachments.length > 0 ? apiAttachments : undefined,
       });
       notifySidebarTasksRefresh();
-      void loadSessionUsage(clientRef.current, currentSessionKey).catch(() => {});
+      void loadSessionUsage(clientRef.current, params.sessionKey).catch(() => {});
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setSessionActiveRunId(currentSessionKey, null);
-      setSessionCompactingRunId(currentSessionKey, null);
+      setSessionActiveRunId(params.sessionKey, null);
+      setSessionCompactingRunId(params.sessionKey, null);
+      return false;
     } finally {
-      setSessionSending(currentSessionKey, false);
+      setSessionSending(params.sessionKey, false);
     }
   }, [
-    attachments,
     connected,
-    contextPaths,
-    currentSessionKey,
-    draft,
     getSessionRuntime,
     loadSessionUsage,
     modelLevel,
@@ -2273,6 +2284,48 @@ export default function ChatPage() {
     setSessionTimeline,
     subscriptionExpired,
   ]);
+
+  const sendChatMessage = useCallback(async () => {
+    await sendPreparedChatMessage({
+      sessionKey: currentSessionKey,
+      draftText: draft,
+      attachments,
+      contextPaths,
+      clearComposer: true,
+    });
+  }, [attachments, contextPaths, currentSessionKey, draft, sendPreparedChatMessage]);
+
+  useEffect(() => {
+    if (!connected || !clientRef.current || sending || !pendingBootstrapWakeSessionKey) {
+      return;
+    }
+    if (pendingBootstrapWakeSessionKey !== currentSessionKey) {
+      return;
+    }
+    if (timeline.length > 0) {
+      return;
+    }
+    if (bootstrapWakeAttemptedSessionsRef.current.has(pendingBootstrapWakeSessionKey)) {
+      return;
+    }
+
+    bootstrapWakeAttemptedSessionsRef.current.add(pendingBootstrapWakeSessionKey);
+    setPendingBootstrapWakeSessionKey(null);
+    void sendPreparedChatMessage({
+      sessionKey: pendingBootstrapWakeSessionKey,
+      draftText: "Wake up, bustly!",
+      attachments: [],
+      contextPaths: [],
+      clearComposer: false,
+    }).then((ok) => {
+      if (!ok) {
+        bootstrapWakeAttemptedSessionsRef.current.delete(pendingBootstrapWakeSessionKey);
+        setPendingBootstrapWakeSessionKey((prev) =>
+          prev ?? pendingBootstrapWakeSessionKey,
+        );
+      }
+    });
+  }, [connected, currentSessionKey, pendingBootstrapWakeSessionKey, sendPreparedChatMessage, sending, timeline.length]);
 
   const handleSend = useCallback(async () => {
     await sendChatMessage();

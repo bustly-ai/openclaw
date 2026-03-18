@@ -130,8 +130,11 @@ function loadMainProcessEnvFromDotEnv(): void {
 loadMainProcessEnvFromDotEnv();
 
 const autoUpdater = updater.autoUpdater;
+const APP_DISPLAY_NAME = "Bustly";
 const APP_PROTOCOL = "bustly";
 const DEEP_LINK_CHANNEL = "deep-link";
+
+app.setName(APP_DISPLAY_NAME);
 
 let gatewayProcess: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
@@ -1907,7 +1910,7 @@ function createWindow(): void {
       // In prod: __dirname = "dist/main/", so "preload.js" = "dist/main/preload.js"
       preload: PRELOAD_PATH,
     },
-    title: "",
+    title: APP_DISPLAY_NAME,
   });
 
   // Load the app
