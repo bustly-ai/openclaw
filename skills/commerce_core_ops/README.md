@@ -38,18 +38,9 @@ Preferred env vars:
 ## Design Scope
 
 - Read directly from platform APIs (not semantic warehouse tables)
-- Write products through native platform API pass-through (legacy op wrapper remains for compatibility)
+- Write products through platform adapters with one CLI interface
 - Enforce JWT, workspace membership, workspace active status, and billing-window checks
 - All four platforms read/write via `/functions/v1/commerce-core-ops` (`DIRECT_READ` / `DIRECT_WRITE`)
-
-## Failure Semantics
-
-This skill distinguishes billing blockers from connection blockers:
-
-- Billing blockers: `BILLING_WINDOW_MISSING`, `BILLING_WINDOW_EXPIRED`, `BILLING_WINDOW_INACTIVE`
-- Connection blockers: only when connection checks succeed and no active platform mapping exists
-
-Do not interpret billing/auth failures as "store not connected".
 
 No custom sync workflow commands in this skill.
 
