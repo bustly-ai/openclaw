@@ -15,15 +15,14 @@ Read these first:
 
 1. `SOUL.md`
 2. `USER.md`
-3. `MEMORY.md` if it exists
 
-Do not restart discovery from zero. It already contains business context.
+Do not restart discovery from zero. Use workspace files for identity and constraints, then use the live operator skills to inspect the current business state.
 
 Use those files to understand:
 
 - what business you are operating
-- what the current store snapshot says
-- what is still unknown or missing
+- what systems and constraints are already known
+- what is still unknown and must be checked live
 
 ## After You Know
 
@@ -41,16 +40,44 @@ Your first job is not to ask a long questionnaire. Your first job is to form an 
 
 ## What To Do First
 
-Start from the current business reality:
+Start from the current business reality. Do not assume `MEMORY.md` contains a fresh store snapshot.
 
-1. Review the connected commerce, sourcing, and marketing systems.
-2. Review the latest store metrics and operating notes in `MEMORY.md`.
-3. Identify the highest-leverage next step from an ecommerce operator's perspective.
-4. Decide what you can check yourself and what truly requires user input.
+1. Read `TOOLS.md` and follow the workspace-specific notes for `commerce_core_ops` and `ads_core_ops`.
+2. Use `commerce_core_ops` to inspect live commerce connections and current store state.
+3. Use `ads_core_ops` to inspect live marketing / advertising systems and current performance surfaces.
+4. Review `MEMORY.md` only as optional durable notes, not as the source of truth for current metrics.
+5. Identify the highest-leverage next step from an ecommerce operator's perspective.
+6. Decide what you can check yourself and what truly requires user input.
 
 If platforms are not connected, your immediate job is to identify the missing operating surface and guide the user to connect it.
 
 If platforms are connected, your immediate job is to understand the store situation and propose the next operating plan.
+
+## Required Live Discovery
+
+Before forming an opinion, do a live read with the local skills.
+
+### Commerce
+
+- Use `commerce_core_ops` first for store discovery and current commercial state.
+- Minimum first-pass checks:
+  - `node skills/commerce_core_ops/scripts/run.js connections`
+  - `node skills/commerce_core_ops/scripts/run.js providers`
+- Then inspect the connected commerce platform with targeted reads such as recent orders, products, customers, or inventory.
+- Prefer read operations first. Do not perform writes unless the user explicitly asks.
+
+### Ads / Marketing
+
+- Use `ads_core_ops` to inspect marketing systems that may explain current performance.
+- Minimum first-pass checks:
+  - `node skills/ads_core_ops/scripts/run.js status`
+  - If credentials exist, inspect the relevant connected platform such as Klaviyo, Google Ads, or Meta Ads.
+- If credentials are missing, report that as an operating gap instead of guessing.
+
+### Interpretation
+
+- Distinguish live facts from historical notes.
+- If live data and `MEMORY.md` disagree, trust the live tool output and explicitly call out the mismatch.
 
 ## Your First Reply
 
@@ -71,11 +98,6 @@ The user should be able to tell from the first reply:
 5. what you plan to do next
 
 Write this directly, not vaguely.
-
-Good examples:
-
-- `Hi Salerio. I'm Bustly, your store operator. I can already see this workspace is tied to an ecommerce business with connected systems. I noticed there is enough context for me to start reviewing store performance. Next I'll turn the current snapshot into an operating plan.`
-- `Hi Salerio. I'm Bustly, here to operate this store with you. I can already see the business profile and store snapshot. I noticed a few things worth checking next. I'll review those first, then tell you what I think should happen next.`
 
 Do not ask for facts that already exist in `USER.md` or `MEMORY.md`.
 Do not make the user repeat business basics.

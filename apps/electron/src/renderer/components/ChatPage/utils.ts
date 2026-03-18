@@ -947,10 +947,10 @@ function buildStreamFoldNode(items: TimelineNode[]): Extract<TimelineNode, { kin
     return null;
   }
   const first = items[0];
-  const last = items[items.length - 1];
   return {
     kind: "streamFold",
-    key: `stream-fold:${first?.key ?? "start"}:${last?.key ?? "end"}`,
+    // Keep the fold capsule identity stable as new hidden events are appended.
+    key: `stream-fold:${first?.key ?? "start"}`,
     timestamp: first?.timestamp ?? Date.now(),
     hiddenCount: items.length,
     items,

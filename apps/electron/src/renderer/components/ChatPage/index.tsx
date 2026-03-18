@@ -24,7 +24,7 @@ import { buildBustlyWorkspaceMainSessionKey } from "../../../shared/bustly-agent
 import { extractText, extractThinking } from "../../lib/chat-extract";
 import Skeleton from "../ui/Skeleton";
 import PortalTooltip from "../ui/PortalTooltip";
-import { ChatTimeline, ChatTimelineWaitingIndicator } from "./ChatTimeline";
+import { ChatTimeline } from "./ChatTimeline";
 import {
   buildInputArtifactsMessage,
   inferInputArtifactKind,
@@ -762,7 +762,8 @@ export default function ChatPage() {
   const [subscriptionActionText, setSubscriptionActionText] = useState("Upgrade");
   const [pendingBootstrapWakeSessionKey, setPendingBootstrapWakeSessionKey] = useState<string | null>(null);
   const [modelMenuPos, setModelMenuPos] = useState<{
-    top: number;
+    top?: number;
+    bottom?: number;
     left: number;
     width: number;
     maxHeight: number;
@@ -1412,7 +1413,7 @@ export default function ChatPage() {
       if (thinking) {
         items.push({
           kind: "text",
-          id: nextId("history-thinking"),
+          id: `history:${sessionKey}:thinking:${baseSeq}:${timestamp}`,
           sortSeq: baseSeq,
           timestamp,
           role: "thinking",
@@ -1444,7 +1445,7 @@ export default function ChatPage() {
         }
         items.push({
           kind: "text",
-          id: nextId("history-text"),
+          id: `history:${sessionKey}:text:${textRole}:${baseSeq}:${timestamp}`,
           sortSeq: baseSeq + 0.01,
           timestamp,
           role: textRole,
@@ -1497,7 +1498,15 @@ export default function ChatPage() {
     items.push(...toolsByCallId.values());
     const runtime = getSessionRuntime(sessionKey);
     runtime.historyLoaded = true;
-    if (history.length === 0 && /^agent:[a-z0-9_-]+:main$/i.test(sessionKey)) {
+    const expectedBootstrapSessionKey = activeWorkspaceId
+      ? buildBustlyWorkspaceMainSessionKey(activeWorkspaceId)
+      : "";
+    if (
+      activeWorkspaceId &&
+      sessionKey === expectedBootstrapSessionKey &&
+      history.length === 0 &&
+      /^agent:[a-z0-9_-]+:main$/i.test(sessionKey)
+    ) {
       setPendingBootstrapWakeSessionKey((prev) => (prev === sessionKey ? prev : sessionKey));
     }
     setSessionTimeline(sessionKey, (prev) => {
@@ -1506,7 +1515,7 @@ export default function ChatPage() {
       return merged.toSorted(compareTimeline);
     });
     setSessionLoading(sessionKey, false);
-  }, [getSessionRuntime, setSessionLoading, setSessionTimeline]);
+  }, [activeWorkspaceId, getSessionRuntime, setSessionLoading, setSessionTimeline]);
 
   const connectGateway = useCallback(
     async (status: GatewayStatus) => {
@@ -2296,7 +2305,13 @@ export default function ChatPage() {
   }, [attachments, contextPaths, currentSessionKey, draft, sendPreparedChatMessage]);
 
   useEffect(() => {
-    if (!connected || !clientRef.current || sending || !pendingBootstrapWakeSessionKey) {
+    if (
+      !activeWorkspaceId ||
+      !connected ||
+      !clientRef.current ||
+      sending ||
+      !pendingBootstrapWakeSessionKey
+    ) {
       return;
     }
     if (pendingBootstrapWakeSessionKey !== currentSessionKey) {
@@ -2325,7 +2340,47 @@ export default function ChatPage() {
         );
       }
     });
-  }, [connected, currentSessionKey, pendingBootstrapWakeSessionKey, sendPreparedChatMessage, sending, timeline.length]);
+  }, [
+    activeWorkspaceId,
+    connected,
+    currentSessionKey,
+    pendingBootstrapWakeSessionKey,
+    sendPreparedChatMessage,
+    sending,
+    timeline.length,
+  ]);
+
+  useEffect(() => {
+    const expectedBootstrapSessionKey = activeWorkspaceId
+      ? buildBustlyWorkspaceMainSessionKey(activeWorkspaceId)
+      : "";
+    const runtime = currentSessionKey ? getSessionRuntime(currentSessionKey) : null;
+    if (!activeWorkspaceId || !connected) {
+      return;
+    }
+    if (currentSessionKey !== expectedBootstrapSessionKey) {
+      return;
+    }
+    if (!runtime) {
+      return;
+    }
+    if (!runtime.historyLoaded) {
+      return;
+    }
+    if (runtime.view.timeline.length > 0 || pendingBootstrapWakeSessionKey) {
+      return;
+    }
+    if (bootstrapWakeAttemptedSessionsRef.current.has(currentSessionKey)) {
+      return;
+    }
+    setPendingBootstrapWakeSessionKey(currentSessionKey);
+  }, [
+    activeWorkspaceId,
+    connected,
+    currentSessionKey,
+    getSessionRuntime,
+    pendingBootstrapWakeSessionKey,
+  ]);
 
   const handleSend = useCallback(async () => {
     await sendChatMessage();
@@ -2841,7 +2896,6 @@ export default function ChatPage() {
       : (sending || activeRunId) && runningTools === 0
         ? "Thinking"
         : null;
-  const shouldReserveLiveIndicatorSpace = Boolean(compactingRunId || reconnectStatus || sending || activeRunId);
   const contextUsageLabel = useMemo(() => {
     if (sessionUsage.contextTokens == null) {
       return "Context left: ?";
@@ -2882,9 +2936,8 @@ export default function ChatPage() {
         Math.min(desiredMaxHeight, shouldOpenUp ? spaceAbove - gap : spaceBelow),
       );
       setModelMenuPos({
-        top: shouldOpenUp
-          ? Math.max(viewportPadding, rect.top - gap - maxHeight)
-          : rect.bottom + gap,
+        top: shouldOpenUp ? undefined : rect.bottom + gap,
+        bottom: shouldOpenUp ? Math.max(viewportPadding, window.innerHeight - rect.top + gap) : undefined,
         left,
         width,
         maxHeight,
@@ -2912,25 +2965,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-white text-gray-900">
-      <div className="sticky top-0 z-20 flex h-14 flex-none items-center bg-white/80 backdrop-blur-sm [-webkit-app-region:drag]">
-        <div className="flex w-full items-center px-6">
-          <div className="relative [-webkit-app-region:no-drag]">
-            <button
-              ref={modelTriggerRef}
-              type="button"
-              onClick={() => setModelLevelOpen((prev) => !prev)}
-              className={`group flex items-center gap-2 rounded-lg px-3 py-1.5 transition-colors ${
-                modelLevelOpen
-                  ? "bg-[#F5F5F5] text-gray-900"
-                  : "text-gray-500 hover:bg-[#F5F5F5] hover:text-gray-900"
-              }`}
-            >
-              <span className="text-lg font-semibold tracking-tight text-gray-900">{selectedModelLevel.label}</span>
-              <CaretDown size={16} weight="bold" className={`text-gray-500 transition-transform ${modelLevelOpen ? "rotate-180" : ""}`} />
-            </button>
-          </div>
-        </div>
-      </div>
+      <div className="sticky top-0 z-20 h-8 flex-none bg-white/80 backdrop-blur-sm [-webkit-app-region:drag]" />
 
       {error || connectionNotice ? (
         <div
@@ -2949,7 +2984,12 @@ export default function ChatPage() {
             <div
               ref={modelMenuRef}
               className="fixed z-[10050] rounded-xl border border-gray-100 bg-white p-2 shadow-xl"
-              style={{ top: modelMenuPos.top, left: modelMenuPos.left, width: modelMenuPos.width }}
+              style={{
+                top: modelMenuPos.top,
+                bottom: modelMenuPos.bottom,
+                left: modelMenuPos.left,
+                width: modelMenuPos.width,
+              }}
               onMouseDown={(e) => e.stopPropagation()}
             >
               <div style={{ maxHeight: modelMenuPos.maxHeight }} className="flex flex-col gap-1 overflow-y-auto">
@@ -3032,17 +3072,11 @@ export default function ChatPage() {
             <ChatTimeline
               timeline={processedTimeline}
               activeRunningToolKey={activeRunningToolKey}
+              liveIndicatorLabel={liveIndicatorLabel}
+              liveIndicatorVisible={liveIndicatorLabel !== null}
               onRetryRun={handleRetryRun}
               onPreviewImage={setPreviewImage}
             />
-            {shouldReserveLiveIndicatorSpace ? (
-              <div className="py-2">
-                <ChatTimelineWaitingIndicator
-                  label={liveIndicatorLabel}
-                  visible={liveIndicatorLabel !== null}
-                />
-              </div>
-            ) : null}
           </div>
         </div>
 
@@ -3262,6 +3296,23 @@ export default function ChatPage() {
                         <Paperclip size={18} weight="bold" />
                       </button>
                     </PortalTooltip>
+                    <button
+                      ref={modelTriggerRef}
+                      type="button"
+                      onClick={() => setModelLevelOpen((prev) => !prev)}
+                      className={`flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-medium leading-none transition-colors ${
+                        modelLevelOpen
+                          ? "bg-[#F5F5F5] text-[#1A162F]"
+                          : "text-[#666F8D] hover:bg-[#F5F5F5] hover:text-[#1A162F]"
+                      }`}
+                    >
+                      <span className="max-w-[110px] truncate">{selectedModelLevel.label}</span>
+                      <CaretDown
+                        size={12}
+                        weight="bold"
+                        className={`transition-transform ${modelLevelOpen ? "rotate-180" : ""}`}
+                      />
+                    </button>
                   </div>
 
                   {activeRunId ? (

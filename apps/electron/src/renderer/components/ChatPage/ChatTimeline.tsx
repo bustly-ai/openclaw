@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useMemo, useState } from "react";
+import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Lottie from "lottie-react";
 import {
   ArrowsCounterClockwise,
@@ -48,6 +48,8 @@ import { toSanitizedMarkdownHtml } from "./utils";
 type ChatTimelineProps = {
   timeline: TimelineNode[];
   activeRunningToolKey: string | null;
+  liveIndicatorLabel?: string | null;
+  liveIndicatorVisible?: boolean;
   onCopyText?: (text: string) => void;
   onRetryRun?: (runId?: string) => void;
   onPreviewImage?: (url: string) => void;
@@ -301,6 +303,117 @@ function resolveExpandableNodeId(node: Extract<TimelineNode, { kind: "tool" | "p
   return `processed:${node.key}`;
 }
 
+const TIMELINE_ENTER_FROM_CLASS = "translate-y-3 scale-[0.985] opacity-0";
+const TIMELINE_ENTER_TO_CLASS = "translate-y-0 scale-100 opacity-100";
+
+const TimelineReveal = memo(function TimelineReveal({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const [entered, setEntered] = useState(false);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setEntered(true);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, []);
+
+  return (
+    <div
+      className={cx(
+        "origin-top transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform",
+        entered ? TIMELINE_ENTER_TO_CLASS : TIMELINE_ENTER_FROM_CLASS,
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+});
+
+const AnimatedCollapsible = memo(function AnimatedCollapsible({
+  open,
+  children,
+  className,
+  innerClassName,
+  keepMounted = true,
+}: {
+  open: boolean;
+  children: React.ReactNode;
+  className?: string;
+  innerClassName?: string;
+  keepMounted?: boolean;
+}) {
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [rendered, setRendered] = useState(open);
+  const [height, setHeight] = useState<string>(open ? "auto" : "0px");
+
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    if (!content) {
+      return;
+    }
+
+    if (open) {
+      setRendered(true);
+      setHeight("0px");
+      const frame = window.requestAnimationFrame(() => {
+        setHeight(`${content.scrollHeight}px`);
+      });
+      return () => {
+        window.cancelAnimationFrame(frame);
+      };
+    }
+
+    const currentHeight = `${content.getBoundingClientRect().height}px`;
+    setHeight(currentHeight);
+    const frame = window.requestAnimationFrame(() => {
+      setHeight("0px");
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [open]);
+
+  if (!rendered && !open && !keepMounted) {
+    return null;
+  }
+
+  return (
+    <div
+      className={cx(
+        "overflow-hidden transition-[height,opacity,transform,margin] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+        open ? "pointer-events-auto translate-y-0 opacity-100" : "pointer-events-none -translate-y-1 opacity-0",
+        className,
+      )}
+      style={{ height }}
+      onTransitionEnd={(event) => {
+        if (event.target !== event.currentTarget || event.propertyName !== "height") {
+          return;
+        }
+        if (open) {
+          setHeight("auto");
+          return;
+        }
+        if (!keepMounted) {
+          setRendered(false);
+        }
+      }}
+      aria-hidden={!open}
+    >
+      <div ref={contentRef} className={innerClassName}>
+        {children}
+      </div>
+    </div>
+  );
+});
+
 const StreamFoldNode = memo(function StreamFoldNode({
   node,
   expanded,
@@ -324,29 +437,19 @@ const StreamFoldNode = memo(function StreamFoldNode({
 }) {
   const stepLabel = `${node.hiddenCount} step${node.hiddenCount === 1 ? "" : "s"} hidden`;
 
-  if (expanded) {
-    return (
-      <TimelineStack
-        items={node.items}
-        expandedNodeIds={expandedNodeIds}
-        activeRunningToolKey={activeRunningToolKey}
-        onToggleExpanded={onToggleNodeExpanded}
-        onCopyText={onCopyText}
-        onRetryRun={onRetryRun}
-        onPreviewImage={onPreviewImage}
-      />
-    );
-  }
-
   return (
-    <div className="py-2 pl-11">
-      {!expanded ? (
+    <div className={expanded ? "" : "py-2"}>
+      <AnimatedCollapsible
+        open={!expanded}
+        className="pl-11"
+        keepMounted={false}
+      >
         <button
           type="button"
           onClick={() => {
             onToggleExpanded();
           }}
-          className="group flex w-full items-center justify-center gap-3 rounded-[22px] border border-dashed border-[#D8DCE7] bg-[#FBFBFD] px-4 py-3 text-center transition-colors hover:border-[#C5CBD9] hover:bg-[#F7F8FC]"
+          className="group flex w-full items-center justify-center gap-3 rounded-[22px] border border-dashed border-[#D8DCE7] bg-[#FBFBFD] px-4 py-3 text-center transition-[background-color,border-color,transform] duration-200 hover:border-[#C5CBD9] hover:bg-[#F7F8FC] active:scale-[0.99]"
         >
           <div className="flex items-center gap-1 opacity-50 transition-opacity group-hover:opacity-100">
             <div className="h-1.5 w-1.5 rounded-full bg-[#666F8D]/60" />
@@ -357,8 +460,18 @@ const StreamFoldNode = memo(function StreamFoldNode({
             {stepLabel} (click to expand)
           </span>
         </button>
-      ) : null}
-
+      </AnimatedCollapsible>
+      <AnimatedCollapsible open={expanded} keepMounted={false}>
+        <TimelineStack
+          items={node.items}
+          expandedNodeIds={expandedNodeIds}
+          activeRunningToolKey={activeRunningToolKey}
+          onToggleExpanded={onToggleNodeExpanded}
+          onCopyText={onCopyText}
+          onRetryRun={onRetryRun}
+          onPreviewImage={onPreviewImage}
+        />
+      </AnimatedCollapsible>
     </div>
   );
 });
@@ -519,7 +632,7 @@ const TextNode = memo(function TextNode({
   return (
     <div
       className={cx(
-        "animate-in fade-in slide-in-from-bottom-2 duration-500",
+        "animate-in fade-in slide-in-from-bottom-2 duration-500 pl-3",
         node.streaming && "opacity-95",
         node.final && "pb-1",
       )}
@@ -591,17 +704,14 @@ const ToolNode = memo(function ToolNode({
           </div>
         </button>
 
-        <div
-          className={cx(
-            "ml-11 overflow-hidden transition-all duration-300 ease-in-out",
-            expanded ? "mb-4 max-h-[360px] opacity-100" : "max-h-0 opacity-0",
-          )}
-        >
-          <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-3">
-            <pre className="max-h-[300px] overflow-auto whitespace-pre-wrap break-words pr-1 text-xs leading-relaxed text-gray-500">
-              {node.detail}
-            </pre>
-          </div>
+        <div className="ml-11">
+          <AnimatedCollapsible open={expanded} className={expanded ? "mb-4" : ""} keepMounted={false}>
+            <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-3">
+              <pre className="max-h-[300px] overflow-auto whitespace-pre-wrap break-words pr-1 text-xs leading-relaxed text-gray-500">
+                {node.detail}
+              </pre>
+            </div>
+          </AnimatedCollapsible>
         </div>
       </div>
     </div>
@@ -649,12 +759,7 @@ const ProcessedNode = memo(function ProcessedNode({
         <ChevronIcon expanded={expanded} />
       </button>
 
-      <div
-        className={cx(
-          "overflow-hidden transition-all duration-300 ease-in-out",
-          expanded ? "mt-4 opacity-100" : "max-h-0 opacity-0",
-        )}
-      >
+      <AnimatedCollapsible open={expanded} className={expanded ? "mt-4" : ""} keepMounted={false}>
         <div>
           <TimelineStack
             items={node.items}
@@ -664,7 +769,7 @@ const ProcessedNode = memo(function ProcessedNode({
             onRetryRun={onRetryRun}
           />
         </div>
-      </div>
+      </AnimatedCollapsible>
     </div>
   );
 });
@@ -703,18 +808,28 @@ function TimelineStack({
       {items.map((node, index) => {
         const prev = index > 0 ? items[index - 1] : null;
         const needsLooseSpacing = spaced && index > 0 && !shouldTightJoin(prev, node);
+        const item = (
+          <TimelineItem
+            node={node}
+            expandedNodeIds={expandedNodeIds}
+            activeRunningToolKey={activeRunningToolKey}
+            onToggleExpanded={onToggleExpanded}
+            onCopyText={onCopyText}
+            onRetryRun={onRetryRun}
+            onPreviewImage={onPreviewImage}
+          />
+        );
+        if (node.kind === "streamFold") {
+          return (
+            <div key={node.key} className={cx(needsLooseSpacing && "mt-4")}>
+              {item}
+            </div>
+          );
+        }
         return (
-          <div key={node.key} className={cx(needsLooseSpacing && "mt-4")}>
-            <TimelineItem
-              node={node}
-              expandedNodeIds={expandedNodeIds}
-              activeRunningToolKey={activeRunningToolKey}
-              onToggleExpanded={onToggleExpanded}
-              onCopyText={onCopyText}
-              onRetryRun={onRetryRun}
-              onPreviewImage={onPreviewImage}
-            />
-          </div>
+          <TimelineReveal key={node.key} className={cx(needsLooseSpacing && "mt-4")}>
+            {item}
+          </TimelineReveal>
         );
       })}
     </div>
@@ -800,10 +915,10 @@ function WaitingLiveIndicator({
           visible ? "animate-in fade-in duration-500" : "invisible",
         )}
       >
-      <div className="flex h-4 w-4 items-center justify-center overflow-hidden">
-        <Lottie animationData={loadingAnimation} loop style={{ width: 20, height: 20 }} className="scale-[0.8]" />
-      </div>
-      <span className="text-[14px] font-medium tracking-tight text-gray-500">{label ?? ""}</span>
+        <div className="flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden text-gray-500">
+          <Lottie animationData={loadingAnimation} loop style={{ width: 20, height: 20 }} className="scale-[0.8]" />
+        </div>
+        <span className="text-[14px] font-medium tracking-tight text-gray-500">{label ?? ""}</span>
       </div>
     </div>
   );
@@ -812,6 +927,8 @@ function WaitingLiveIndicator({
 export const ChatTimeline = memo(function ChatTimeline({
   timeline,
   activeRunningToolKey,
+  liveIndicatorLabel,
+  liveIndicatorVisible = false,
   onCopyText,
   onRetryRun,
   onPreviewImage,
@@ -843,25 +960,22 @@ export const ChatTimeline = memo(function ChatTimeline({
   };
 
   return (
-    <TimelineStack
-      items={timeline}
-      expandedNodeIds={expandedNodeIds}
-      activeRunningToolKey={activeRunningToolKey}
-      onToggleExpanded={handleToggleExpanded}
-      onCopyText={onCopyText}
-      onRetryRun={onRetryRun}
-      onPreviewImage={onPreviewImage}
-      spaced
-    />
+    <div className="flex flex-col">
+      <TimelineStack
+        items={timeline}
+        expandedNodeIds={expandedNodeIds}
+        activeRunningToolKey={activeRunningToolKey}
+        onToggleExpanded={handleToggleExpanded}
+        onCopyText={onCopyText}
+        onRetryRun={onRetryRun}
+        onPreviewImage={onPreviewImage}
+        spaced
+      />
+      {liveIndicatorVisible ? (
+        <div className="pt-2">
+          <WaitingLiveIndicator label={liveIndicatorLabel} visible={liveIndicatorVisible} />
+        </div>
+      ) : null}
+    </div>
   );
-});
-
-export const ChatTimelineWaitingIndicator = memo(function ChatTimelineWaitingIndicator({
-  label,
-  visible = true,
-}: {
-  label?: string | null;
-  visible?: boolean;
-}) {
-  return <WaitingLiveIndicator label={label} visible={visible} />;
 });

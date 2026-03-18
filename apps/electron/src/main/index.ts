@@ -49,7 +49,7 @@ import { ensureAgentWorkspace } from "../../../../src/agents/workspace";
 import { loadConfig } from "../../../../src/config/config";
 import { loadSessionStore, updateSessionStore } from "../../../../src/config/sessions";
 import { resolveDefaultSessionStorePath } from "../../../../src/config/sessions/paths";
-import { applyAgentConfig, listAgentEntries } from "../../../../src/commands/agents.config";
+import { applyAgentConfig, listAgentEntries, pruneAgentConfig } from "../../../../src/commands/agents.config";
 import { resolveGatewayLaunchAgentLabel } from "../../../../src/daemon/constants";
 import { GatewayClient } from "../../../../src/gateway/client";
 import type { SessionsPatchResult } from "../../../../src/gateway/protocol";
@@ -763,7 +763,11 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
   const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
   const providedWorkspaceName = params.workspaceName?.trim();
   const nextName = providedWorkspaceName || workspaceId;
-  const updated = applyAgentConfig(config, {
+  const configWithoutMain =
+    listAgentEntries(config).some((entry) => entry.id === "main")
+      ? pruneAgentConfig(config, "main").config
+      : config;
+  const updated = applyAgentConfig(configWithoutMain, {
     agentId,
     name: nextName,
     workspace: workspaceDir,

@@ -3,7 +3,6 @@ import { homedir } from "node:os";
 import * as path from "node:path";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
-  DEFAULT_MEMORY_FILENAME,
   DEFAULT_ERRORS_FILENAME,
   DEFAULT_FEATURE_REQUESTS_FILENAME,
   DEFAULT_LEARNINGS_DIRNAME,
@@ -78,23 +77,6 @@ type WorkspacePulseRow = {
   report_status: string | null;
 };
 
-type OrderMetricRow = {
-  shop_id: string | null;
-  created_at: string | null;
-  total_price: string | null;
-  currency: string | null;
-  financial_status: string | null;
-  fulfillment_status: string | null;
-};
-
-type RefundMetricRow = {
-  shop_id: string | null;
-  created_at: string | null;
-  amount: string | null;
-  currency: string | null;
-  refund_status: string | null;
-};
-
 type ShopifyMappingRow = {
   shopify_shop_id: string;
   role: string | null;
@@ -118,6 +100,7 @@ type BigCommerceMappingRow = {
 };
 
 type BigCommerceAccountRow = {
+  id: string;
   store_hash: string;
   name: string | null;
   secure_url: string | null;
@@ -288,21 +271,6 @@ export type BustlyBootstrapContext = {
     };
   };
   gaps: string[];
-  bootstrapSnapshot: {
-    platformMetrics7d: Array<{
-      platform: string;
-      label: string;
-      metrics: {
-        revenue: number | null;
-        orders: number;
-        aov: number | null;
-        refunds: number | null;
-        unfulfilledOrders: number;
-        currency: string | null;
-      } | null;
-      note?: string;
-    }>;
-  };
 };
 
 function createSupabaseClient(state: BustlyOAuthState): SupabaseClient {
@@ -444,83 +412,6 @@ function summarizePlatforms(platforms: string[], fallback: string): string {
     return fallback;
   }
   return unique.map(titleCasePlatform).join(", ");
-}
-
-function toHostname(rawUrl: string | null | undefined): string | null {
-  const trimmed = rawUrl?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  try {
-    return new URL(trimmed).hostname;
-  } catch {
-    return null;
-  }
-}
-
-function toNullableNumber(value: string | number | null | undefined): number | null {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : null;
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    return null;
-  }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function renderBootstrapMemorySnapshot(context: BustlyBootstrapContext): string {
-  const lines = [
-    "# MEMORY.md - Store Operating Context",
-    "",
-    "This file contains durable context for the merchant workspace.",
-    "",
-    "## Current Store Snapshot",
-    "",
-    `Last refreshed: ${context.generatedAt}`,
-    `Workspace: ${context.workspace.name}`,
-    "",
-    "## Last 7 Days Store Metrics",
-    "",
-  ];
-
-  const platformMetrics = context.bootstrapSnapshot.platformMetrics7d;
-  if (platformMetrics.length > 0) {
-    for (const item of platformMetrics) {
-      lines.push(`### ${titleCasePlatform(item.platform)} - ${item.label}`, "");
-      if (item.metrics) {
-        const currency = item.metrics.currency ?? "USD";
-        lines.push(`- Revenue: ${item.metrics.revenue ?? 0} ${currency}`);
-        lines.push(`- Orders: ${item.metrics.orders}`);
-        lines.push(`- AOV: ${item.metrics.aov ?? 0} ${currency}`);
-        lines.push(`- Refunds: ${item.metrics.refunds ?? 0} ${currency}`);
-        lines.push(`- Unfulfilled orders: ${item.metrics.unfulfilledOrders}`);
-      } else {
-        lines.push(`- ${item.note ?? "No reliable 7-day store metrics are available yet."}`);
-      }
-      lines.push("");
-    }
-  } else {
-    lines.push("- No reliable 7-day store metrics are available yet.");
-  }
-
-  lines.push("", "## Suggested Next Operating Steps", "");
-  if (platformMetrics.every((item) => item.metrics == null)) {
-    lines.push(
-      "- No store metrics are available yet. First priority is to connect a commerce platform or finish store data sync before doing store operations or monitoring.",
-    );
-  } else {
-    lines.push("- Review the 7-day store metrics and identify the biggest commercial risk or opportunity before asking broad questions.");
-  }
-  if (context.gaps.length > 0) {
-    lines.push("- Known gaps:");
-    for (const gap of context.gaps) {
-      lines.push(`  - ${gap}`);
-    }
-  }
-  lines.push("");
-
-  return `${lines.join("\n")}\n`;
 }
 
 function getShopInfoString(
@@ -747,10 +638,10 @@ async function buildBustlyBootstrapContext(params: {
           )
         : Promise.resolve([] as ShopifyShopRow[]),
       bigCommerceHashes.length > 0
-        ? fetchManyOptional(
+        ? fetchManyOptional<BigCommerceAccountRow>(
             client
               .from("bigcommerce_accounts")
-              .select("store_hash, name, secure_url, domain, currency, iana_timezone, status")
+              .select("id, store_hash, name, secure_url, domain, currency, iana_timezone, status")
               .in("store_hash", bigCommerceHashes),
             { label: "bigcommerce_accounts lookup failed", warnings },
           )
@@ -943,82 +834,6 @@ async function buildBustlyBootstrapContext(params: {
 
   const pulseBrandName = getShopInfoString(pulse, ["brand_name", "shop_name", "store_name"]);
   const pulseBrandDomain = getShopInfoString(pulse, ["brand_domain", "shop_domain", "store_domain"]);
-  const shopifyDomains = storefronts
-    .filter((store) => store.platform === "shopify")
-    .map((store) => toHostname(store.url))
-    .filter((value): value is string => Boolean(value));
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const [recentOrders, recentRefunds] = await Promise.all([
-    shopifyDomains.length > 0
-      ? fetchManyOptional<OrderMetricRow>(
-          client
-            .from("pay_order")
-            .select(
-              "shop_id, created_at, total_price, currency, financial_status, fulfillment_status",
-            )
-            .in("shop_id", shopifyDomains)
-            .gte("created_at", sevenDaysAgo),
-          { label: "pay_order 7d metrics lookup failed", warnings },
-        )
-      : Promise.resolve([] as OrderMetricRow[]),
-    shopifyDomains.length > 0
-      ? fetchManyOptional<RefundMetricRow>(
-          client
-            .from("pay_refund")
-            .select("shop_id, created_at, amount, currency, refund_status")
-            .in("shop_id", shopifyDomains)
-            .gte("created_at", sevenDaysAgo),
-          { label: "pay_refund 7d metrics lookup failed", warnings },
-        )
-      : Promise.resolve([] as RefundMetricRow[]),
-  ]);
-  const revenue7d = recentOrders.reduce(
-    (sum, row) => sum + (toNullableNumber(row.total_price) ?? 0),
-    0,
-  );
-  const refund7d = recentRefunds.reduce(
-    (sum, row) => sum + (toNullableNumber(row.amount) ?? 0),
-    0,
-  );
-  const orders7d = recentOrders.length;
-  const unfulfilledOrders7d = recentOrders.filter((row) => {
-    const status = row.fulfillment_status?.trim().toLowerCase();
-    return !status || status === "unfulfilled" || status === "partial";
-  }).length;
-  const currency7d =
-    recentOrders.find((row) => row.currency?.trim())?.currency?.trim() ??
-    recentRefunds.find((row) => row.currency?.trim())?.currency?.trim() ??
-    null;
-  const shopifyMetrics7d =
-    shopifyDomains.length > 0
-      ? {
-          revenue: Math.round(revenue7d * 100) / 100,
-          orders: orders7d,
-          aov: orders7d > 0 ? Math.round((revenue7d / orders7d) * 100) / 100 : 0,
-          refunds: Math.round(refund7d * 100) / 100,
-          unfulfilledOrders: unfulfilledOrders7d,
-          currency: currency7d,
-        }
-      : null;
-  const platformMetrics7d = storefronts.map((store) => {
-    if (store.platform === "shopify") {
-      return {
-        platform: store.platform,
-        label: store.name,
-        metrics: shopifyMetrics7d,
-        note:
-          shopifyMetrics7d == null
-            ? "Shopify is connected but no 7-day order/refund metrics are available yet."
-            : undefined,
-      };
-    }
-    return {
-      platform: store.platform,
-      label: store.name,
-      metrics: null,
-      note: "This platform is connected, but a 7-day business metric source is not wired yet.",
-    };
-  });
 
   const gaps: string[] = [];
   if (storefronts.length === 0) {
@@ -1095,9 +910,6 @@ async function buildBustlyBootstrapContext(params: {
       },
     },
     gaps,
-    bootstrapSnapshot: {
-      platformMetrics7d,
-    },
   };
 }
 
@@ -1185,17 +997,6 @@ async function ensureBustlyLearnings(workspaceDir: string): Promise<void> {
   ]);
 }
 
-async function writeBootstrapMemorySnapshot(
-  workspaceDir: string,
-  context: BustlyBootstrapContext,
-): Promise<void> {
-  await fs.writeFile(
-    path.join(workspaceDir, DEFAULT_MEMORY_FILENAME),
-    renderBootstrapMemorySnapshot(context),
-    "utf-8",
-  );
-}
-
 export async function initializeBustlyWorkspaceBootstrap(params: {
   workspaceDir: string;
   workspaceId: string;
@@ -1234,6 +1035,4 @@ export async function initializeBustlyWorkspaceBootstrap(params: {
     writeManagedFile(path.join(workspaceDir, "TOOLS.md"), tools),
     writeManagedFile(path.join(workspaceDir, "HEARTBEAT.md"), heartbeat),
   ]);
-  await writeBootstrapMemorySnapshot(workspaceDir, context);
-
 }
