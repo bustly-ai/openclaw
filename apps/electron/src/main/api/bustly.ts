@@ -15,6 +15,22 @@ export type SupabaseVerifyResult = {
   data?: SupabaseUserResponse;
 };
 
+export type SupabaseRefreshResponse = {
+  access_token?: string;
+  refresh_token?: string;
+  token_type?: string;
+  expires_in?: number;
+  expires_at?: number;
+  user?: SupabaseUserResponse;
+};
+
+export type SupabaseRefreshResult = {
+  ok: boolean;
+  status: number;
+  data?: SupabaseRefreshResponse;
+  errorText?: string;
+};
+
 export type SupabaseFetchParams = {
   path: string;
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -64,7 +80,8 @@ function getSupabaseAuthConfig() {
   const supabaseUrl = state?.supabase?.url?.trim() ?? "";
   const supabaseAnonKey = state?.supabase?.anonKey?.trim() ?? "";
   const accessToken = state?.user?.userAccessToken?.trim() ?? "";
-  return { supabaseUrl, supabaseAnonKey, accessToken };
+  const refreshToken = state?.user?.userRefreshToken?.trim() ?? "";
+  return { supabaseUrl, supabaseAnonKey, accessToken, refreshToken };
 }
 
 export async function supabaseFetch(params: SupabaseFetchParams): Promise<Response> {
@@ -96,6 +113,43 @@ export async function supabaseFetch(params: SupabaseFetchParams): Promise<Respon
     headers,
     body: params.body,
   });
+}
+
+export async function refreshSupabaseAuth(): Promise<SupabaseRefreshResult> {
+  const { supabaseUrl, supabaseAnonKey, refreshToken } = getSupabaseAuthConfig();
+  if (!refreshToken) {
+    throw new Error("Missing Supabase refresh token");
+  }
+  if (!supabaseUrl) {
+    throw new Error("Missing Supabase URL");
+  }
+  if (!supabaseAnonKey) {
+    throw new Error("Missing Supabase anon key");
+  }
+
+  const endpoint = `${supabaseUrl.replace(/\/+$/, "")}/auth/v1/token?grant_type=refresh_token`;
+  console.log("[Supabase API] Refresh request:", endpoint);
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      apikey: supabaseAnonKey,
+    },
+    body: JSON.stringify({
+      refresh_token: refreshToken,
+    }),
+  });
+
+  console.log("[Supabase API] Refresh response:", response.status, response.statusText);
+  if (!response.ok) {
+    const errorText = await response.text();
+    return { ok: false, status: response.status, errorText };
+  }
+
+  const data = (await response.json()) as SupabaseRefreshResponse;
+  return { ok: true, status: response.status, data };
 }
 
 export async function verifySupabaseAuth(): Promise<SupabaseVerifyResult> {

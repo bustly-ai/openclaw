@@ -486,6 +486,13 @@ export default function SkillPage() {
     const connectGateway = async () => {
       try {
         const supabaseConfig = await window.electronAPI.bustlyGetSupabaseConfig();
+        if (!supabaseConfig) {
+          if (!disposed) {
+            setLoadingSkills(false);
+            setSkillsError("Bustly login required.");
+          }
+          return;
+        }
         const agentId = buildBustlyWorkspaceAgentId(supabaseConfig.workspaceId);
         const status = await window.electronAPI.gatewayStatus();
         if (!status.running) {

@@ -2619,11 +2619,16 @@ function setupIpcHandlers(): void {
           // Got the code, now exchange for token
           console.log("[Bustly Login] Got authorization code, exchanging token...");
           const apiResponse = await exchangeToken(code);
+          console.log(
+            `[Bustly Login] Token exchange response received user=${apiResponse.data.userEmail} workspace=${apiResponse.data.workspaceId} hasSupabaseSession=${Boolean(apiResponse.data.extras?.supabase_session?.access_token)}`,
+          );
 
-          // Extract Supabase access token from extras
-          const supabaseAccessToken = apiResponse.data.extras?.supabase_session?.access_token ?? "";
-          if (!supabaseAccessToken) {
+          const supabaseSession = apiResponse.data.extras?.supabase_session;
+          if (!supabaseSession?.access_token) {
             throw new Error("Missing Supabase access token in API response");
+          }
+          if (!supabaseSession?.refresh_token) {
+            throw new Error("Missing Supabase refresh token in API response");
           }
 
           // Read optional legacy supabase bootstrap config from API extras.
@@ -2639,14 +2644,17 @@ function setupIpcHandlers(): void {
             ].includes(skill),
           );
 
-          // Complete login - store user info and search data config in bustlyOauth.json
-          // Supabase access token is mirrored to user.userAccessToken
+          // Complete login - store user info plus Supabase session in bustlyOauth.json
           BustlyOAuth.completeBustlyLogin({
             user: {
               userId: apiResponse.data.userId,
               userName: apiResponse.data.userName,
               userEmail: apiResponse.data.userEmail,
-              userAccessToken: supabaseAccessToken,
+              userAccessToken: supabaseSession.access_token,
+              userRefreshToken: supabaseSession.refresh_token,
+              sessionExpiresIn: supabaseSession.expires_in,
+              sessionExpiresAt: supabaseSession.expires_at,
+              sessionTokenType: supabaseSession.token_type,
               workspaceId: apiResponse.data.workspaceId,
               skills: filteredSkills,
             },

@@ -324,6 +324,10 @@ export type BustlyTokenApiResponse = {
       };
       supabase_session?: {
         access_token: string;
+        refresh_token?: string;
+        expires_in?: number;
+        expires_at?: number;
+        token_type?: string;
       };
     };
     skills?: string[];
@@ -371,6 +375,7 @@ export async function exchangeToken(code: string): Promise<BustlyTokenApiRespons
   }
 
   const apiResponse = (await response.json()) as BustlyTokenApiResponse;
+  console.log("[Bustly OAuth] Full token exchange response:", JSON.stringify(apiResponse, null, 2));
 
   console.log(
     "[Bustly OAuth] API response - code:",

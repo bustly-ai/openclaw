@@ -51,4 +51,23 @@ describe("resolveWorkspaceTemplateDir", () => {
     const resolved = await resolveWorkspaceTemplateDir({ cwd: distDir, moduleUrl });
     expect(path.normalize(resolved)).toBe(path.resolve("docs", "reference", "templates"));
   });
+
+  it("resolves templates from packaged electron resources when cwd falls back to root", async () => {
+    const root = await makeTempRoot();
+    const resourcesDir = path.join(root, "Bustly.app", "Contents", "Resources");
+    const templatesDir = path.join(resourcesDir, "docs", "reference", "templates");
+    await fs.mkdir(path.join(resourcesDir, "dist"), { recursive: true });
+    await fs.mkdir(templatesDir, { recursive: true });
+    await fs.writeFile(path.join(templatesDir, "AGENTS.md"), "# packaged\n");
+
+    const moduleUrl = pathToFileURL(path.join(resourcesDir, "dist", "entry.js")).toString();
+
+    const resolved = await resolveWorkspaceTemplateDir({
+      cwd: "/",
+      argv1: undefined,
+      moduleUrl,
+      resourcesPath: resourcesDir,
+    });
+    expect(resolved).toBe(templatesDir);
+  });
 });
