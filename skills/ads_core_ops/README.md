@@ -1,89 +1,175 @@
 # Ads Core Ops
 
-Unified advertising operations for Klaviyo, Google Ads, and Meta Ads. Direct API calls without any intermediate proxy.
+Unified advertising operations for Klaviyo, Google Ads, and Meta Ads.
+
+- **Klaviyo** → Gateway Mode
+- **Google Ads** → Gateway Mode
+- **Meta Ads** → Direct Mode
 
 ## Installation
 
 ```bash
-cd skills/ads_core_ops
+cd skills/ops/ads_core_ops
 ```
 
 No npm install needed - pure JavaScript with no dependencies.
 
+## Architecture
+
+### Gateway Mode
+
+Klaviyo and Google Ads go through the Supabase Edge Function:
+
+```text
+CLI (run.js)
+  -> /functions/v1/ads-core-ops
+  -> JWT / workspace validation
+  -> provider credential resolution
+  -> provider API relay
+```
+
+Gateway mode reads Bustly client authorization from:
+
+```text
+~/.bustly/bustlyOauth.json
+```
+
+Gateway mode also requires an active provider connection in **Bustly > Integrations**. If the Gateway reports that a platform is not connected, the correct next step is to go to **Bustly > Integrations** and authorize that platform.
+
+### Direct Mode
+
+Meta Ads still uses local credentials stored in:
+
+```text
+~/.bustly/ads_credentials.json
+```
+
 ## Quick Start
 
+### Gateway Mode
+
 ```bash
-# Configure API Keys
-node scripts/run.js config set-klaviyo pk_your_api_key
-node scripts/run.js config set-google-ads '{"developerToken":"xxx","clientId":"xxx","clientSecret":"xxx","refreshToken":"xxx"}'
+# Klaviyo list APIs
+node scripts/run.js klaviyo profiles
+node scripts/run.js klaviyo campaigns --limit 20
+
+# Klaviyo passthrough
+node scripts/run.js klaviyo raw --path /profiles --query '{"page[size]":20}'
+
+# Google Ads preset reads
+node scripts/run.js google-ads customers
+node scripts/run.js google-ads campaigns --customer-id 1234567890
+
+# Google Ads custom GAQL
+node scripts/run.js google-ads search \
+  --customer-id 1234567890 \
+  --query "SELECT campaign.id, campaign.name FROM campaign LIMIT 10"
+
+# Google Ads passthrough
+node scripts/run.js google-ads raw \
+  --path /customers/1234567890/googleAds:search \
+  --body '{"query":"SELECT campaign.id, campaign.name FROM campaign LIMIT 10"}'
+```
+
+### Direct Mode (Meta Ads)
+
+```bash
+# Configure credentials
 node scripts/run.js config set-meta-ads '{"accessToken":"xxx","adAccountId":"123456789"}'
 
 # Run commands
-node scripts/run.js klaviyo profiles
-node scripts/run.js google-ads customers
 node scripts/run.js meta-ads campaigns
+node scripts/run.js meta-ads insights --date-preset last_7d
 ```
 
 ## Supported Platforms
 
-| Platform   | Commands                                           | API Endpoint               |
-| ---------- | -------------------------------------------------- | -------------------------- |
-| Klaviyo    | profiles, lists, campaigns, flows, metrics, events | `a.klaviyo.com/api`        |
-| Google Ads | customers, campaigns, ad-groups, keywords, search  | `googleads.googleapis.com` |
-| Meta Ads   | account, campaigns, adsets, ads, insights          | `graph.facebook.com`       |
+| Platform   | Mode    | Commands                                                                     |
+| ---------- | ------- | ---------------------------------------------------------------------------- |
+| Klaviyo    | Gateway | profiles, lists, segments, campaigns, flows, metrics, events, templates, raw |
+| Google Ads | Gateway | customers, campaigns, ad-groups, keywords, ads, search, raw                  |
+| Meta Ads   | Direct  | account, campaigns, adsets, ads, insights                                    |
+
+## Gateway Request Model
+
+### 1. Preset read mode
+
+Used by commands like `klaviyo profiles` or `google-ads campaigns`:
+
+```json
+{
+  "action": "DIRECT_READ",
+  "platform": "google-ads",
+  "entity": "campaigns",
+  "workspace_id": "uuid",
+  "user_id": "uuid",
+  "limit": 50,
+  "filters": {
+    "customer_id": "1234567890"
+  }
+}
+```
+
+### 2. Native relay mode
+
+Used by `raw` / `native` commands:
+
+```json
+{
+  "action": "NATIVE_PROXY",
+  "platform": "klaviyo",
+  "workspace_id": "uuid",
+  "user_id": "uuid",
+  "request": {
+    "method": "GET",
+    "path": "/profiles",
+    "query": {
+      "page[size]": 20
+    },
+    "headers": {},
+    "body": null
+  }
+}
+```
 
 ## Authentication
 
 ### Klaviyo
 
-- API Key (starts with `pk_`)
-- Get it at: https://www.klaviyo.com/create-private-api-key
+- Managed server-side via gateway
+- API key resolved from workspace connection
 
 ### Google Ads
 
-- Developer Token
-- OAuth2 Client (clientId, clientSecret, refreshToken)
-- Get it at: https://developers.google.com/google-ads/api/docs/first-call/overview
+- Managed server-side via gateway
+- OAuth token resolved via Nango
 
 ### Meta Ads
 
-- Access Token (User Token or System User Token)
-- Ad Account ID
-- Get it at: https://developers.facebook.com/tools/explorer/
+- Access Token + Ad Account ID
+- Get token at: <https://developers.facebook.com/tools/explorer/>
 
-## Architecture
+## Status Checks
 
-```
-Agent → ads_core_ops CLI
-        ↓
-   Direct API calls to platforms
-        ↓
-┌──────────┬──────────────┬──────────────┐
-│  Klaviyo │ Google Ads   │  Meta Ads    │
-│   API    │    API       │    API       │
-└──────────┴──────────────┴──────────────┘
+```bash
+node scripts/run.js status
 ```
 
-## Credentials File
+Possible gateway statuses:
 
-All credentials are stored in `~/.bustly/ads_credentials.json`:
+- `ready`
+- `not_authorized`
 
-```json
-{
-  "klaviyo": {
-    "apiKey": "pk_xxx",
-    "revision": "2026-01-15"
-  },
-  "google-ads": {
-    "developerToken": "xxx",
-    "clientId": "xxx.apps.googleusercontent.com",
-    "clientSecret": "xxx",
-    "refreshToken": "xxx",
-    "loginCustomerId": "1234567890"
-  },
-  "meta-ads": {
-    "accessToken": "xxx",
-    "adAccountId": "123456789"
-  }
-}
-```
+If a command fails because a Gateway platform is not connected, send the user to **Bustly > Integrations** to complete authorization before retrying.
+
+Possible direct statuses:
+
+- `ready`
+- `not_configured`
+- `incomplete`
+
+## Notes
+
+- `raw` / `native` commands are for agent-driven passthrough requests.
+- Gateway mode does **not** expose provider credentials back to the CLI.
+- Meta Ads remains direct for now.
