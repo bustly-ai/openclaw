@@ -45,8 +45,6 @@ const COMMAND_ALIASES = {
   get: "read:entity",
   write: "write:product",
   put: "write:product",
-  "write-native": "write:native",
-  "native-write": "write:native",
   auth: "auth:check",
   providers: "platforms",
   connections: "connect:sources",
@@ -451,9 +449,7 @@ async function verifyWorkspaceSubscription(config, workspaceId) {
 
   const items = Array.isArray(rows) ? rows : [];
   if (items.length === 0) {
-    throw new Error(
-      `BILLING_WINDOW_MISSING: workspace ${workspaceId} has no billing window configured`,
-    );
+    throw new Error(`Workspace ${workspaceId} has no subscription window`);
   }
 
   const nowMs = Date.now();
@@ -464,64 +460,11 @@ async function verifyWorkspaceSubscription(config, workspaceId) {
   const latestValidToMs = parseTimestampMs(latest?.valid_to);
   if (latestValidToMs !== null && latestValidToMs <= nowMs) {
     throw new Error(
-      `BILLING_WINDOW_EXPIRED: workspace ${workspaceId} billing window expired at ${latest.valid_to}`,
+      `Workspace ${workspaceId} subscription is expired (valid_to=${latest.valid_to})`,
     );
   }
 
-  throw new Error(
-    `BILLING_WINDOW_INACTIVE: workspace ${workspaceId} has no ACTIVE billing window for current time`,
-  );
-}
-
-function classifyError(message) {
-  const text = String(message || "");
-  const rules = [
-    {
-      code: "BILLING_WINDOW_MISSING",
-      patterns: [
-        /BILLING_WINDOW_MISSING/i,
-        /no billing window configured/i,
-        /no active billing window/i,
-        /subscription window not found/i,
-      ],
-      summary: "Billing is not initialized for this workspace.",
-      next_action:
-        "Create an active workspace_billing_window for this workspace before running commerce reads/writes.",
-      not_caused_by: "store connections",
-    },
-    {
-      code: "BILLING_WINDOW_EXPIRED",
-      patterns: [/BILLING_WINDOW_EXPIRED/i, /subscription is expired/i, /billing window expired/i],
-      summary: "Workspace billing window is expired.",
-      next_action: "Renew/extend the billing window, then retry.",
-      not_caused_by: "store connections",
-    },
-    {
-      code: "BILLING_WINDOW_INACTIVE",
-      patterns: [
-        /BILLING_WINDOW_INACTIVE/i,
-        /subscription is not active/i,
-        /no ACTIVE billing window/i,
-      ],
-      summary: "Workspace billing is present but not currently active.",
-      next_action: "Set billing window status/time range to active and current, then retry.",
-      not_caused_by: "store connections",
-    },
-    {
-      code: "WORKSPACE_HEADER_MISSING",
-      patterns: [/Missing X-Workspace-Id/i],
-      summary: "Workspace header is missing.",
-      next_action: "Populate workspace_id in bustly OAuth state and pass X-Workspace-Id.",
-      not_caused_by: null,
-    },
-  ];
-
-  for (const rule of rules) {
-    if (rule.patterns.some((pattern) => pattern.test(text))) {
-      return rule;
-    }
-  }
-  return null;
+  throw new Error(`Workspace ${workspaceId} subscription is not ACTIVE for current time window`);
 }
 
 async function ensureAuthContext(config, flags = {}, options = {}) {
@@ -711,13 +654,12 @@ Core Commands (agent-friendly aliases):
 Read Commands:
   read:entity --platform <platform> --entity <${READ_ENTITIES.join("|")}> [--limit 50] [--since 2025-01-01] [--cursor <cursor>] [--filter '{"k":"v"}']
   read:entity <platform> <entity> [--limit 50] [--since 2025-01-01]
+  Shopify orders/order_items default since-field: processed_at (override: --filter '{"since_field":"updated_at"}')
   all platforms route to /functions/v1/commerce-core-ops (DIRECT_READ)
 
 Write Commands:
   write:product --platform <platform> --op <operation> --payload '{...}' [--resource product] [--function commerce-core-ops]
   all platforms route to /functions/v1/commerce-core-ops (DIRECT_WRITE)
-  write:native --platform <platform> --method <METHOD> --path </api/path> [--payload '{...}'] [--query '{"k":"v"}'] [--headers '{"x":"y"}']
-  native mode: pass-through to platform API with server-side auth/token injection
 
 Generic Edge Invocation:
   edge:invoke --function <function-name-or-url> --payload '{...}'
@@ -783,7 +725,9 @@ function parseReadTarget(positional, flags) {
 
   const entity = normalizeEntity(flags.entity || flags.resource || positional[2]);
   if (!entity) {
-    throw new Error(`--entity is required: ${READ_ENTITIES.join(" | ")}`);
+    throw new Error(
+      `--entity is required: ${READ_ENTITIES.join(" | ")}`,
+    );
   }
 
   const limit = Math.max(1, Math.min(250, parseInteger(flags.limit, 50)));
@@ -839,18 +783,15 @@ async function getPlatformConnectionStatus(config, workspaceId, platform) {
     };
   }
 
-  const integrationRows = asArray(
-    await safeWorkspaceRows(config, "workspace_integrations", workspaceId),
-  );
-  const activeIntegration =
-    integrationRows.find((row) => {
-      if (!isActiveStatus(row.status)) return false;
-      const value = String(row.platform || "")
-        .trim()
-        .toLowerCase();
-      if (platform === "magento") return value === "magento" || value === "adobe-commerce";
-      return value === platform;
-    }) || null;
+  const integrationRows = asArray(await safeWorkspaceRows(config, "workspace_integrations", workspaceId));
+  const activeIntegration = integrationRows.find((row) => {
+    if (!isActiveStatus(row.status)) return false;
+    const value = String(row.platform || "")
+      .trim()
+      .toLowerCase();
+    if (platform === "magento") return value === "magento" || value === "adobe-commerce";
+    return value === platform;
+  }) || null;
 
   const connectionFromMapping = String(active?.nango_connection_id || "").trim();
   const connectionFromIntegration = String(activeIntegration?.nango_connection_id || "").trim();
@@ -870,8 +811,7 @@ async function getPlatformConnectionStatus(config, workspaceId, platform) {
 async function listConnectionStatuses(config, auth) {
   return Promise.all(
     SUPPORTED_PLATFORMS.map((platform) =>
-      getPlatformConnectionStatus(config, auth.workspaceId, platform),
-    ),
+      getPlatformConnectionStatus(config, auth.workspaceId, platform)),
   );
 }
 
@@ -986,19 +926,6 @@ function buildCoreWritePayload(auth, platform, operation, resource, payload, fla
   };
 }
 
-function parseJsonObjectFlag(flags, inlineKey, fileKey) {
-  const value = getJsonInput(flags, {
-    inlineKey,
-    fileKey,
-    defaultValue: null,
-  });
-  if (value === null) return {};
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`--${inlineKey} / --${fileKey} must be a JSON object`);
-  }
-  return value;
-}
-
 async function handleWriteProduct(config, positional, flags) {
   const platform = normalizePlatform(flags.platform || flags.provider || positional[1]);
   if (!platform) {
@@ -1014,13 +941,6 @@ async function handleWriteProduct(config, positional, flags) {
   if (!payload || typeof payload !== "object") {
     throw new Error("--payload or --payload-file is required and must be a JSON object");
   }
-  if (flags.id && payload.id === undefined) payload.id = String(flags.id);
-  if (flags["product-id"] && payload.product_id === undefined) {
-    payload.product_id = String(flags["product-id"]);
-  }
-  if (flags["variant-id"] && payload.variant_id === undefined) {
-    payload.variant_id = String(flags["variant-id"]);
-  }
 
   const auth = await ensureAuthContext(config, flags, { requireMembership: true });
 
@@ -1033,48 +953,6 @@ async function handleWriteProduct(config, positional, flags) {
   });
 
   printData({ platform, op, resource, via: functionName, result });
-}
-
-async function handleWriteNative(config, positional, flags) {
-  const platform = normalizePlatform(flags.platform || flags.provider || positional[1]);
-  if (!platform) {
-    throw new Error("--platform is required: shopify | bigcommerce | woocommerce | magento");
-  }
-
-  const path = String(flags.path || flags.endpoint || positional[2] || "").trim();
-  if (!path) {
-    throw new Error("--path is required for write:native");
-  }
-
-  const method = String(flags.method || "POST")
-    .trim()
-    .toUpperCase();
-
-  const payload = getJsonInput(flags, { defaultValue: {} });
-  if (payload === null || payload === undefined) {
-    throw new Error("--payload must be a JSON value when provided");
-  }
-
-  const query = parseJsonObjectFlag(flags, "query", "query-file");
-  const headers = parseJsonObjectFlag(flags, "headers", "headers-file");
-
-  const auth = await ensureAuthContext(config, flags, { requireMembership: true });
-  const functionName = String(flags.function || DEFAULT_CORE_OPS_FUNCTION);
-
-  const body = buildCoreWritePayload(auth, platform, "native", "native", {}, flags);
-  body.native_request = {
-    method,
-    path,
-    query,
-    headers,
-    body: payload,
-  };
-
-  const result = await callEdgeFunction(config, functionName, body, {
-    dryRun: flags["dry-run"] === true,
-  });
-
-  printData({ platform, mode: "native", method, path, via: functionName, result });
 }
 
 async function handleEdgeInvoke(config, flags) {
@@ -1155,11 +1033,6 @@ async function main() {
     return;
   }
 
-  if (command === "write:native") {
-    await handleWriteNative(config, positional, flags);
-    return;
-  }
-
   if (command === "edge:invoke") {
     await handleEdgeInvoke(config, flags);
     return;
@@ -1169,24 +1042,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  const classified = classifyError(message);
-  if (classified) {
-    console.error(
-      JSON.stringify(
-        {
-          error: message,
-          code: classified.code,
-          summary: classified.summary,
-          next_action: classified.next_action,
-          ...(classified.not_caused_by ? { not_caused_by: classified.not_caused_by } : {}),
-        },
-        null,
-        2,
-      ),
-    );
-  } else {
-    console.error(`Error: ${message}`);
-  }
+  console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 });
