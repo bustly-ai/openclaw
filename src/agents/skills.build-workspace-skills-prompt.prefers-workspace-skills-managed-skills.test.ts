@@ -151,4 +151,29 @@ describe("buildWorkspaceSkillsPrompt", () => {
     );
     expect(prompt).not.toContain("alias-skill");
   });
+
+  it("surfaces command hints in the skills prompt", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "commerce-core-ops"),
+      name: "commerce-core-ops",
+      description: "Unified commerce operations",
+      metadata:
+        '{"openclaw":{"aliases":["commerce"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops commerce help","defaultCommand":"bustly ops commerce providers","fallbackCommand":"node skills/ops/commerce_core_ops/scripts/run.js providers","commandExamples":["bustly ops commerce providers"]}}',
+    });
+
+    const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+      }),
+    );
+
+    expect(prompt).toContain("Aliases: commerce.");
+    expect(prompt).toContain("Preferred command namespace: bustly ops.");
+    expect(prompt).toContain("Start discovery with: bustly ops commerce help.");
+    expect(prompt).toContain("Default command: bustly ops commerce providers.");
+    expect(prompt).toContain(
+      "Fallback command: node skills/ops/commerce_core_ops/scripts/run.js providers.",
+    );
+  });
 });

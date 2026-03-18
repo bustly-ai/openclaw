@@ -1,8 +1,4 @@
-import {
-  formatSkillsForPrompt,
-  loadSkillsFromDir,
-  type Skill,
-} from "@mariozechner/pi-coding-agent";
+import { formatSkillsForPrompt, loadSkillsFromDir, type Skill } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -50,6 +46,73 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
     ...s,
     filePath: s.filePath.startsWith(prefix) ? "~/" + s.filePath.slice(prefix.length) : s.filePath,
   }));
+}
+
+function escapeXml(str: string): string {
+  return str
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function buildPromptSkillDescription(entry: SkillEntry): string {
+  const base = entry.skill.description?.trim() || entry.skill.name;
+  const hints = entry.metadata?.commandHints;
+  if (!hints) {
+    return base;
+  }
+
+  const extras: string[] = [];
+  if (hints.aliases && hints.aliases.length > 0) {
+    extras.push(`Aliases: ${hints.aliases.join(", ")}.`);
+  }
+  if (hints.commandNamespace) {
+    extras.push(`Preferred command namespace: ${hints.commandNamespace}.`);
+  }
+  if (hints.discoveryCommand) {
+    extras.push(`Start discovery with: ${hints.discoveryCommand}.`);
+  }
+  if (hints.defaultCommand) {
+    extras.push(`Default command: ${hints.defaultCommand}.`);
+  }
+  if (hints.fallbackCommand) {
+    extras.push(`Fallback command: ${hints.fallbackCommand}.`);
+  }
+  if (hints.commandExamples && hints.commandExamples.length > 0) {
+    extras.push(`Examples: ${hints.commandExamples.join(" | ")}.`);
+  }
+
+  return extras.length > 0 ? `${base} ${extras.join(" ")}` : base;
+}
+
+function formatSkillEntriesForPrompt(entries: SkillEntry[]): string {
+  const visibleEntries = entries.filter((entry) => !entry.skill.disableModelInvocation);
+  if (visibleEntries.length === 0) {
+    return "";
+  }
+
+  const compacted = compactSkillPaths(visibleEntries.map((entry) => entry.skill));
+  const pathByName = new Map(compacted.map((skill) => [skill.name, skill.filePath]));
+  const lines = [
+    "\n\nThe following skills provide specialized instructions for specific tasks.",
+    "Use the read tool to load a skill's file when the task matches its description.",
+    "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+    "",
+    "<available_skills>",
+  ];
+
+  for (const entry of visibleEntries) {
+    lines.push("  <skill>");
+    lines.push(`    <name>${escapeXml(entry.skill.name)}</name>`);
+    lines.push(`    <description>${escapeXml(buildPromptSkillDescription(entry))}</description>`);
+    lines.push(`    <location>${escapeXml(pathByName.get(entry.skill.name) ?? entry.skill.filePath)}</location>`);
+    lines.push("  </skill>");
+  }
+
+  lines.push("</available_skills>");
+  return lines.join("\n");
 }
 
 function debugSkillCommandOnce(
@@ -503,14 +566,12 @@ function resolveWorkspaceSkillPromptState(
     skills: resolvedSkills,
     config: opts?.config,
   });
+  const promptSkillNames = new Set(skillsForPrompt.map((skill) => skill.name));
+  const promptEntriesLimited = promptEntries.filter((entry) => promptSkillNames.has(entry.skill.name));
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
     : "";
-  const prompt = [
-    remoteNote,
-    truncationNote,
-    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
-  ]
+  const prompt = [remoteNote, truncationNote, formatSkillEntriesForPrompt(promptEntriesLimited)]
     .filter(Boolean)
     .join("\n");
   return { eligible, prompt, resolvedSkills };
