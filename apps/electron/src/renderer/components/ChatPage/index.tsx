@@ -2341,24 +2341,44 @@ export default function ChatPage() {
     if (!runtime.historyLoaded) {
       return;
     }
-    if (timeline.length > 0) {
-      return;
-    }
     if (bootstrapWakeAttemptedSessionsRef.current.has(currentSessionKey)) {
       return;
     }
+    const client = clientRef.current;
+    let cancelled = false;
     bootstrapWakeAttemptedSessionsRef.current.add(currentSessionKey);
-    void sendPreparedChatMessage({
+
+    void client.request<{ messages?: unknown[] }>("chat.history", {
       sessionKey: currentSessionKey,
-      draftText: "Wake up, bustly!",
-      attachments: [],
-      contextPaths: [],
-      clearComposer: false,
-    }).then((ok) => {
-      if (!ok) {
+      limit: 1,
+    }).then((res) => {
+      if (cancelled) {
+        return;
+      }
+      const hasHistory = Array.isArray(res.messages) && res.messages.length > 0;
+      if (hasHistory) {
+        return;
+      }
+      return sendPreparedChatMessage({
+        sessionKey: currentSessionKey,
+        draftText: "Wake up, bustly!",
+        attachments: [],
+        contextPaths: [],
+        clearComposer: false,
+      }).then((ok) => {
+        if (!ok && !cancelled) {
+          bootstrapWakeAttemptedSessionsRef.current.delete(currentSessionKey);
+        }
+      });
+    }).catch(() => {
+      if (!cancelled) {
         bootstrapWakeAttemptedSessionsRef.current.delete(currentSessionKey);
       }
     });
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     activeWorkspaceId,
     connected,
@@ -2366,7 +2386,6 @@ export default function ChatPage() {
     getSessionRuntime,
     sendPreparedChatMessage,
     sending,
-    timeline.length,
   ]);
 
   const handleSend = useCallback(async () => {
