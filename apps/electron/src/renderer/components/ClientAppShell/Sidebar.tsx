@@ -1131,9 +1131,14 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     [effectiveWorkspaceId],
   );
   const activeTaskId = useMemo(() => {
+    // Skills is a separate top-level destination, so it should not leave the main
+    // workspace session highlighted in the scenario list.
+    if (isSkillPage) {
+      return "";
+    }
     const searchParams = new URLSearchParams(location.search);
     return searchParams.get("session") ?? activeMainSessionKey;
-  }, [activeMainSessionKey, location.search]);
+  }, [activeMainSessionKey, isSkillPage, location.search]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
