@@ -16,7 +16,6 @@ import {
 } from "@phosphor-icons/react";
 import { listWorkspaceSummaries } from "../../lib/bustly-supabase";
 import { GatewayBrowserClient, type GatewayEventFrame } from "../../lib/gateway-client";
-import { notifySidebarTaskRunState, notifySidebarTasksRefresh } from "../../lib/session-events";
 import {
   deriveScenarioLabel,
   resolveSessionIconComponent,
@@ -162,6 +161,8 @@ type SessionRuntimeState = {
 };
 
 const TOOL_RUNNING_MIN_VISIBLE_MS = 600;
+const SIDEBAR_TASKS_REFRESH_EVENT = "openclaw:sidebar-refresh-tasks";
+const SIDEBAR_TASK_RUN_STATE_EVENT = "openclaw:sidebar-task-run-state";
 const CHAT_MODEL_LEVEL_STORAGE_KEY = "bustly.chat.model-level.v1";
 const INITIAL_SESSION_USAGE: SessionUsageSummary = {
   totalTokens: null,
@@ -184,8 +185,20 @@ function nextId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function notifySidebarTasksRefresh() {
+  window.dispatchEvent(new Event(SIDEBAR_TASKS_REFRESH_EVENT));
+}
+
 function isSessionViewRunning(view: SessionViewState): boolean {
   return Boolean(view.sending || view.activeRunId || view.compactingRunId || view.reconnectStatus);
+}
+
+function notifySidebarTaskRunState(sessionKey: string, running: boolean) {
+  window.dispatchEvent(
+    new CustomEvent(SIDEBAR_TASK_RUN_STATE_EVENT, {
+      detail: { sessionKey, running },
+    }),
+  );
 }
 
 function hashString(value: string): number {

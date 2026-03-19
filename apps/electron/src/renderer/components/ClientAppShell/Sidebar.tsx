@@ -2,7 +2,6 @@ import { createPortal } from "react-dom";
 import { createElement, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
-  Buildings,
   CaretDown,
   CaretRight,
   Check,
@@ -23,6 +22,7 @@ import openSidebarIcon from "../../assets/imgs/open_sidebar.svg";
 import {
   buildChatRoute,
   CollapsedScenariosIcon,
+  deriveScenarioLabel,
   getSessionIconComponent,
   resolveSessionIconComponent,
   SESSION_ICON_OPTIONS,
@@ -30,16 +30,12 @@ import {
 } from "../../lib/session-icons";
 import { listWorkspaceSummaries, type WorkspaceSummary } from "../../lib/bustly-supabase";
 import { GatewayBrowserClient } from "../../lib/gateway-client";
-import { SIDEBAR_TASK_RUN_STATE_EVENT, SIDEBAR_TASKS_REFRESH_EVENT, notifySidebarTasksRefresh } from "../../lib/session-events";
-import {
-  listAgentScenarioSessions,
-  readCustomSessionLabels,
-  writeCustomSessionLabels,
-} from "../../lib/session-directory";
 import { useAppState } from "../../providers/AppStateProvider";
 import {
   buildBustlyWorkspaceAgentId,
   buildBustlyWorkspaceMainSessionKey,
+  isAgentChannelSessionKey,
+  isAgentMainSessionKey,
 } from "../../../shared/bustly-agent";
 import Skeleton from "../ui/Skeleton";
 import PortalTooltip from "../ui/PortalTooltip";
@@ -57,8 +53,79 @@ type SidebarTask = {
   running?: boolean;
 };
 
+type GatewaySessionRow = {
+  key: string;
+  label?: string;
+  icon?: string;
+  displayName?: string;
+  derivedTitle?: string;
+  updatedAt: number | null;
+};
+
+type SessionsListResult = {
+  sessions: GatewaySessionRow[];
+};
+
+const SIDEBAR_TASKS_REFRESH_EVENT = "openclaw:sidebar-refresh-tasks";
+const SIDEBAR_TASK_RUN_STATE_EVENT = "openclaw:sidebar-task-run-state";
+const SIDEBAR_CUSTOM_LABELS_STORAGE_KEY = "bustly.sidebar.custom-labels.v1";
+
+function notifySidebarTasksRefresh() {
+  window.dispatchEvent(new Event(SIDEBAR_TASKS_REFRESH_EVENT));
+}
+
 function SpinnerIcon({ className }: { className?: string }) {
   return <CircleNotch size={14} weight="bold" className={className} />;
+}
+
+function readCustomSessionLabels(): Record<string, string> {
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_CUSTOM_LABELS_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed as Record<string, string> : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeCustomSessionLabels(value: Record<string, string>) {
+  window.localStorage.setItem(SIDEBAR_CUSTOM_LABELS_STORAGE_KEY, JSON.stringify(value));
+}
+
+function isMainChannelSessionKey(sessionKey: string, agentId: string): boolean {
+  return isAgentMainSessionKey(sessionKey, agentId) || isAgentChannelSessionKey(sessionKey, agentId);
+}
+
+function stripLeadingMessageTimestamp(text: string): string {
+  const cleaned = text.replace(/^\[[^\]]+\]\s*/, "").trim();
+  return cleaned || text.trim();
+}
+
+function sanitizeSessionTitle(text: string | undefined): string | null {
+  if (!text?.trim()) {
+    return null;
+  }
+  const cleaned = stripLeadingMessageTimestamp(text).trim();
+  if (!cleaned) {
+    return null;
+  }
+  return cleaned;
+}
+
+function resolveSessionDisplayName(
+  session: Pick<GatewaySessionRow, "key" | "label" | "displayName" | "derivedTitle">,
+  customSessionLabels: Record<string, string>,
+): string {
+  return (
+    sanitizeSessionTitle(session.label) ||
+    sanitizeSessionTitle(session.displayName) ||
+    sanitizeSessionTitle(session.derivedTitle) ||
+    customSessionLabels[session.key] ||
+    deriveScenarioLabel(session.key)
+  );
 }
 
 function resolveChannelBaseSessionKey(sessionKey: string): string {
@@ -1029,7 +1096,6 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const navigate = useNavigate();
   const isSettingsPage = false;
   const isSkillPage = location.pathname === "/skill";
-  const isStudioPage = location.pathname === "/studio";
   const effectiveWorkspaceId = activeWorkspaceId || bustlyUserInfo?.workspaceId || "";
   const activeAgentId = useMemo(
     () => buildBustlyWorkspaceAgentId(effectiveWorkspaceId),
@@ -1194,25 +1260,30 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
             if (disposed) {
               return;
             }
-            void listAgentScenarioSessions({
-              client,
-              agentId: activeAgentId,
-              customSessionLabels,
-              limit: 20,
-            })
+            void client
+              .request<SessionsListResult>("sessions.list", {
+                limit: 20,
+                includeGlobal: false,
+                includeUnknown: false,
+                includeDerivedTitles: true,
+                includeLastMessage: false,
+                agentId: activeAgentId,
+              })
               .then((result) => {
                 if (disposed) {
                   return;
                 }
                 requestSettled = true;
                 setRecentTasks(
-                  result.map((session) => ({
-                    id: session.key,
-                    name: session.displayLabel,
-                    icon: session.icon,
-                    isMain: session.key === activeMainSessionKey,
-                    running: runningTasks[session.key] === true,
-                  })),
+                  [...result.sessions]
+                    .filter((session) => isMainChannelSessionKey(session.key, activeAgentId))
+                    .map((session) => ({
+                      id: session.key,
+                      name: resolveSessionDisplayName(session, customSessionLabels),
+                      icon: session.icon,
+                      isMain: session.key === activeMainSessionKey,
+                      running: runningTasks[session.key] === true,
+                    })),
                 );
                 setHasLoadedTasks(true);
                 setTasksLoading(false);
@@ -1692,16 +1763,6 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
 
             <div className="space-y-1 border-t border-[#E5E7EB] bg-gray-50/30 p-3">
               <SidebarItem
-                icon={Buildings}
-                label="Studio"
-                active={isStudioPage}
-                onClick={() => {
-                  void navigate("/studio");
-                }}
-                collapsed={false}
-                insetClassName="gap-3 px-4 py-2.5"
-              />
-              <SidebarItem
                 icon={LightningIcon}
                 label="Skills"
                 active={isSkillPage}
@@ -1750,16 +1811,6 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
             </div>
 
             <div className="w-full space-y-2 border-t border-[#E5E7EB] px-2 pt-4">
-              <SidebarItem
-                icon={Buildings}
-                label="Studio"
-                active={isStudioPage}
-                onClick={() => {
-                  void navigate("/studio");
-                }}
-                collapsed
-                showTooltip
-              />
               <SidebarItem
                 icon={LightningIcon}
                 label="Skills"
