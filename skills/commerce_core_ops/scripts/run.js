@@ -642,7 +642,7 @@ function printData(data, format = "json") {
 
 function printHelp() {
   console.log(`Usage:
-  node skills/commerce_core_ops/scripts/run.js <command> [args] [flags]
+  bustly ops commerce <command> [args] [flags]
 
 Core Commands (agent-friendly aliases):
   providers                                      # alias: platforms

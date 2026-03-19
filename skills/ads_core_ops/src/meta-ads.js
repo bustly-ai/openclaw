@@ -319,7 +319,14 @@ Then configure it:
   }
 
   async getAd(adId, fields) {
-    const fieldList = fields || ["id", "name", "status", "adset_id", "campaign_id", "creative"];
+    const fieldList = fields || [
+      "id",
+      "name",
+      "status",
+      "adset_id",
+      "campaign_id",
+      "creative",
+    ];
 
     return this.request(`${adId}?fields=${fieldList.join(",")}`);
   }
@@ -391,7 +398,14 @@ Then configure it:
   }
 
   async getAdSetInsights(adSetId, options) {
-    const defaultFields = ["spend", "impressions", "clicks", "cpc", "cpm", "ctr"];
+    const defaultFields = [
+      "spend",
+      "impressions",
+      "clicks",
+      "cpc",
+      "cpm",
+      "ctr",
+    ];
 
     const fields = options?.fields || defaultFields;
     const params = {
@@ -403,7 +417,14 @@ Then configure it:
   }
 
   async getAdInsights(adId, options) {
-    const defaultFields = ["spend", "impressions", "clicks", "cpc", "cpm", "ctr"];
+    const defaultFields = [
+      "spend",
+      "impressions",
+      "clicks",
+      "cpc",
+      "cpm",
+      "ctr",
+    ];
 
     const fields = options?.fields || defaultFields;
     const params = {
