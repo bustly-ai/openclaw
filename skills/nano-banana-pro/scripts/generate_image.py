@@ -6,7 +6,7 @@
 # ]
 # ///
 """
-Generate/edit images through Bustly Model Gateway (image.pro route by default).
+Generate/edit images through Bustly Model Gateway (image.advanced route by default).
 
 Usage:
     uv run generate_image.py --prompt "your image description" --filename "output.png" [--resolution 1K|2K|4K]
@@ -26,8 +26,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-DEFAULT_GATEWAY_BASE_URL_ENV = os.environ.get("BUSTLY_MODEL_GATEWAY_BASE_URL", "").strip()
-DEFAULT_ROUTE_MODEL = os.environ.get("BUSTLY_MODEL_GATEWAY_IMAGE_ROUTE", "image.pro").strip() or "image.pro"
+DEFAULT_ROUTE_MODEL = os.environ.get("BUSTLY_MODEL_GATEWAY_IMAGE_ROUTE", "image.advanced").strip() or "image.advanced"
 DEFAULT_USER_AGENT = os.environ.get("BUSTLY_MODEL_GATEWAY_USER_AGENT", "OpenClaw/CLI").strip() or "OpenClaw/CLI"
 DEFAULT_STATE_DIR = ".bustly"
 FALLBACK_GATEWAY_BASE_URL = "https://gw.bustly.ai"
@@ -73,9 +72,6 @@ def load_openclaw_config() -> dict:
 
 
 def resolve_gateway_base_url() -> str:
-    if DEFAULT_GATEWAY_BASE_URL_ENV:
-        return DEFAULT_GATEWAY_BASE_URL_ENV
-
     cfg = load_openclaw_config()
     providers = ((cfg.get("models") or {}).get("providers") or {})
     bustly = providers.get("bustly") if isinstance(providers, dict) else {}

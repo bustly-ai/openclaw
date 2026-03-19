@@ -6,13 +6,13 @@
 
 - OpenClaw 侧只暴露一个 Provider：`bustly`
 - 用户选择的模型档位映射为 Gateway route key：
-  - `chat.lite`
-  - `chat.pro`
-  - `chat.max`
+  - `chat.standard`
+  - `chat.advanced`
+  - `chat.ultra`
 - 对 OpenClaw 而言，模型引用统一写成：
-  - `bustly/chat.lite`
-  - `bustly/chat.pro`
-  - `bustly/chat.max`
+  - `bustly/chat.standard`
+  - `bustly/chat.advanced`
+  - `bustly/chat.ultra`
 
 ## 2. 鉴权与工作区来源（单一来源）
 
@@ -40,7 +40,7 @@ OpenClaw 桌面端在登录完成/Provider Setup 完成后，会同步写入：
 1. `auth.profiles` 中仅保留 `bustly:default`（`mode: token`）
 2. `auth.order.bustly = ["bustly:default"]`
 3. `models.providers` 只包含 `bustly`
-4. `agents.defaults.model.primary` 默认 `bustly/chat.lite`
+4. `agents.defaults.model.primary` 默认 `bustly/chat.standard`
 5. `agents.defaults.models` 中只保留三档模型别名（Lite/Pro/Max）
 
 ## 4. 调用链路（从登录到发消息）
@@ -53,14 +53,14 @@ OpenClaw 桌面端在登录完成/Provider Setup 完成后，会同步写入：
 
 ## 5. 模型档位与 route key 约定
 
-- OpenClaw 内部模型字符串：`bustly/chat.lite|pro|max`
-- Gateway 接收层对应 route key：`chat.lite|pro|max`
+- OpenClaw 内部模型字符串：`bustly/chat.standard|advanced|ultra`
+- Gateway 接收层对应 route key：`chat.standard|advanced|ultra`
 
 兼容输入（用于本地标准化）：
 
-- `lite` / `auto` -> `bustly/chat.lite`
-- `pro` -> `bustly/chat.pro`
-- `max` -> `bustly/chat.max`
+- `lite` / `auto` -> `bustly/chat.standard`
+- `pro` -> `bustly/chat.advanced`
+- `max` -> `bustly/chat.ultra`
 
 ## 6. 环境变量
 

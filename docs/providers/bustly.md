@@ -17,11 +17,11 @@ In the current desktop integration, Bustly is the **only** supported provider.
 - Default base URL: `https://gw.bustly.ai/api/v1`
 - API style: `openai-completions` (OpenAI-compatible Chat Completions path)
 - Supported model refs (route keys):
-  - `bustly/chat.lite`
-  - `bustly/chat.pro`
-  - `bustly/chat.max`
+  - `bustly/chat.standard`
+  - `bustly/chat.advanced`
+  - `bustly/chat.ultra`
 
-The model part (`chat.lite`, `chat.pro`, `chat.max`) is the gateway route key.
+The model part (`chat.standard`, `chat.advanced`, `chat.ultra`) is the gateway route key.
 
 ## Authentication source of truth
 
@@ -56,11 +56,11 @@ After Bustly login / provider setup, OpenClaw writes a bustly-only provider bloc
   },
   agents: {
     defaults: {
-      model: { primary: "bustly/chat.lite" },
+      model: { primary: "bustly/chat.standard" },
       models: {
-        "bustly/chat.lite": { alias: "Lite" },
-        "bustly/chat.pro": { alias: "Pro" },
-        "bustly/chat.max": { alias: "Max" },
+        "bustly/chat.standard": { alias: "Lite" },
+        "bustly/chat.advanced": { alias: "Pro" },
+        "bustly/chat.ultra": { alias: "Max" },
       },
     },
   },
@@ -74,9 +74,9 @@ After Bustly login / provider setup, OpenClaw writes a bustly-only provider bloc
           "User-Agent": "openclaw/2026.2.24"
         },
         models: [
-          { id: "chat.lite", name: "Lite", input: ["text", "image"] },
-          { id: "chat.pro", name: "Pro", input: ["text", "image"] },
-          { id: "chat.max", name: "Max", input: ["text", "image"] },
+          { id: "chat.standard", name: "Lite", input: ["text", "image"] },
+          { id: "chat.advanced", name: "Pro", input: ["text", "image"] },
+          { id: "chat.ultra", name: "Max", input: ["text", "image"] },
         ],
       },
     },
@@ -86,11 +86,11 @@ After Bustly login / provider setup, OpenClaw writes a bustly-only provider bloc
 
 ## Model selection behavior
 
-- Recommended default: `bustly/chat.lite`
+- Recommended default: `bustly/chat.standard`
 - Accepted shorthands are normalized:
-  - `lite` / `auto` -> `bustly/chat.lite`
-  - `pro` -> `bustly/chat.pro`
-  - `max` -> `bustly/chat.max`
+  - `lite` / `auto` -> `bustly/chat.standard`
+  - `pro` -> `bustly/chat.advanced`
+  - `max` -> `bustly/chat.ultra`
 
 ## Environment variables
 

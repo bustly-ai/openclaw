@@ -1,6 +1,6 @@
 ---
 name: minimax-tts
-description: Convert text to speech audio via Bustly Model Gateway (audio.pro route, upstream MiniMax T2A). Use when user asks to generate voice, speech, audio from text, read aloud, pronounce something, create voiceover, or wants text-to-speech synthesis.
+description: Convert text to speech audio via Bustly Model Gateway (audio.advanced route, upstream MiniMax T2A). Use when user asks to generate voice, speech, audio from text, read aloud, pronounce something, create voiceover, or wants text-to-speech synthesis.
 homepage: https://test-gw.bustly.ai
 user-invocable: true
 disable-model-invocation: false
@@ -14,7 +14,7 @@ Generate high-quality speech audio from text through Bustly Model Gateway.
 Gateway route
 
 - Endpoint: `POST /api/v1/audio/speech`
-- Model route key: `audio.pro` (default)
+- Model route key: `audio.advanced` (default)
 - Upstream provider: MiniMax T2A (handled by gateway)
 
 ## When To Use This Skill
@@ -51,7 +51,7 @@ python3 {baseDir}/scripts/tts.py "<text>" [options]
 | `--emotion` | Emotion: happy, sad, angry, fearful, disgusted, surprised, calm, whisper | (none) |
 | `--speed` | Speech speed (0.5-2.0) | `1.0` |
 | `--output` | Output file path | `./tts_output.mp3` |
-| `--model` | Gateway route key | `audio.pro` |
+| `--model` | Gateway route key | `audio.advanced` |
 | `--jwt` | Optional Bustly JWT override | from `bustlyOauth.json` |
 | `--workspace-id` | Optional workspace override | from `bustlyOauth.json` |
 
@@ -93,12 +93,11 @@ python3 {baseDir}/scripts/tts.py "你好，欢迎使用语音合成服务。"
 - Reads `~/.bustly/bustlyOauth.json` automatically:
   - `user.userAccessToken` (JWT)
   - `user.workspaceId`
-- Gateway base URL resolution order:
-  1) `BUSTLY_MODEL_GATEWAY_BASE_URL`
-  2) `~/.bustly/openclaw.json` -> `models.providers.bustly.baseUrl`
-  3) fallback: `https://gw.bustly.ai`
+- Gateway base URL:
+  - `~/.bustly/openclaw.json` -> `models.providers.bustly.baseUrl`
+  - fallback: `https://gw.bustly.ai`
 - Optional model route override:
-  - `BUSTLY_MODEL_GATEWAY_AUDIO_ROUTE` (default: `audio.pro`)
+  - `BUSTLY_MODEL_GATEWAY_AUDIO_ROUTE` (default: `audio.advanced`)
 
 ## Output
 

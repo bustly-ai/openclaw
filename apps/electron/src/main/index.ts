@@ -455,23 +455,23 @@ const BUSTLY_MODEL_GATEWAY_USER_AGENT =
   process.env.BUSTLY_MODEL_GATEWAY_USER_AGENT?.trim() || "openclaw/2026.2.24";
 const BUSTLY_ROUTE_MODELS = [
   {
-    routeKey: "chat.lite",
-    modelRef: "bustly/chat.lite",
-    alias: "Lite",
+    routeKey: "chat.standard",
+    modelRef: "bustly/chat.standard",
+    alias: "Standard",
     description: "Fast & efficient for daily tasks.",
     reasoning: false,
   },
   {
-    routeKey: "chat.pro",
-    modelRef: "bustly/chat.pro",
-    alias: "Pro",
+    routeKey: "chat.advanced",
+    modelRef: "bustly/chat.advanced",
+    alias: "Advanced",
     description: "Balanced performance for complex reasoning.",
     reasoning: true,
   },
   {
-    routeKey: "chat.max",
-    modelRef: "bustly/chat.max",
-    alias: "Max",
+    routeKey: "chat.ultra",
+    modelRef: "bustly/chat.ultra",
+    alias: "Ultra",
     description: "Frontier intelligence for critical challenges.",
     reasoning: true,
   },
@@ -506,15 +506,15 @@ function normalizeBustlyModelRef(value: unknown): string {
     return `${BUSTLY_PROVIDER_ID}/${raw}`;
   }
   if (raw === "lite" || raw === "auto") {
-    return "bustly/chat.lite";
+    return "bustly/chat.standard";
   }
   if (raw === "pro") {
-    return "bustly/chat.pro";
+    return "bustly/chat.advanced";
   }
   if (raw === "max") {
-    return "bustly/chat.max";
+    return "bustly/chat.ultra";
   }
-  return "bustly/chat.lite";
+  return "bustly/chat.standard";
 }
 
 function resolveCurrentBustlyModelRef(cfg: OpenClawConfig): string {

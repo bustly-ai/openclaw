@@ -45,9 +45,9 @@ DEEPGRAM_API_KEY=dg_...
 
 - `model`: Deepgram model id (default: `nova-3`)
 - `language`: language hint (optional)
-- `tools.media.audio.providerOptions.deepgram.detect_language`: enable language detection (optional)
-- `tools.media.audio.providerOptions.deepgram.punctuate`: enable punctuation (optional)
-- `tools.media.audio.providerOptions.deepgram.smart_format`: enable smart formatting (optional)
+- `tools.media.audio.advancedviderOptions.deepgram.detect_language`: enable language detection (optional)
+- `tools.media.audio.advancedviderOptions.deepgram.punctuate`: enable punctuation (optional)
+- `tools.media.audio.advancedviderOptions.deepgram.smart_format`: enable smart formatting (optional)
 
 Example with language:
 

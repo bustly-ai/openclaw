@@ -49,9 +49,9 @@ DEEPGRAM_API_KEY=dg_...
 
 - `model`：Deepgram 模型 ID（默认：`nova-3`）
 - `language`：语言提示（可选）
-- `tools.media.audio.providerOptions.deepgram.detect_language`：启用语言检测（可选）
-- `tools.media.audio.providerOptions.deepgram.punctuate`：启用标点符号（可选）
-- `tools.media.audio.providerOptions.deepgram.smart_format`：启用智能格式化（可选）
+- `tools.media.audio.advancedviderOptions.deepgram.detect_language`：启用语言检测（可选）
+- `tools.media.audio.advancedviderOptions.deepgram.punctuate`：启用标点符号（可选）
+- `tools.media.audio.advancedviderOptions.deepgram.smart_format`：启用智能格式化（可选）
 
 带语言参数的示例：
 

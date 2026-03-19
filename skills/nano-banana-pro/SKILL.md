@@ -1,6 +1,6 @@
 ---
 name: nano-banana-pro
-description: Generate or edit images via Bustly Model Gateway using the image.pro route (backed by Gemini image models). Use this skill whenever users ask for "nano banana", "nano banana pro", image generation, image editing, style transfer, or photo remix tasks.
+description: Generate or edit images via Bustly Model Gateway using the image.advanced route (backed by Gemini image models). Use this skill whenever users ask for "nano banana", "nano banana pro", image generation, image editing, style transfer, or photo remix tasks.
 metadata:
   {
     "openclaw":
@@ -55,11 +55,10 @@ Auth + routing
   - `user.userAccessToken` (JWT)
   - `user.workspaceId`
 - Calls Bustly gateway: `POST /api/v1/chat/completions`
-- Uses `model=image.pro` as the default route key.
-- Gateway base URL resolution order:
-  1) `BUSTLY_MODEL_GATEWAY_BASE_URL`
-  2) `~/.bustly/openclaw.json` -> `models.providers.bustly.baseUrl`
-  3) fallback: `https://gw.bustly.ai`
+- Uses `model=image.advanced` as the default route key.
+- Gateway base URL:
+  - `~/.bustly/openclaw.json` -> `models.providers.bustly.baseUrl`
+  - fallback: `https://gw.bustly.ai`
 
 Notes
 

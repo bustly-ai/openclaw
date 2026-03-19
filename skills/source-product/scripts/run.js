@@ -201,6 +201,23 @@ function isFilePath(input) {
   );
 }
 
+function normalizeAliExpressKeyword(input) {
+  return String(input || "")
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .replace(/[^\x20-\x7E]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isAliExpressSignatureError(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return (
+    message.includes("request signature does not conform") ||
+    message.includes("signature does not conform to platform standards")
+  );
+}
+
 function displayProducts(products) {
   products.forEach((product, index) => {
     console.log(`${index + 1}. ${product.title}`);
@@ -303,7 +320,27 @@ async function runSearchText(config, args) {
     if (key === "country") params.country_code = value;
     i += 1;
   }
-  const result = await callEdgeFunction(config, "aliexpress-text-search", params);
+  let result;
+  try {
+    result = await callEdgeFunction(config, "aliexpress-text-search", params);
+  } catch (error) {
+    const fallbackQuery = normalizeAliExpressKeyword(query);
+    if (
+      isAliExpressSignatureError(error) &&
+      fallbackQuery &&
+      fallbackQuery !== query
+    ) {
+      console.warn(
+        `[source-product] AliExpress rejected the original keyword signature. Retrying with normalized keyword: "${fallbackQuery}"`,
+      );
+      result = await callEdgeFunction(config, "aliexpress-text-search", {
+        ...params,
+        query: fallbackQuery,
+      });
+    } else {
+      throw error;
+    }
+  }
   const products = Array.isArray(result.products) ? result.products : [];
   if (products.length === 0) {
     console.log("No products found.");

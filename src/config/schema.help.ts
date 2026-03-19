@@ -476,7 +476,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum accepted image payload size in bytes before the item is skipped or truncated by policy. Keep limits realistic for your provider caps and infrastructure bandwidth.",
   "tools.media.image.maxChars":
     "Maximum characters returned from image understanding output after model response normalization. Use tighter limits to reduce prompt bloat and larger limits for detail-heavy OCR tasks.",
-  "tools.media.image.prompt":
+  "tools.media.image.advancedmpt":
     "Instruction template used for image understanding requests to shape extraction style and detail level. Keep prompts deterministic so outputs stay consistent across turns and channels.",
   "tools.media.image.timeoutSeconds":
     "Timeout in seconds for each image understanding request before it is aborted. Increase for high-resolution analysis and lower it for latency-sensitive operator workflows.",
@@ -492,7 +492,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum accepted audio payload size in bytes before processing is rejected or clipped by policy. Set this based on expected recording length and upstream provider limits.",
   "tools.media.audio.maxChars":
     "Maximum characters retained from audio understanding output to prevent oversized transcript injection. Increase for long-form dictation, or lower to keep conversational turns compact.",
-  "tools.media.audio.prompt":
+  "tools.media.audio.advancedmpt":
     "Instruction template guiding audio understanding output style, such as concise summary versus near-verbatim transcript. Keep wording consistent so downstream automations can rely on output format.",
   "tools.media.audio.timeoutSeconds":
     "Timeout in seconds for audio understanding execution before the operation is cancelled. Use longer timeouts for long recordings and tighter ones for interactive chat responsiveness.",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate speech audio via Bustly Model Gateway (audio.pro route)."""
+"""Generate speech audio via Bustly Model Gateway (audio.advanced route)."""
 
 import argparse
 import base64
@@ -11,8 +11,7 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-DEFAULT_GATEWAY_BASE_URL_ENV = os.environ.get("BUSTLY_MODEL_GATEWAY_BASE_URL", "").strip()
-DEFAULT_ROUTE_MODEL = os.environ.get("BUSTLY_MODEL_GATEWAY_AUDIO_ROUTE", "audio.pro").strip() or "audio.pro"
+DEFAULT_ROUTE_MODEL = os.environ.get("BUSTLY_MODEL_GATEWAY_AUDIO_ROUTE", "audio.advanced").strip() or "audio.advanced"
 DEFAULT_USER_AGENT = os.environ.get("BUSTLY_MODEL_GATEWAY_USER_AGENT", "OpenClaw/CLI").strip() or "OpenClaw/CLI"
 DEFAULT_STATE_DIR = ".bustly"
 FALLBACK_GATEWAY_BASE_URL = "https://gw.bustly.ai"
@@ -52,9 +51,6 @@ def load_openclaw_config() -> dict:
 
 
 def resolve_gateway_base_url() -> str:
-    if DEFAULT_GATEWAY_BASE_URL_ENV:
-        return DEFAULT_GATEWAY_BASE_URL_ENV
-
     cfg = load_openclaw_config()
     providers = ((cfg.get("models") or {}).get("providers") or {})
     bustly = providers.get("bustly") if isinstance(providers, dict) else {}

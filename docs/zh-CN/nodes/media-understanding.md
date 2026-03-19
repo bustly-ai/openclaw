@@ -45,7 +45,7 @@ OpenClaw 可以在回复流程运行之前**摘要入站媒体**（图片/音频
 - `tools.media.image` / `tools.media.audio` / `tools.media.video`：
   - 默认值（`prompt`、`maxChars`、`maxBytes`、`timeoutSeconds`、`language`）
   - 提供商覆盖（`baseUrl`、`headers`、`providerOptions`）
-  - 通过 `tools.media.audio.providerOptions.deepgram` 配置 Deepgram 音频选项
+  - 通过 `tools.media.audio.advancedviderOptions.deepgram` 配置 Deepgram 音频选项
   - 可选的**每能力 `models` 列表**（优先于共享模型）
   - `attachments` 策略（`mode`、`maxAttachments`、`prefer`）
   - `scope`（可选的按渠道/聊天类型/会话键限定）

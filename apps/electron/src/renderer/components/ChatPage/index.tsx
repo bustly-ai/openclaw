@@ -171,9 +171,24 @@ const INITIAL_SESSION_USAGE: SessionUsageSummary = {
 };
 
 const CHAT_MODEL_LEVELS = [
-  { id: "lite", modelRef: "bustly/chat.lite", label: "Bustly Lite", description: "Fast & efficient for daily tasks." },
-  { id: "pro", modelRef: "bustly/chat.pro", label: "Bustly Pro", description: "Balanced performance for complex reasoning." },
-  { id: "max", modelRef: "bustly/chat.max", label: "Bustly Max", description: "Frontier intelligence for critical challenges." },
+  {
+    id: "standard",
+    modelRef: "bustly/chat.standard",
+    label: "Bustly Standard",
+    description: "Fast & efficient for daily tasks.",
+  },
+  {
+    id: "advanced",
+    modelRef: "bustly/chat.advanced",
+    label: "Bustly Advanced",
+    description: "Balanced performance for complex reasoning.",
+  },
+  {
+    id: "ultra",
+    modelRef: "bustly/chat.ultra",
+    label: "Bustly Ultra",
+    description: "Frontier intelligence for critical challenges.",
+  },
 ] as const;
 const PREVIEW_ZOOM_STEPS = [0.5, 0.67, 0.8, 1] as const;
 const PREVIEW_ZOOM_WHEEL_THRESHOLD = 45;
@@ -786,10 +801,20 @@ export default function ChatPage() {
   } | null>(null);
   const [modelLevel, setModelLevel] = useState<ChatModelLevelId>(() => {
     const stored = window.localStorage.getItem(CHAT_MODEL_LEVEL_STORAGE_KEY);
-    if (stored === "lite" || stored === "pro" || stored === "max") {
+    if (stored === "standard" || stored === "advanced" || stored === "ultra") {
       return stored;
     }
-    return "lite";
+    // Backward-compatible migration for older local values.
+    if (stored === "lite" || stored === "auto") {
+      return "standard";
+    }
+    if (stored === "pro") {
+      return "advanced";
+    }
+    if (stored === "max") {
+      return "ultra";
+    }
+    return "standard";
   });
 
   const clientRef = useRef<GatewayBrowserClient | null>(null);
