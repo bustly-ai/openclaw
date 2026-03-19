@@ -6,35 +6,37 @@ type PortalTooltipProps = {
   children?: ReactNode;
   side?: "top" | "right" | "bottom";
   className?: string;
+  arrowClassName?: string;
   triggerClassName?: string;
   open?: boolean;
   anchor?: HTMLElement | null;
   disabled?: boolean;
+  offset?: number;
 };
 
 function joinClassNames(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
 
-function resolveTooltipPosition(anchor: DOMRect, side: "top" | "right" | "bottom") {
+function resolveTooltipPosition(anchor: DOMRect, side: "top" | "right" | "bottom", offset: number) {
   if (side === "right") {
     return {
       top: anchor.top + anchor.height / 2,
-      left: anchor.right + 12,
+      left: anchor.right + offset,
       transform: "translateY(-50%)",
       arrowClassName: "top-1/2 -left-1 -translate-y-1/2",
     };
   }
   if (side === "bottom") {
     return {
-      top: anchor.bottom + 8,
+      top: anchor.bottom + offset,
       left: anchor.left + anchor.width / 2,
       transform: "translateX(-50%)",
       arrowClassName: "-top-1 left-1/2 -translate-x-1/2",
     };
   }
   return {
-    top: anchor.top - 8,
+    top: anchor.top - offset,
     left: anchor.left + anchor.width / 2,
     transform: "translate(-50%, -100%)",
     arrowClassName: "top-full left-1/2 -mt-1.5 -translate-x-1/2",
@@ -43,6 +45,7 @@ function resolveTooltipPosition(anchor: DOMRect, side: "top" | "right" | "bottom
 
 export default function PortalTooltip(props: PortalTooltipProps) {
   const side = props.side ?? "top";
+  const offset = props.offset ?? (side === "right" ? 12 : 8);
   const triggerRef = useRef<HTMLSpanElement | null>(null);
   const [hovered, setHovered] = useState(false);
   const [coords, setCoords] = useState<{
@@ -63,7 +66,7 @@ export default function PortalTooltip(props: PortalTooltipProps) {
       if (!anchor) {
         return;
       }
-      setCoords(resolveTooltipPosition(anchor.getBoundingClientRect(), side));
+      setCoords(resolveTooltipPosition(anchor.getBoundingClientRect(), side, offset));
     };
     updatePosition();
     window.addEventListener("resize", updatePosition);
@@ -72,7 +75,7 @@ export default function PortalTooltip(props: PortalTooltipProps) {
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
-  }, [open, props.anchor, side]);
+  }, [open, offset, props.anchor, side]);
 
   const tooltip =
     open && coords
@@ -89,7 +92,13 @@ export default function PortalTooltip(props: PortalTooltipProps) {
             }}
           >
             {props.content}
-            <div className={joinClassNames("absolute h-2 w-2 rotate-45 bg-[#1A162F]", coords.arrowClassName)} />
+            <div
+              className={joinClassNames(
+                "absolute h-2 w-2 rotate-45 bg-[#1A162F]",
+                coords.arrowClassName,
+                props.arrowClassName,
+              )}
+            />
           </div>,
           document.body,
         )

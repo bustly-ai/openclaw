@@ -366,29 +366,31 @@ function TaskItem(props: {
         onMouseLeave={() => setIsHovered(false)}
         rightSlot={
           !props.collapsed ? (
-            props.task.running && !isHovered && !menuOpen ? (
-              <div className="flex h-8 w-8 items-center justify-center text-[#666F8D]">
-                <SpinnerIcon className="h-4 w-4 animate-spin" />
-              </div>
-            ) : (
-              <button
-                ref={triggerRef}
-                type="button"
-                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md p-1 transition-all ${
-                  isHovered || menuOpen ? "opacity-100" : "opacity-0"
-                } ${
-                  menuOpen ? "bg-white/88 shadow-sm backdrop-blur-sm" : ""
-                } ${
-                  props.active ? "text-[#1A162F] hover:bg-[#1A162F]/6" : "text-text-sub hover:bg-black/[0.04]"
-                }`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setMenuOpen((prev) => !prev);
-                }}
-              >
-                <DotsThreeIcon className="h-4 w-4" />
-              </button>
-            )
+            <div className="flex h-5 w-5 items-center justify-center">
+              {props.task.running && !isHovered && !menuOpen ? (
+                <div className="text-[#5A5CFF]">
+                  <SpinnerIcon className="h-[13px] w-[13px] animate-spin" />
+                </div>
+              ) : (
+                <button
+                  ref={triggerRef}
+                  type="button"
+                  className={`rounded-md p-1 transition-all ${
+                    isHovered || menuOpen ? "opacity-100" : "pointer-events-none opacity-0"
+                  } ${
+                    menuOpen ? "bg-white/88 shadow-sm backdrop-blur-sm" : ""
+                  } ${
+                    props.active ? "text-[#1A162F] hover:bg-[#1A162F]/6" : "text-text-sub hover:bg-black/[0.04]"
+                  }`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setMenuOpen((prev) => !prev);
+                  }}
+                >
+                  <DotsThreeIcon className="h-4 w-4" />
+                </button>
+              )}
+            </div>
           ) : null
         }
       />
@@ -556,8 +558,8 @@ function CollapsedScenariosButton(props: {
           className={`relative flex h-10 w-10 items-center justify-center rounded-xl transition-all ${
             activeTask ? "bg-[#1A162F]/10 text-[#1A162F]" : "text-text-sub hover:bg-[#1A162F]/5 hover:text-text-main"
           }`}
-          aria-label="Scenarios"
-          title="Scenarios"
+          aria-label="Agents"
+          title="Agents"
         >
           <CollapsedScenariosIcon size={18} weight="bold" />
         </button>
@@ -572,7 +574,7 @@ function CollapsedScenariosButton(props: {
               className="fixed z-[9999] w-[280px] rounded-2xl border border-[#E6E9F0] bg-white p-2 shadow-[0_18px_48px_rgba(26,22,47,0.14)]"
               style={{ top: coords.top, left: coords.left }}
             >
-              <div className="px-2 pt-1 pb-2 text-xs font-medium text-[#666F8D]">Scenarios</div>
+              <div className="px-2 pt-1 pb-2 text-xs font-medium text-[#666F8D]">Agents</div>
               <div className="space-y-0.5">
                 {props.tasks.map((task) => {
                   const Icon = resolveSessionIconComponent({
@@ -1554,7 +1556,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   };
 
   const handleCreateScenario = async () => {
-    const name = draftScenarioName.trim() || "New scenario";
+    const name = draftScenarioName.trim() || "New agent";
     if (createSaving) {
       return;
     }
@@ -1567,7 +1569,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
         icon: selectedIcon,
       });
       if (!result.success) {
-        setCreateError(result.error ?? "Failed to create scenario.");
+        setCreateError(result.error ?? "Failed to create agent.");
         return;
       }
       const nextLabels = { ...customSessionLabels, [nextSessionKey]: name };
@@ -1613,7 +1615,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     try {
       const result = await window.electronAPI.gatewayPatchSession(selectedTaskId, { label: name });
       if (!result.success) {
-        setRenameError(result.error ?? "Failed to save scenario name.");
+        setRenameError(result.error ?? "Failed to save agent name.");
         return;
       }
       const nextLabels = { ...customSessionLabels, [selectedTaskId]: name };
@@ -1764,16 +1766,25 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       >
         {!props.collapsed ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex-1 space-y-0.5 overflow-y-auto px-0 py-3">
-              <SidebarItem
-                icon={Plus}
-                label="New scenario"
-                active={false}
-                onClick={() => {
-                  openCreateModal();
-                }}
-                collapsed={false}
-              />
+            <div className="flex-1 overflow-y-auto px-0 pt-2 pb-4">
+              <div className="sticky top-0 z-10 px-4 pt-0.5 pb-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[13px] font-medium text-[#8A93B2]">Agents</span>
+                  <PortalTooltip content="Create agent" side="right">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        openCreateModal();
+                      }}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8A93B2] transition-all duration-200 hover:bg-[#1A162F]/5 hover:text-[#1A162F] active:bg-[#1A162F]/8"
+                      aria-label="Create agent"
+                    >
+                      <Plus size={16} weight="bold" />
+                    </button>
+                  </PortalTooltip>
+                </div>
+              </div>
+              <div className="space-y-0.5">
               {tasksLoading ? (
                 <>
                   <TaskItemSkeleton />
@@ -1803,6 +1814,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                   />
                 ))
               )}
+              </div>
             </div>
 
             <div className="space-y-1 border-t border-[#E5E7EB] bg-gray-50/30 p-3">
@@ -1821,14 +1833,14 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
         ) : (
           <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-4">
             <div className="flex w-full flex-1 flex-col items-center gap-3">
-              <PortalTooltip content="New scenario" side="right">
+              <PortalTooltip content="Create agent" side="right">
                 <button
                   type="button"
                   onClick={() => {
                     openCreateModal();
                   }}
                   className="flex h-10 w-10 items-center justify-center rounded-xl text-text-sub transition-all hover:bg-[#1A162F]/5 hover:text-text-main"
-                  aria-label="New scenario"
+                  aria-label="Create agent"
                 >
                   <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent bg-gray-50 transition-colors hover:border-[#1A162F]/10 hover:bg-white">
                     <Plus size={18} weight="bold" />
@@ -1937,7 +1949,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
 
       <SidebarModal
         open={createModalOpen}
-        title="Create scenario"
+        title="Create agent"
         onClose={() => {
           setCreateModalOpen(false);
           setDraftScenarioName("");
@@ -1947,7 +1959,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       >
         <div className="space-y-5">
           <div className="space-y-3">
-            <label className="mb-2 block text-sm font-medium text-[#1A162F]">Scenario name</label>
+            <label className="mb-2 block text-sm font-medium text-[#1A162F]">Agent name</label>
             <div className="flex items-center gap-3">
               <button
                 type="button"
@@ -1991,7 +2003,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                 void handleCreateScenario();
               }}
             >
-              {createSaving ? "Creating..." : "Create scenario"}
+              {createSaving ? "Creating..." : "Create agent"}
             </button>
           </div>
         </div>
@@ -1999,7 +2011,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
 
       <SidebarModal
         open={renameModalOpen}
-        title="Rename scenario"
+        title="Rename agent"
         onClose={() => {
           setRenameModalOpen(false);
           setSelectedTaskId(null);
@@ -2009,7 +2021,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       >
         <div className="space-y-5">
           <div>
-            <label className="mb-2 block text-sm font-medium text-[#1A162F]">Scenario name</label>
+            <label className="mb-2 block text-sm font-medium text-[#1A162F]">Agent name</label>
             <input
               autoFocus
               type="text"
@@ -2096,7 +2108,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
 
       <SidebarModal
         open={deleteModalOpen}
-        title="Delete scenario"
+        title="Delete agent"
         onClose={() => {
           setDeleteModalOpen(false);
           setSelectedTaskId(null);
@@ -2104,7 +2116,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       >
         <div className="space-y-5">
           <p className="text-sm leading-6 text-gray-600">
-            {`Are you sure you want to delete ${selectedTask?.name ? `"${selectedTask.name}"` : "this scenario"}? This action cannot be undone.`}
+            {`Are you sure you want to delete ${selectedTask?.name ? `"${selectedTask.name}"` : "this agent"}? This action cannot be undone.`}
           </p>
           <div className="flex justify-end gap-3">
             <button

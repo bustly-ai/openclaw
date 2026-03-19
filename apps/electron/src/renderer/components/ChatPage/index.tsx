@@ -4,8 +4,6 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowDown,
   ArrowUp,
-  CaretDown,
-  Check,
   File,
   Folder,
   Image,
@@ -24,6 +22,7 @@ import { buildBustlyWorkspaceMainSessionKey } from "../../../shared/bustly-agent
 import { extractText, extractThinking } from "../../lib/chat-extract";
 import Skeleton from "../ui/Skeleton";
 import PortalTooltip from "../ui/PortalTooltip";
+import ChatModelPicker from "./ChatModelPicker";
 import { ChatTimeline } from "./ChatTimeline";
 import {
   buildInputArtifactsMessage,
@@ -782,7 +781,6 @@ export default function ChatPage() {
   const [compactingRunId, setCompactingRunId] = useState<string | null>(null);
   const [reconnectStatus, setReconnectStatus] = useState<ReconnectStatus | null>(null);
   const [sessionUsage, setSessionUsage] = useState<SessionUsageSummary>({ ...INITIAL_SESSION_USAGE });
-  const [modelLevelOpen, setModelLevelOpen] = useState(false);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [composerAreaHeight, setComposerAreaHeight] = useState(176);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -792,13 +790,6 @@ export default function ChatPage() {
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [subscriptionExpired, setSubscriptionExpired] = useState(false);
   const [subscriptionActionText, setSubscriptionActionText] = useState("Upgrade");
-  const [modelMenuPos, setModelMenuPos] = useState<{
-    top?: number;
-    bottom?: number;
-    left: number;
-    width: number;
-    maxHeight: number;
-  } | null>(null);
   const [modelLevel, setModelLevel] = useState<ChatModelLevelId>(() => {
     const stored = window.localStorage.getItem(CHAT_MODEL_LEVEL_STORAGE_KEY);
     if (stored === "standard" || stored === "advanced" || stored === "ultra") {
@@ -820,8 +811,6 @@ export default function ChatPage() {
   const clientRef = useRef<GatewayBrowserClient | null>(null);
   const sessionRuntimesRef = useRef<Map<string, SessionRuntimeState>>(new Map());
   const currentSessionKeyRef = useRef("");
-  const modelMenuRef = useRef<HTMLDivElement | null>(null);
-  const modelTriggerRef = useRef<HTMLButtonElement | null>(null);
   const previewViewportRef = useRef<HTMLDivElement | null>(null);
   const previewImageRef = useRef<HTMLImageElement | null>(null);
   const previewWheelDeltaRef = useRef(0);
@@ -2900,66 +2889,9 @@ export default function ChatPage() {
     }
     return `Context left: ${formatTokenCount(sessionUsage.remainingTokens)} / ${formatTokenCount(sessionUsage.contextTokens)}`;
   }, [sessionUsage.contextTokens, sessionUsage.remainingTokens]);
-  const selectedModelLevel = useMemo(
-    () => CHAT_MODEL_LEVELS.find((entry) => entry.id === modelLevel) ?? CHAT_MODEL_LEVELS[0],
-    [modelLevel],
-  );
-
   useEffect(() => {
     window.localStorage.setItem(CHAT_MODEL_LEVEL_STORAGE_KEY, modelLevel);
   }, [modelLevel]);
-
-  useEffect(() => {
-    if (!modelLevelOpen) {
-      return;
-    }
-    const syncMenuPosition = () => {
-      const rect = modelTriggerRef.current?.getBoundingClientRect();
-      if (!rect) {
-        return;
-      }
-      const viewportPadding = 12;
-      const width = 280;
-      const gap = 8;
-      const desiredMaxHeight = 264;
-      let left = rect.left;
-      if (left + width + viewportPadding > window.innerWidth) {
-        left = Math.max(viewportPadding, window.innerWidth - width - viewportPadding);
-      }
-      const spaceBelow = window.innerHeight - (rect.bottom + gap) - viewportPadding;
-      const spaceAbove = rect.top - viewportPadding;
-      const shouldOpenUp = spaceBelow < 220 && spaceAbove > spaceBelow;
-      const maxHeight = Math.max(
-        180,
-        Math.min(desiredMaxHeight, shouldOpenUp ? spaceAbove - gap : spaceBelow),
-      );
-      setModelMenuPos({
-        top: shouldOpenUp ? undefined : rect.bottom + gap,
-        bottom: shouldOpenUp ? Math.max(viewportPadding, window.innerHeight - rect.top + gap) : undefined,
-        left,
-        width,
-        maxHeight,
-      });
-    };
-    syncMenuPosition();
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (
-        !modelMenuRef.current?.contains(target) &&
-        !modelTriggerRef.current?.contains(target)
-      ) {
-        setModelLevelOpen(false);
-      }
-    };
-    window.addEventListener("resize", syncMenuPosition);
-    window.addEventListener("scroll", syncMenuPosition, true);
-    window.addEventListener("mousedown", handlePointerDown);
-    return () => {
-      window.removeEventListener("resize", syncMenuPosition);
-      window.removeEventListener("scroll", syncMenuPosition, true);
-      window.removeEventListener("mousedown", handlePointerDown);
-    };
-  }, [modelLevelOpen]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-white text-gray-900">
@@ -2976,50 +2908,6 @@ export default function ChatPage() {
           {error ?? connectionNotice?.message}
         </div>
       ) : null}
-
-      {modelLevelOpen && modelMenuPos
-        ? createPortal(
-            <div
-              ref={modelMenuRef}
-              className="fixed z-[10050] rounded-xl border border-gray-100 bg-white p-2 shadow-xl"
-              style={{
-                top: modelMenuPos.top,
-                bottom: modelMenuPos.bottom,
-                left: modelMenuPos.left,
-                width: modelMenuPos.width,
-              }}
-              onMouseDown={(e) => e.stopPropagation()}
-            >
-              <div style={{ maxHeight: modelMenuPos.maxHeight }} className="flex flex-col gap-1 overflow-y-auto">
-                {CHAT_MODEL_LEVELS.map((option) => {
-                  const selected = option.id === modelLevel;
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => {
-                        setModelLevel(option.id);
-                        setModelLevelOpen(false);
-                      }}
-                      className={`w-full rounded-lg px-3 py-2 text-left transition-colors ${
-                        selected
-                          ? "bg-[#1A162F]/10 text-[#1A162F]"
-                          : "text-gray-500 hover:bg-[#1A162F]/5 hover:text-gray-900"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium">{option.label}</span>
-                        {selected ? <Check size={16} weight="bold" className="text-[#1A162F]" /> : null}
-                      </div>
-                      <div className="mt-0.5 text-xs opacity-70">{option.description}</div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>,
-            document.body,
-          )
-        : null}
 
       <div className="relative flex-1 overflow-hidden">
         <div ref={scrollRef} className="chat-page-timeline h-full">
@@ -3294,23 +3182,12 @@ export default function ChatPage() {
                         <Paperclip size={18} weight="bold" />
                       </button>
                     </PortalTooltip>
-                    <button
-                      ref={modelTriggerRef}
-                      type="button"
-                      onClick={() => setModelLevelOpen((prev) => !prev)}
-                      className={`flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-medium leading-none transition-colors ${
-                        modelLevelOpen
-                          ? "bg-[#F5F5F5] text-[#1A162F]"
-                          : "text-[#666F8D] hover:bg-[#F5F5F5] hover:text-[#1A162F]"
-                      }`}
-                    >
-                      <span className="max-w-[110px] truncate">{selectedModelLevel.label}</span>
-                      <CaretDown
-                        size={12}
-                        weight="bold"
-                        className={`transition-transform ${modelLevelOpen ? "rotate-180" : ""}`}
-                      />
-                    </button>
+                    <ChatModelPicker<ChatModelLevelId>
+                      value={modelLevel}
+                      options={CHAT_MODEL_LEVELS}
+                      onChange={setModelLevel}
+                      disabled={subscriptionExpired}
+                    />
                   </div>
 
                   {activeRunId ? (
