@@ -1076,24 +1076,32 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   }, []);
 
   const loadWorkspaces = useCallback(
-    async (force = false) => {
+    async (options?: { force?: boolean; silent?: boolean }) => {
+      const force = options?.force === true;
+      const silent = options?.silent === true;
       if (workspaceLoading) {
         return;
       }
       if (hasLoadedWorkspaces && !force) {
         return;
       }
-      setWorkspaceLoading(true);
+      if (!silent) {
+        setWorkspaceLoading(true);
+      }
       try {
         const result = await listWorkspaceSummaries();
         setWorkspaces(result.workspaces);
         setActiveWorkspaceId(result.activeWorkspaceId);
         setHasLoadedWorkspaces(true);
       } catch {
-        setWorkspaces([]);
-        setActiveWorkspaceId("");
+        if (!hasLoadedWorkspaces) {
+          setWorkspaces([]);
+          setActiveWorkspaceId("");
+        }
       } finally {
-        setWorkspaceLoading(false);
+        if (!silent) {
+          setWorkspaceLoading(false);
+        }
       }
     },
     [hasLoadedWorkspaces, workspaceLoading],
@@ -1102,7 +1110,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   useEffect(() => {
     const unsubscribe = window.electronAPI.onBustlyLoginRefresh(() => {
       setHasLoadedWorkspaces(false);
-      void loadWorkspaces(true);
+      void loadWorkspaces({ force: true });
     });
     return () => {
       unsubscribe();
@@ -1619,7 +1627,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                 activeWorkspaceId={activeWorkspaceId || bustlyUserInfo?.workspaceId || ""}
                 loading={workspaceLoading}
                 onBeforeOpen={() => {
-                  void loadWorkspaces();
+                  void loadWorkspaces({ force: true, silent: true });
                 }}
                 onSwitchWorkspace={handleSwitchWorkspace}
                 onOpenSettings={handleOpenWorkspaceSettings}
