@@ -5,11 +5,7 @@ import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
-  DEFAULT_ERRORS_FILENAME,
-  DEFAULT_FEATURE_REQUESTS_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_LEARNINGS_DIRNAME,
-  DEFAULT_LEARNINGS_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_TOOLS_FILENAME,
@@ -60,15 +56,9 @@ describe("ensureAgentWorkspace", () => {
     const state = await readOnboardingState(tempDir);
     expect(state.bootstrapSeededAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
     expect(state.onboardingCompletedAt).toBeUndefined();
-    await expect(
-      fs.access(path.join(tempDir, DEFAULT_LEARNINGS_DIRNAME, DEFAULT_LEARNINGS_FILENAME)),
-    ).resolves.toBeUndefined();
-    await expect(
-      fs.access(path.join(tempDir, DEFAULT_LEARNINGS_DIRNAME, DEFAULT_ERRORS_FILENAME)),
-    ).resolves.toBeUndefined();
-    await expect(
-      fs.access(path.join(tempDir, DEFAULT_LEARNINGS_DIRNAME, DEFAULT_FEATURE_REQUESTS_FILENAME)),
-    ).resolves.toBeUndefined();
+    await expect(fs.access(path.join(tempDir, ".learnings"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("recovers partial initialization by creating BOOTSTRAP.md when marker is missing", async () => {

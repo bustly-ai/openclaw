@@ -3,10 +3,6 @@ import { homedir } from "node:os";
 import * as path from "node:path";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
-  DEFAULT_ERRORS_FILENAME,
-  DEFAULT_FEATURE_REQUESTS_FILENAME,
-  DEFAULT_LEARNINGS_DIRNAME,
-  DEFAULT_LEARNINGS_FILENAME,
   isWorkspaceOnboardingCompleted,
   loadWorkspaceTemplate,
 } from "../../../../src/agents/workspace";
@@ -15,27 +11,6 @@ import { readBustlyOAuthState } from "./bustly-oauth.js";
 
 const MANAGED_MARKER = "<!-- Managed by Bustly bootstrap. Edit with care. -->";
 const CONTEXT_VERSION = 1;
-const DEFAULT_LEARNINGS_TEMPLATE = `# Learnings
-
-Corrections, insights, and knowledge gaps captured during development.
-
-**Categories**: correction | insight | knowledge_gap | best_practice
-**Areas**: frontend | backend | infra | tests | docs | config
-**Statuses**: pending | in_progress | resolved | wont_fix | promoted | promoted_to_skill
-
-`;
-const DEFAULT_ERRORS_TEMPLATE = `# Errors Log
-
-Command failures, exceptions, and unexpected behaviors.
-
----
-`;
-const DEFAULT_FEATURE_REQUESTS_TEMPLATE = `# Feature Requests
-
-Capabilities requested by user that don't currently exist.
-
----
-`;
 
 type WorkspaceRow = {
   id: string;
@@ -984,19 +959,6 @@ async function writeFileIfMissing(filePath: string, content: string): Promise<vo
   }
 }
 
-async function ensureBustlyLearnings(workspaceDir: string): Promise<void> {
-  const learningsDir = path.join(workspaceDir, DEFAULT_LEARNINGS_DIRNAME);
-  await fs.mkdir(learningsDir, { recursive: true });
-  await Promise.all([
-    writeFileIfMissing(path.join(learningsDir, DEFAULT_LEARNINGS_FILENAME), DEFAULT_LEARNINGS_TEMPLATE),
-    writeFileIfMissing(path.join(learningsDir, DEFAULT_ERRORS_FILENAME), DEFAULT_ERRORS_TEMPLATE),
-    writeFileIfMissing(
-      path.join(learningsDir, DEFAULT_FEATURE_REQUESTS_FILENAME),
-      DEFAULT_FEATURE_REQUESTS_TEMPLATE,
-    ),
-  ]);
-}
-
 export async function initializeBustlyWorkspaceBootstrap(params: {
   workspaceDir: string;
   workspaceId: string;
@@ -1016,7 +978,6 @@ export async function initializeBustlyWorkspaceBootstrap(params: {
   const workspaceDir = params.workspaceDir;
 
   await fs.mkdir(workspaceDir, { recursive: true });
-  await ensureBustlyLearnings(workspaceDir);
 
   const [agents, soul, identity, user, tools, heartbeat, bootstrap] = await Promise.all([
     loadRenderedTemplate("AGENTS.md", values),

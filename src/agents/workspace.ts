@@ -33,10 +33,6 @@ export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = "MEMORY.md";
 export const DEFAULT_MEMORY_ALT_FILENAME = "memory.md";
-export const DEFAULT_LEARNINGS_DIRNAME = ".learnings";
-export const DEFAULT_LEARNINGS_FILENAME = "LEARNINGS.md";
-export const DEFAULT_ERRORS_FILENAME = "ERRORS.md";
-export const DEFAULT_FEATURE_REQUESTS_FILENAME = "FEATURE_REQUESTS.md";
 const WORKSPACE_STATE_DIRNAME = ".openclaw";
 const WORKSPACE_STATE_FILENAME = "workspace-state.json";
 const WORKSPACE_STATE_VERSION = 1;
@@ -46,30 +42,6 @@ let gitAvailabilityPromise: Promise<boolean> | null = null;
 
 // File content cache with mtime invalidation to avoid redundant reads
 const workspaceFileCache = new Map<string, { content: string; mtimeMs: number }>();
-
-const DEFAULT_LEARNINGS_TEMPLATE = `# Learnings
-
-Corrections, insights, and knowledge gaps captured during development.
-
-**Categories**: correction | insight | knowledge_gap | best_practice
-**Areas**: frontend | backend | infra | tests | docs | config
-**Statuses**: pending | in_progress | resolved | wont_fix | promoted | promoted_to_skill
-
-`;
-
-const DEFAULT_ERRORS_TEMPLATE = `# Errors Log
-
-Command failures, exceptions, and unexpected behaviors.
-
----
-`;
-
-const DEFAULT_FEATURE_REQUESTS_TEMPLATE = `# Feature Requests
-
-Capabilities requested by user that don't currently exist.
-
----
-`;
 
 function buildWorkspaceTemplateCacheKey(name: string, env: NodeJS.ProcessEnv = process.env): string {
   return `${buildRemoteWorkspaceTemplateSourceKey(env)}::${name}`;
@@ -386,10 +358,6 @@ export async function ensureAgentWorkspace(params?: {
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
   const heartbeatPath = path.join(dir, DEFAULT_HEARTBEAT_FILENAME);
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
-  const learningsDir = path.join(dir, DEFAULT_LEARNINGS_DIRNAME);
-  const learningsPath = path.join(learningsDir, DEFAULT_LEARNINGS_FILENAME);
-  const errorsPath = path.join(learningsDir, DEFAULT_ERRORS_FILENAME);
-  const featureRequestsPath = path.join(learningsDir, DEFAULT_FEATURE_REQUESTS_FILENAME);
   const statePath = resolveWorkspaceStatePath(dir);
   const corePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
   const coreExists = await Promise.all(corePaths.map(async (p) => await fileExists(p)));
@@ -398,11 +366,6 @@ export async function ensureAgentWorkspace(params?: {
   const bootstrapExistsInitially = await fileExists(bootstrapPath);
 
   if (allCoreFilesExist && bootstrapExistsInitially) {
-    await fs.mkdir(learningsDir, { recursive: true });
-    await writeFileIfMissing(learningsPath, DEFAULT_LEARNINGS_TEMPLATE);
-    await writeFileIfMissing(errorsPath, DEFAULT_ERRORS_TEMPLATE);
-    await writeFileIfMissing(featureRequestsPath, DEFAULT_FEATURE_REQUESTS_TEMPLATE);
-
     const state = await readWorkspaceOnboardingState(statePath);
     if (!state.bootstrapSeededAt) {
       await writeWorkspaceOnboardingState(statePath, {
@@ -437,10 +400,6 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
   await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
-  await fs.mkdir(learningsDir, { recursive: true });
-  await writeFileIfMissing(learningsPath, DEFAULT_LEARNINGS_TEMPLATE);
-  await writeFileIfMissing(errorsPath, DEFAULT_ERRORS_TEMPLATE);
-  await writeFileIfMissing(featureRequestsPath, DEFAULT_FEATURE_REQUESTS_TEMPLATE);
 
   let state = await readWorkspaceOnboardingState(statePath);
   let stateDirty = false;
