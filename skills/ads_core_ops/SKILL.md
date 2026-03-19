@@ -1,67 +1,118 @@
 ---
 name: ads_core_ops
-description: Use when you need to inspect or query advertising systems through the Bustly ops runtime, including Google Ads, Meta Ads, and Klaviyo. Trigger for requests about ad accounts, campaigns, ad groups, ads, audiences, profiles, lists, flows, performance metrics, spend, clicks, conversions, customer/account inspection, or advertising diagnostics. Prefer this skill over generic browser exploration when the task is about reading structured ads or marketing account data.
-metadata: {"openclaw":{"skillKey":"ads_core_ops","aliases":["ads"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops ads help","defaultCommand":"bustly ops ads platforms","commandExamples":["bustly ops ads platforms","bustly ops ads status","bustly ops ads klaviyo campaigns","bustly ops ads google-ads customers","bustly ops ads meta-ads insights --date-preset last_7d"],"runtimePackage":"@bustly/skill-runtime-ads-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-ads-core-ops@^0.1.0","runtimeExecutable":"bustly-skill-ads","runtimeNotes":["Users and agents should invoke this skill through `bustly ops ads ...`.","OpenClaw should ensure the runtime package is installed on first use, then route through the shared `bustly ops` dispatcher.","This repo intentionally keeps this skill declaration-only; runtime execution lives in the published package."]}}
+description: Unified advertising operations for Klaviyo, Google Ads, and Meta Ads. Use when an agent needs to inspect or query advertising data such as profiles, lists, campaigns, flows, metrics, customers, ad groups, keywords, ads, or insights. Supports Klaviyo and Google Ads through the Bustly Gateway, plus Meta Ads through direct local credentials.
 ---
 
-# Ads Core Ops
+Use the standalone entrypoint directly:
 
-Use this skill for structured advertising and marketing account reads.
+`node skills/ops/ads_core_ops/scripts/run.js ...`
 
-Do not default to browser/manual exploration first when the request is about:
-- Google Ads account or customer inspection
-- Meta Ads account, campaign, or insight reads
-- Klaviyo profiles, lists, campaigns, or flows
-- advertising performance diagnosis
-- spend / clicks / conversions / impressions / campaign status questions
+## Platform Modes
 
-## Command contract
+| Platform | Mode | Details |
+|----------|------|---------|
+| Klaviyo | Gateway | Route requests through the Supabase Edge Function. |
+| Google Ads | Gateway | Route requests through the Supabase Edge Function. |
+| Meta Ads | Direct | Use local credentials from the current machine. |
 
-Primary command surface:
+## Architecture
 
-```bash
-bustly ops ads <command>
-```
+### Gateway mode
 
-Underlying runtime executable:
+Use Gateway mode for Klaviyo and Google Ads.
 
 ```text
-bustly-skill-ads
+CLI (run.js)
+  -> POST /functions/v1/ads-core-ops
+  -> JWT + workspace validation
+  -> workspace integration lookup
+  -> Nango token resolution
+  -> provider API relay
 ```
 
-Runtime package:
+Require both of the following:
+
+- Bustly client authorization in `~/.bustly/bustlyOauth.json`
+- An active provider connection in **Bustly > Integrations**
+
+If the Gateway says a platform is not connected, stop and tell the user to go to **Bustly > Integrations** and authorize that platform first.
+
+### Direct mode
+
+Use direct mode only for Meta Ads.
 
 ```text
-@bustly/skill-runtime-ads-core-ops
+CLI (run.js)
+  -> local credentials in ~/.bustly/ads_credentials.json
+  -> Meta Graph API
 ```
 
-## Typical discovery / read commands
+## Security
 
-Start here when you need to understand what is connected:
+- Never print provider secrets in chat.
+- Keep provider credentials server-side for Gateway platforms.
+- Use `raw` / `native` commands only for request passthrough, not for exposing tokens.
+
+## Setup
+
+### Gateway platforms
+
+1. Sign in through the Bustly authorization flow.
+2. Connect the provider in **Bustly > Integrations**.
+3. Use `node skills/ops/ads_core_ops/scripts/run.js status` to confirm the real gateway connection state.
+4. Re-run the command after authorization succeeds.
+
+### Meta Ads
+
+Configure local credentials in `~/.bustly/ads_credentials.json`:
 
 ```bash
-bustly ops ads help
-bustly ops ads platforms
-bustly ops ads status
+node skills/ops/ads_core_ops/scripts/run.js config set-meta-ads '{"accessToken":"xxx","adAccountId":"123456789"}'
 ```
 
-Common reads:
+## Commands
+
+### Core
 
 ```bash
-bustly ops ads klaviyo campaigns
-bustly ops ads google-ads customers
-bustly ops ads meta-ads insights --date-preset last_7d
+node skills/ops/ads_core_ops/scripts/run.js platforms
+node skills/ops/ads_core_ops/scripts/run.js status
 ```
 
-## Platform coverage
+### Klaviyo
 
-- **Google Ads** — customers, campaigns, ad groups, keywords, ads, metrics
-- **Meta Ads** — account/campaign/ad insights and diagnostics
-- **Klaviyo** — profiles, lists, campaigns, flows, messaging/performance surfaces
+```bash
+node skills/ops/ads_core_ops/scripts/run.js klaviyo profiles
+node skills/ops/ads_core_ops/scripts/run.js klaviyo lists
+node skills/ops/ads_core_ops/scripts/run.js klaviyo campaigns
+node skills/ops/ads_core_ops/scripts/run.js klaviyo raw --path /profiles --query '{"page[size]":20}'
+```
 
-## Agent guidance
+### Google Ads
 
-- Prefer this skill whenever the user asks to "看广告账户数据", inspect ad accounts, check campaign metrics, or diagnose advertising performance.
-- Use `bustly ops ads platforms` or `bustly ops ads status` first when you need quick discovery.
-- If the runtime is not installed yet, OpenClaw should lazy-install it from the declared runtime package before executing the command.
-- Only fall back to browser/manual inspection if this skill is unavailable or the runtime path fails.
+```bash
+node skills/ops/ads_core_ops/scripts/run.js google-ads customers
+node skills/ops/ads_core_ops/scripts/run.js google-ads campaigns --customer-id 1234567890
+node skills/ops/ads_core_ops/scripts/run.js google-ads search --customer-id 1234567890 --query "SELECT campaign.id, campaign.name FROM campaign LIMIT 10"
+node skills/ops/ads_core_ops/scripts/run.js google-ads raw --path /customers/1234567890/googleAds:search --body '{"query":"SELECT campaign.id, campaign.name FROM campaign LIMIT 10"}'
+```
+
+### Meta Ads
+
+```bash
+node skills/ops/ads_core_ops/scripts/run.js meta-ads account
+node skills/ops/ads_core_ops/scripts/run.js meta-ads campaigns
+node skills/ops/ads_core_ops/scripts/run.js meta-ads insights --date-preset last_7d
+```
+
+## Error Handling
+
+- If the workspace is not authorized, tell the user to sign in through Bustly first.
+- If a Gateway platform is not connected, tell the user to open **Bustly > Integrations** and authorize it.
+- If Meta Ads credentials are missing, ask the user to configure local Meta credentials before retrying.
+
+## References
+
+- Klaviyo API: https://developers.klaviyo.com/
+- Google Ads API: https://developers.google.com/google-ads/api/docs/
+- Meta Ads API: https://developers.facebook.com/docs/marketing-api/

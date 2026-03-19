@@ -1,68 +1,87 @@
 ---
 name: commerce_core_ops
-description: Use when you need to inspect or operate commerce systems through the Bustly ops runtime, including Shopify, BigCommerce, WooCommerce, and Magento. Trigger for requests about stores, providers, connections, products, orders, customers, inventory, catalog reads, product updates, inventory adjustments, or commerce diagnostics. Prefer this skill over generic browser exploration when the task is about structured store or commerce account data.
-metadata: {"openclaw":{"skillKey":"commerce_core_ops","aliases":["commerce"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops commerce help","defaultCommand":"bustly ops commerce providers","commandExamples":["bustly ops commerce providers","bustly ops commerce connections","bustly ops commerce auth","bustly ops commerce read --platform shopify --entity orders --limit 50","bustly ops commerce write:product --platform shopify --op update --payload '{\"id\":\"gid://shopify/Product/123\",\"title\":\"Bustly Commerce Tee\"}'"],"runtimePackage":"@bustly/skill-runtime-commerce-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-commerce-core-ops@^0.1.0","runtimeExecutable":"bustly-skill-commerce","runtimeNotes":["Users and agents should invoke this skill through `bustly ops commerce ...`.","OpenClaw should ensure the runtime package is installed on first use, then route through the shared `bustly ops` dispatcher.","This repo intentionally keeps this skill declaration-only; runtime execution lives in the published package."]}}
+category: ecommerce
+api_type: hybrid
+auth_type: jwt
+description: Unified commerce operations for Shopify, BigCommerce, WooCommerce, and Magento. Use this skill when an agent needs one workspace-scoped entrypoint for product, order, customer, or inventory reads plus product writes, especially when provider-specific skills are too fragmented.
 ---
 
-# Commerce Core Ops
+This skill is the unified commerce layer inside `bustly-skills`.
 
-Use this skill for structured commerce/store reads and supported commerce write operations.
+It focuses on two goals only:
 
-Do not default to browser/manual exploration first when the request is about:
-- store connections or provider discovery
-- Shopify / BigCommerce / WooCommerce / Magento data reads
-- orders, products, customers, inventory, or catalog inspection
-- product updates or inventory adjustments
-- commerce account diagnostics
+1. Data reads (product/order/customer/inventory)
+2. Product writes (import/create/update/delete/inventory adjust)
 
-## Command contract
+Use the standalone Node entrypoint directly:
+`node skills/commerce_core_ops/scripts/run.js ...`
 
-Primary command surface:
+## Architecture
+
+`commerce_core_ops` is intentionally a hybrid skill.
+
+- Most provider skills in this repo follow the GraphQL or REST proxy pattern.
+- `commerce_core_ops` sits above them and gives agents one operator-facing entrypoint.
+- Reads and writes go to platform APIs (not semantic warehouse tables).
+- Internally it uses provider adapters so agent commands stay unified.
+
+### Read Path (all platforms)
+
+- **Shopify / BigCommerce / WooCommerce / Magento**: `/functions/v1/commerce-core-ops` with `action=DIRECT_READ`
+- Auth check is unified first (JWT + workspace + member + subscription), then provider adapter executes platform API calls.
+
+### Write Path
+
+- **Shopify / BigCommerce / WooCommerce / Magento**: `/functions/v1/commerce-core-ops` with `action=DIRECT_WRITE`
+- Same unified auth gate, then provider-specific write adapter.
+
+## Security Model (Required)
+
+Before every read/write command:
+
+1. Validate JWT (`auth/v1/user`)
+2. Verify active `workspace_members` membership
+3. Verify workspace record is ACTIVE
+4. Verify `workspace_billing_windows` has an ACTIVE non-expired window (`valid_from <= now < valid_to`)
+5. Ensure `user_id` matches JWT subject
+6. Enforce request-scoped `workspace_id` and `user_id`
+
+The CLI does this automatically (unless explicit debug bypass flags are used).
+
+## Command Map
+
+### Read
 
 ```bash
-bustly ops commerce <command>
+node skills/commerce_core_ops/scripts/run.js providers
+node skills/commerce_core_ops/scripts/run.js connections
+node skills/commerce_core_ops/scripts/run.js read shopify products --limit 20 --since 2026-01-01
+node skills/commerce_core_ops/scripts/run.js read shopify orders --limit 50 --since 2026-03-01
+node skills/commerce_core_ops/scripts/run.js read shopify orders --limit 50 --since 2026-03-01 --filter '{"since_field":"updated_at"}'
+node skills/commerce_core_ops/scripts/run.js read:entity --platform woocommerce --entity orders --limit 50 --since 2026-01-01
+node skills/commerce_core_ops/scripts/run.js read:entity --platform magento --entity order_items --order-id 100001234
 ```
 
-Underlying runtime executable:
+Shopify order reads default `since` filtering to `processed_at` (for historical import/mock windows).  
+If you need the old behavior, pass `filters.since_field=updated_at`.
 
-```text
-bustly-skill-commerce
-```
-
-Runtime package:
-
-```text
-@bustly/skill-runtime-commerce-core-ops
-```
-
-## Typical discovery / read commands
-
-Start here when you need to understand what commerce providers are connected:
+### Auth Check
 
 ```bash
-bustly ops commerce help
-bustly ops commerce providers
-bustly ops commerce connections
-bustly ops commerce auth
+node skills/commerce_core_ops/scripts/run.js auth
 ```
 
-Common reads / writes:
+### Product Write (all platforms)
 
 ```bash
-bustly ops commerce read --platform shopify --entity orders --limit 50
-bustly ops commerce write:product --platform shopify --op update --payload '{"id":"gid://shopify/Product/123","title":"Bustly Commerce Tee"}'
+node skills/commerce_core_ops/scripts/run.js write:product --platform shopify --op update --payload '{"id":"gid://shopify/Product/123","title":"Bustly Commerce Tee"}' --function commerce-core-ops
+node skills/commerce_core_ops/scripts/run.js write:product --platform bigcommerce --op create --payload '{"name":"Sample","sku":"sample-1","price":19.99}' --function commerce-core-ops
+node skills/commerce_core_ops/scripts/run.js write:product --platform woocommerce --op update --payload '{"id":"385","name":"New Name"}' --function commerce-core-ops
+node skills/commerce_core_ops/scripts/run.js write:product --platform magento --op inventory_adjust --payload '{"sku":"sample-1","delta":5}' --function commerce-core-ops
 ```
 
-## Platform coverage
+## References
 
-- **Shopify**
-- **BigCommerce**
-- **WooCommerce**
-- **Magento**
-
-## Agent guidance
-
-- Prefer this skill whenever the user asks to inspect stores, orders, products, customers, or inventory in a structured way.
-- Use `bustly ops commerce providers` or `bustly ops commerce connections` first when you need quick discovery.
-- If the runtime is not installed yet, OpenClaw should lazy-install it from the declared runtime package before executing the command.
-- Only fall back to browser/manual inspection if this skill is unavailable or the runtime path fails.
+- `references/contracts.md` - direct product write API contract
+- `references/edge-function-commerce-core-ops.ts` - secure direct read/write edge function (JWT + workspace + Nango-backed token)
+- `scripts/run.js` - unified CLI implementation
