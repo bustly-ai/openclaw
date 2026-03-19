@@ -133,24 +133,6 @@ Fields under `metadata.openclaw`:
 - `requires.config` — list of `openclaw.json` paths that must be truthy.
 - `primaryEnv` — env var name associated with `skills.entries.<name>.apiKey`.
 - `install` — optional array of installer specs used by the macOS Skills UI (brew/node/go/uv/download).
-- `aliases` — optional alternate names surfaced in the prompt to help the agent match a skill from user wording.
-- `commandNamespace` — optional human-facing command namespace (for example `bustly ops`).
-- `discoveryCommand` — optional “start here” command that the agent can run first.
-- `defaultCommand` — optional standard command the agent should prefer for the skill.
-- `fallbackCommand` — optional implementation-level fallback when the preferred command is unavailable.
-- `commandExamples` — optional example commands surfaced to the agent in the skills prompt.
-
-Prompt hint example:
-
-```markdown
----
-name: commerce_core_ops
-description: Unified commerce operations across storefront platforms
-metadata: {"openclaw":{"aliases":["commerce"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops commerce help","defaultCommand":"bustly ops commerce providers","fallbackCommand":"node skills/ops/commerce_core_ops/scripts/run.js providers","commandExamples":["bustly ops commerce providers","bustly ops commerce read --platform shopify --entity orders --limit 20"]}}
----
-```
-
-These command-hint fields are **prompt guidance only**. OpenClaw surfaces them to the agent so it can find and use a stable command contract more reliably; they do not bypass normal tool/runtime execution.
 
 Note on sandboxing:
 
@@ -284,9 +266,7 @@ By default, OpenClaw watches skill folders and bumps the skills snapshot when `S
 
 ## Token impact (skills list)
 
-When skills are eligible, OpenClaw injects a compact XML list of available skills into the system prompt. OpenClaw keeps the standard AgentSkills XML shape (`<name>`, `<description>`, `<location>`) and may enrich the description with optional command hints from `metadata.openclaw` such as aliases, discovery commands, preferred commands, and fallback commands.
-
-The cost is deterministic:
+When skills are eligible, OpenClaw injects a compact XML list of available skills into the system prompt (via `formatSkillsForPrompt` in `pi-coding-agent`). The cost is deterministic:
 
 - **Base overhead (only when ≥1 skill):** 195 characters.
 - **Per skill:** 97 characters + the length of the XML-escaped `<name>`, `<description>`, and `<location>` values.
