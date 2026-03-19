@@ -52,7 +52,6 @@ python3 {baseDir}/scripts/tts.py "<text>" [options]
 | `--speed` | Speech speed (0.5-2.0) | `1.0` |
 | `--output` | Output file path | `./tts_output.mp3` |
 | `--model` | Gateway route key | `audio.pro` |
-| `--gateway-base-url` | Gateway base URL | `https://test-gw.bustly.ai` |
 | `--jwt` | Optional Bustly JWT override | from `bustlyOauth.json` |
 | `--workspace-id` | Optional workspace override | from `bustlyOauth.json` |
 
@@ -94,8 +93,10 @@ python3 {baseDir}/scripts/tts.py "你好，欢迎使用语音合成服务。"
 - Reads `~/.bustly/bustlyOauth.json` automatically:
   - `user.userAccessToken` (JWT)
   - `user.workspaceId`
-- Optional gateway override:
-  - `BUSTLY_MODEL_GATEWAY_BASE_URL` (default: `https://test-gw.bustly.ai`)
+- Gateway base URL resolution order:
+  1) `BUSTLY_MODEL_GATEWAY_BASE_URL`
+  2) `~/.bustly/openclaw.json` -> `models.providers.bustly.baseUrl`
+  3) fallback: `https://gw.bustly.ai`
 - Optional model route override:
   - `BUSTLY_MODEL_GATEWAY_AUDIO_ROUTE` (default: `audio.pro`)
 

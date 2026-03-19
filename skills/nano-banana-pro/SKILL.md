@@ -56,7 +56,10 @@ Auth + routing
   - `user.workspaceId`
 - Calls Bustly gateway: `POST /api/v1/chat/completions`
 - Uses `model=image.pro` as the default route key.
-- Optional override: `BUSTLY_MODEL_GATEWAY_BASE_URL` (default: `https://gw.bustly.ai`)
+- Gateway base URL resolution order:
+  1) `BUSTLY_MODEL_GATEWAY_BASE_URL`
+  2) `~/.bustly/openclaw.json` -> `models.providers.bustly.baseUrl`
+  3) fallback: `https://gw.bustly.ai`
 
 Notes
 

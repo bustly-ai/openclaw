@@ -11,13 +11,11 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-DEFAULT_GATEWAY_BASE_URL = os.environ.get(
-    "BUSTLY_MODEL_GATEWAY_BASE_URL",
-    "https://test-gw.bustly.ai",
-).strip()
+DEFAULT_GATEWAY_BASE_URL_ENV = os.environ.get("BUSTLY_MODEL_GATEWAY_BASE_URL", "").strip()
 DEFAULT_ROUTE_MODEL = os.environ.get("BUSTLY_MODEL_GATEWAY_AUDIO_ROUTE", "audio.pro").strip() or "audio.pro"
 DEFAULT_USER_AGENT = os.environ.get("BUSTLY_MODEL_GATEWAY_USER_AGENT", "OpenClaw/CLI").strip() or "OpenClaw/CLI"
 DEFAULT_STATE_DIR = ".bustly"
+FALLBACK_GATEWAY_BASE_URL = "https://gw.bustly.ai"
 
 
 def resolve_state_dir() -> Path:
@@ -40,6 +38,31 @@ def load_bustly_oauth_config() -> dict:
     if not isinstance(payload, dict):
         raise RuntimeError(f"Invalid auth config format in {config_path}.")
     return payload
+
+
+def load_openclaw_config() -> dict:
+    config_path = resolve_state_dir() / "openclaw.json"
+    if not config_path.exists():
+        return {}
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def resolve_gateway_base_url() -> str:
+    if DEFAULT_GATEWAY_BASE_URL_ENV:
+        return DEFAULT_GATEWAY_BASE_URL_ENV
+
+    cfg = load_openclaw_config()
+    providers = ((cfg.get("models") or {}).get("providers") or {})
+    bustly = providers.get("bustly") if isinstance(providers, dict) else {}
+    if isinstance(bustly, dict):
+        base_url = str(bustly.get("baseUrl") or "").strip()
+        if base_url:
+            return base_url
+    return FALLBACK_GATEWAY_BASE_URL
 
 
 def resolve_auth(args: argparse.Namespace) -> tuple[str, str]:
@@ -187,11 +210,6 @@ def main():
         help=f"Gateway model route key (default: {DEFAULT_ROUTE_MODEL})",
     )
     parser.add_argument(
-        "--gateway-base-url",
-        default=DEFAULT_GATEWAY_BASE_URL,
-        help=f"Gateway base URL (default: {DEFAULT_GATEWAY_BASE_URL})",
-    )
-    parser.add_argument(
         "--jwt",
         help="Bustly user JWT (optional; defaults to bustlyOauth.json user.userAccessToken)",
     )
@@ -203,8 +221,9 @@ def main():
 
     try:
         jwt, workspace_id = resolve_auth(args)
+        gateway_base_url = resolve_gateway_base_url()
         payload = build_payload(args)
-        data, raw_body = call_gateway(args.gateway_base_url, jwt, workspace_id, payload)
+        data, raw_body = call_gateway(gateway_base_url, jwt, workspace_id, payload)
 
         extra: dict[str, Any] = {}
         if isinstance(data, dict):
