@@ -16,6 +16,24 @@ export type SkillInstallSpec = {
   targetDir?: string;
 };
 
+export type SkillCommandRuntimeSpec = {
+  package?: string;
+  version?: string;
+  installSpec?: string;
+  executable?: string;
+  notes?: string[];
+};
+
+export type SkillCommandHints = {
+  aliases?: string[];
+  commandNamespace?: string;
+  discoveryCommand?: string;
+  defaultCommand?: string;
+  fallbackCommand?: string;
+  commandExamples?: string[];
+  runtime?: SkillCommandRuntimeSpec;
+};
+
 export type OpenClawSkillMetadata = {
   always?: boolean;
   skillKey?: string;
@@ -30,6 +48,7 @@ export type OpenClawSkillMetadata = {
     config?: string[];
   };
   install?: SkillInstallSpec[];
+  commandHints?: SkillCommandHints;
 };
 
 export type SkillInvocationPolicy = {

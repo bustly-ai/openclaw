@@ -159,7 +159,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       name: "commerce-core-ops",
       description: "Unified commerce operations",
       metadata:
-        '{"openclaw":{"aliases":["commerce"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops commerce help","defaultCommand":"bustly ops commerce providers","fallbackCommand":"node scripts/bustly-ops.js ops commerce providers","commandExamples":["bustly ops commerce providers"],"runtimePackage":"@bustly/skill-runtime-commerce-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-commerce-core-ops@^0.1.0","runtimeExecutable":"bustly-skill-commerce"}}',
+        '{"openclaw":{"aliases":["commerce"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops commerce help","defaultCommand":"bustly ops commerce providers","commandExamples":["bustly ops commerce providers"],"runtimePackage":"@bustly/skill-runtime-commerce-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-commerce-core-ops@^0.1.0","runtimeExecutable":"bustly-skill-commerce"}}',
     });
 
     const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
@@ -172,8 +172,5 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain("Preferred command namespace: bustly ops.");
     expect(prompt).toContain("Start discovery with: bustly ops commerce help.");
     expect(prompt).toContain("Default command: bustly ops commerce providers.");
-    expect(prompt).toContain(
-      "Fallback command: node scripts/bustly-ops.js ops commerce providers.",
-    );
   });
 });

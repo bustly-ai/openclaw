@@ -8,9 +8,11 @@ import {
   isBundledSkillAllowed,
   isConfigPathTruthy,
   loadWorkspaceSkillEntries,
+  resolveSkillInstallSpecs,
   resolveBundledAllowlist,
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
+  type SkillCommandRuntimeSpec,
   type SkillEntry,
   type SkillEligibilityContext,
   type SkillInstallSpec,
@@ -46,6 +48,8 @@ export type SkillStatusEntry = {
   missing: Requirements;
   configChecks: SkillStatusConfigCheck[];
   install: SkillInstallOption[];
+  runtime?: SkillCommandRuntimeSpec;
+  resolvedCommand?: string;
 };
 
 export type SkillStatusReport = {
@@ -113,7 +117,7 @@ function normalizeInstallOptions(
     return [];
   }
 
-  const install = entry.metadata?.install ?? [];
+  const install = resolveSkillInstallSpecs(entry);
   if (install.length === 0) {
     return [];
   }

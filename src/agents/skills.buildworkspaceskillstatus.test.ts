@@ -163,7 +163,6 @@ describe("buildWorkspaceSkillStatus", () => {
       commandHints: {
         discoveryCommand: "bustly ops ads help",
         defaultCommand: "bustly ops ads platforms",
-        fallbackCommand: "node scripts/bustly-ops.js ops ads platforms",
         runtime: {
           package: "@bustly/skill-runtime-ads-core-ops",
           version: "^0.1.0",
@@ -182,6 +181,7 @@ describe("buildWorkspaceSkillStatus", () => {
 
     expect(skill?.runtime?.package).toBe("@bustly/skill-runtime-ads-core-ops");
     expect(skill?.runtime?.executable).toBe("bustly-skill-ads");
+    expect(skill?.install[0]?.id).toBe("runtime");
     expect(skill?.resolvedCommand).toBe("bustly ops ads platforms");
   });
 });

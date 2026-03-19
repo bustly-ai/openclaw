@@ -64,6 +64,38 @@ function debugSkillCommandOnce(
   skillsLogger.debug(message, meta);
 }
 
+function buildCommandHintsPromptBlock(entry: SkillEntry): string {
+  const hints = entry.metadata?.commandHints;
+  if (!hints) {
+    return "";
+  }
+
+  const lines: string[] = [];
+  const aliases = hints.aliases ?? [];
+  if (aliases.length > 0) {
+    lines.push(`Aliases: ${aliases.join(", ")}.`);
+  }
+  if (hints.commandNamespace) {
+    lines.push(`Preferred command namespace: ${hints.commandNamespace}.`);
+  }
+  if (hints.discoveryCommand) {
+    lines.push(`Start discovery with: ${hints.discoveryCommand}.`);
+  }
+  if (hints.defaultCommand) {
+    lines.push(`Default command: ${hints.defaultCommand}.`);
+  }
+  if (hints.fallbackCommand) {
+    lines.push(`Fallback command: ${hints.fallbackCommand}.`);
+  }
+
+  return lines.length > 0 ? `${entry.skill.name} command contract:\n${lines.join("\n")}` : "";
+}
+
+function buildCommandHintsPrompt(entries: SkillEntry[]): string {
+  const blocks = entries.map((entry) => buildCommandHintsPromptBlock(entry)).filter(Boolean);
+  return blocks.join("\n\n");
+}
+
 function filterSkillEntries(
   entries: SkillEntry[],
   config?: OpenClawConfig,
@@ -506,10 +538,15 @@ function resolveWorkspaceSkillPromptState(
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
     : "";
+  const promptSkillNames = new Set(skillsForPrompt.map((skill) => skill.name));
+  const commandHintsPrompt = buildCommandHintsPrompt(
+    promptEntries.filter((entry) => promptSkillNames.has(entry.skill.name)),
+  );
   const prompt = [
     remoteNote,
     truncationNote,
     formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
+    commandHintsPrompt,
   ]
     .filter(Boolean)
     .join("\n");

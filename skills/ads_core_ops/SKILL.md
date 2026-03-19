@@ -1,17 +1,17 @@
 ---
 name: ads_core_ops
 description: Unified advertising operations for Klaviyo, Google Ads, and Meta Ads. This skill is declaration-first: OpenClaw should treat it as a pluggable skill contract and resolve execution through the published runtime package instead of assuming repo-local scripts. Use when an agent needs to inspect or query advertising data such as profiles, lists, campaigns, flows, metrics, customers, ad groups, keywords, ads, or insights.
-metadata: {"openclaw":{"skillKey":"ads_core_ops","aliases":["ads"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops ads help","defaultCommand":"bustly ops ads platforms","fallbackCommand":"node scripts/bustly-ops.js ops ads platforms","commandExamples":["bustly ops ads platforms","bustly ops ads status","bustly ops ads klaviyo campaigns","bustly ops ads google-ads customers","bustly ops ads meta-ads insights --date-preset last_7d"],"runtimePackage":"@bustly/skill-runtime-ads-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-ads-core-ops@^0.1.0","runtimeExecutable":"bustly-skill-ads","runtimeNotes":["Users and agents should invoke this skill through `bustly ops ads ...`.","OpenClaw should ensure the runtime package is installed, then route through the shared `bustly ops` dispatcher.","The bustly-skills repo intentionally keeps the original local implementation for development and fallback."]}}
+metadata: {"openclaw":{"skillKey":"ads_core_ops","aliases":["ads"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops ads help","defaultCommand":"bustly ops ads platforms","commandExamples":["bustly ops ads platforms","bustly ops ads status","bustly ops ads klaviyo campaigns","bustly ops ads google-ads customers","bustly ops ads meta-ads insights --date-preset last_7d"],"runtimePackage":"@bustly/skill-runtime-ads-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-ads-core-ops@^0.1.0","runtimeExecutable":"bustly-skill-ads","runtimeNotes":["Users and agents should invoke this skill through `bustly ops ads ...`.","OpenClaw should ensure the runtime package is installed on first use, then route through the shared `bustly ops` dispatcher.","This repo intentionally keeps this skill declaration-only; runtime execution lives in the published package."]}}
 ---
 
 ## Role in the architecture
 
-`ads_core_ops` is a declaration + test skill.
+`ads_core_ops` is a declaration-only skill in this repo.
 
 That means:
 - this `SKILL.md` remains the contract OpenClaw reads
 - runtime logic is published via the runtime package
-- the bustly-skills repo may still keep the local implementation for development, debugging, and compatibility
+- OpenClaw should lazy-install that runtime package on first `bustly ops ads ...` execution
 
 ## Preferred execution contract
 

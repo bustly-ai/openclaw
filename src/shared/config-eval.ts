@@ -149,6 +149,12 @@ let cachedHasBinaryPath: string | undefined;
 let cachedHasBinaryPathExt: string | undefined;
 const hasBinaryCache = new Map<string, boolean>();
 
+export function invalidateHasBinaryCache() {
+  cachedHasBinaryPath = undefined;
+  cachedHasBinaryPathExt = undefined;
+  hasBinaryCache.clear();
+}
+
 export function hasBinary(bin: string): boolean {
   const pathEnv = process.env.PATH ?? "";
   const pathExt = process.platform === "win32" ? (process.env.PATHEXT ?? "") : "";
