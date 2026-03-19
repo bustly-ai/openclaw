@@ -110,6 +110,23 @@ type RetryPayload = {
   contextPaths: ContextPath[];
 };
 
+const SILENT_REPLY_TOKEN = "NO_REPLY";
+
+function isSilentReplyText(text: string | undefined, token: string = SILENT_REPLY_TOKEN): boolean {
+  if (!text) {
+    return false;
+  }
+  const trimmed = text.trim().toUpperCase();
+  if (!trimmed) {
+    return false;
+  }
+  const normalizedToken = token.toUpperCase();
+  if (trimmed === normalizedToken) {
+    return true;
+  }
+  return trimmed.startsWith(`${normalizedToken} `) || trimmed.endsWith(` ${normalizedToken}`);
+}
+
 type StreamSegmentState = {
   assistant: number;
   assistantClosed: boolean;
@@ -760,7 +777,6 @@ export default function ChatPage() {
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [subscriptionExpired, setSubscriptionExpired] = useState(false);
   const [subscriptionActionText, setSubscriptionActionText] = useState("Upgrade");
-  const [pendingBootstrapWakeSessionKey, setPendingBootstrapWakeSessionKey] = useState<string | null>(null);
   const [modelMenuPos, setModelMenuPos] = useState<{
     top?: number;
     bottom?: number;
@@ -1435,6 +1451,9 @@ export default function ChatPage() {
               : role === "system"
                 ? "system"
                 : "assistant";
+        if (textRole === "assistant" && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+          continue;
+        }
         if (textRole === "user") {
           console.log("[electron-chat] history user message", {
             sessionKey,
@@ -1498,24 +1517,13 @@ export default function ChatPage() {
     items.push(...toolsByCallId.values());
     const runtime = getSessionRuntime(sessionKey);
     runtime.historyLoaded = true;
-    const expectedBootstrapSessionKey = activeWorkspaceId
-      ? buildBustlyWorkspaceMainSessionKey(activeWorkspaceId)
-      : "";
-    if (
-      activeWorkspaceId &&
-      sessionKey === expectedBootstrapSessionKey &&
-      history.length === 0 &&
-      /^agent:[a-z0-9_-]+:main$/i.test(sessionKey)
-    ) {
-      setPendingBootstrapWakeSessionKey((prev) => (prev === sessionKey ? prev : sessionKey));
-    }
     setSessionTimeline(sessionKey, (prev) => {
       const localErrors = prev.filter((item): item is ErrorItem => item.kind === "error");
       const merged = [...items, ...localErrors];
       return merged.toSorted(compareTimeline);
     });
     setSessionLoading(sessionKey, false);
-  }, [activeWorkspaceId, getSessionRuntime, setSessionLoading, setSessionTimeline]);
+  }, [getSessionRuntime, setSessionLoading, setSessionTimeline]);
 
   const connectGateway = useCallback(
     async (status: GatewayStatus) => {
@@ -2305,81 +2313,46 @@ export default function ChatPage() {
   }, [attachments, contextPaths, currentSessionKey, draft, sendPreparedChatMessage]);
 
   useEffect(() => {
-    if (
-      !activeWorkspaceId ||
-      !connected ||
-      !clientRef.current ||
-      sending ||
-      !pendingBootstrapWakeSessionKey
-    ) {
+    if (!activeWorkspaceId || !connected || !clientRef.current || sending) {
       return;
     }
-    if (pendingBootstrapWakeSessionKey !== currentSessionKey) {
+    const expectedBootstrapSessionKey = buildBustlyWorkspaceMainSessionKey(activeWorkspaceId);
+    if (currentSessionKey !== expectedBootstrapSessionKey) {
+      return;
+    }
+    if (!/^agent:bustly-[a-z0-9_-]+:main$/i.test(currentSessionKey)) {
+      return;
+    }
+    const runtime = getSessionRuntime(currentSessionKey);
+    if (!runtime.historyLoaded) {
       return;
     }
     if (timeline.length > 0) {
       return;
     }
-    if (bootstrapWakeAttemptedSessionsRef.current.has(pendingBootstrapWakeSessionKey)) {
+    if (bootstrapWakeAttemptedSessionsRef.current.has(currentSessionKey)) {
       return;
     }
-
-    bootstrapWakeAttemptedSessionsRef.current.add(pendingBootstrapWakeSessionKey);
-    setPendingBootstrapWakeSessionKey(null);
+    bootstrapWakeAttemptedSessionsRef.current.add(currentSessionKey);
     void sendPreparedChatMessage({
-      sessionKey: pendingBootstrapWakeSessionKey,
+      sessionKey: currentSessionKey,
       draftText: "Wake up, bustly!",
       attachments: [],
       contextPaths: [],
       clearComposer: false,
     }).then((ok) => {
       if (!ok) {
-        bootstrapWakeAttemptedSessionsRef.current.delete(pendingBootstrapWakeSessionKey);
-        setPendingBootstrapWakeSessionKey((prev) =>
-          prev ?? pendingBootstrapWakeSessionKey,
-        );
+        bootstrapWakeAttemptedSessionsRef.current.delete(currentSessionKey);
       }
     });
   }, [
     activeWorkspaceId,
     connected,
     currentSessionKey,
-    pendingBootstrapWakeSessionKey,
+    getSessionRuntime,
     sendPreparedChatMessage,
     sending,
     timeline.length,
-  ]);
-
-  useEffect(() => {
-    const expectedBootstrapSessionKey = activeWorkspaceId
-      ? buildBustlyWorkspaceMainSessionKey(activeWorkspaceId)
-      : "";
-    const runtime = currentSessionKey ? getSessionRuntime(currentSessionKey) : null;
-    if (!activeWorkspaceId || !connected) {
-      return;
-    }
-    if (currentSessionKey !== expectedBootstrapSessionKey) {
-      return;
-    }
-    if (!runtime) {
-      return;
-    }
-    if (!runtime.historyLoaded) {
-      return;
-    }
-    if (runtime.view.timeline.length > 0 || pendingBootstrapWakeSessionKey) {
-      return;
-    }
-    if (bootstrapWakeAttemptedSessionsRef.current.has(currentSessionKey)) {
-      return;
-    }
-    setPendingBootstrapWakeSessionKey(currentSessionKey);
-  }, [
-    activeWorkspaceId,
-    connected,
-    currentSessionKey,
-    getSessionRuntime,
-    pendingBootstrapWakeSessionKey,
   ]);
 
   const handleSend = useCallback(async () => {
