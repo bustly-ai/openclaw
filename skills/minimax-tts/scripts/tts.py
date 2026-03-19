@@ -51,9 +51,7 @@ def load_openclaw_config() -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def resolve_gateway_base_url(cli_base_url: str | None) -> str:
-    if isinstance(cli_base_url, str) and cli_base_url.strip():
-        return cli_base_url.strip()
+def resolve_gateway_base_url() -> str:
     if DEFAULT_GATEWAY_BASE_URL_ENV:
         return DEFAULT_GATEWAY_BASE_URL_ENV
 
@@ -212,16 +210,6 @@ def main():
         help=f"Gateway model route key (default: {DEFAULT_ROUTE_MODEL})",
     )
     parser.add_argument(
-        "--gateway-base-url",
-        default="",
-        help=(
-            "Gateway base URL override. "
-            "Priority: --gateway-base-url > BUSTLY_MODEL_GATEWAY_BASE_URL > "
-            "~/.bustly/openclaw.json(models.providers.bustly.baseUrl) > "
-            f"{FALLBACK_GATEWAY_BASE_URL}"
-        ),
-    )
-    parser.add_argument(
         "--jwt",
         help="Bustly user JWT (optional; defaults to bustlyOauth.json user.userAccessToken)",
     )
@@ -233,7 +221,7 @@ def main():
 
     try:
         jwt, workspace_id = resolve_auth(args)
-        gateway_base_url = resolve_gateway_base_url(args.gateway_base_url)
+        gateway_base_url = resolve_gateway_base_url()
         payload = build_payload(args)
         data, raw_body = call_gateway(gateway_base_url, jwt, workspace_id, payload)
 
