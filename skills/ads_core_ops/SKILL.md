@@ -1,11 +1,47 @@
 ---
 name: ads_core_ops
-description: Unified advertising operations for Klaviyo, Google Ads, and Meta Ads. Use when an agent needs to inspect or query advertising data such as profiles, lists, campaigns, flows, metrics, customers, ad groups, keywords, ads, or insights. Supports Klaviyo and Google Ads through the Bustly Gateway, plus Meta Ads through direct local credentials.
+description: Unified advertising operations for Klaviyo, Google Ads, and Meta Ads. Prefer the standard CLI contract `bustly ops ads <command>` so agents can discover commands without depending on internal script paths. Use when an agent needs to inspect or query advertising data such as profiles, lists, campaigns, flows, metrics, customers, ad groups, keywords, ads, or insights.
+metadata:
+  {
+    "openclaw":
+      {
+        "skillKey": "ads_core_ops",
+        "aliases": ["ads"],
+        "commandNamespace": "bustly ops",
+        "discoveryCommand": "bustly ops ads help",
+        "defaultCommand": "bustly ops ads platforms",
+        "fallbackCommand": "node skills/ops/ads_core_ops/scripts/run.js platforms",
+        "commandExamples":
+          [
+            "bustly ops ads platforms",
+            "bustly ops ads status",
+            "bustly ops ads klaviyo campaigns",
+            "bustly ops ads google-ads customers",
+            "bustly ops ads meta-ads insights --date-preset last_7d",
+          ],
+      },
+  }
 ---
 
-Use the standalone entrypoint directly:
+## Preferred CLI contract
 
-`node skills/ops/ads_core_ops/scripts/run.js ...`
+Use the standardized entrypoint first:
+
+```bash
+bustly ops ads <command>
+```
+
+Repo-local fallback when the `bustly` launcher is not on `PATH`:
+
+```bash
+node scripts/bustly-ops.js ops ads <command>
+```
+
+Direct script fallback only when debugging the skill implementation itself:
+
+```bash
+node skills/ops/ads_core_ops/scripts/run.js <command>
+```
 
 ## Platform Modes
 
@@ -59,14 +95,15 @@ CLI (run.js)
 
 1. Sign in through the Bustly authorization flow.
 2. Connect the provider in **Bustly > Integrations**.
-3. Re-run the command after authorization succeeds.
+3. Use `bustly ops ads status` to confirm the real gateway connection state.
+4. Re-run the command after authorization succeeds.
 
 ### Meta Ads
 
 Configure local credentials in `~/.bustly/ads_credentials.json`:
 
 ```bash
-node skills/ops/ads_core_ops/scripts/run.js config set-meta-ads '{"accessToken":"xxx","adAccountId":"123456789"}'
+bustly ops ads config set-meta-ads '{"accessToken":"xxx","adAccountId":"123456789"}'
 ```
 
 ## Commands
@@ -74,34 +111,35 @@ node skills/ops/ads_core_ops/scripts/run.js config set-meta-ads '{"accessToken":
 ### Core
 
 ```bash
-node skills/ops/ads_core_ops/scripts/run.js platforms
-node skills/ops/ads_core_ops/scripts/run.js status
+bustly ops ads help
+bustly ops ads platforms
+bustly ops ads status
 ```
 
 ### Klaviyo
 
 ```bash
-node skills/ops/ads_core_ops/scripts/run.js klaviyo profiles
-node skills/ops/ads_core_ops/scripts/run.js klaviyo lists
-node skills/ops/ads_core_ops/scripts/run.js klaviyo campaigns
-node skills/ops/ads_core_ops/scripts/run.js klaviyo raw --path /profiles --query '{"page[size]":20}'
+bustly ops ads klaviyo profiles
+bustly ops ads klaviyo lists
+bustly ops ads klaviyo campaigns
+bustly ops ads klaviyo raw --path /profiles --query '{"page[size]":20}'
 ```
 
 ### Google Ads
 
 ```bash
-node skills/ops/ads_core_ops/scripts/run.js google-ads customers
-node skills/ops/ads_core_ops/scripts/run.js google-ads campaigns --customer-id 1234567890
-node skills/ops/ads_core_ops/scripts/run.js google-ads search --customer-id 1234567890 --query "SELECT campaign.id, campaign.name FROM campaign LIMIT 10"
-node skills/ops/ads_core_ops/scripts/run.js google-ads raw --path /customers/1234567890/googleAds:search --body '{"query":"SELECT campaign.id, campaign.name FROM campaign LIMIT 10"}'
+bustly ops ads google-ads customers
+bustly ops ads google-ads campaigns --customer-id 1234567890
+bustly ops ads google-ads search --customer-id 1234567890 --query "SELECT campaign.id, campaign.name FROM campaign LIMIT 10"
+bustly ops ads google-ads raw --path /customers/1234567890/googleAds:search --body '{"query":"SELECT campaign.id, campaign.name FROM campaign LIMIT 10"}'
 ```
 
 ### Meta Ads
 
 ```bash
-node skills/ops/ads_core_ops/scripts/run.js meta-ads account
-node skills/ops/ads_core_ops/scripts/run.js meta-ads campaigns
-node skills/ops/ads_core_ops/scripts/run.js meta-ads insights --date-preset last_7d
+bustly ops ads meta-ads account
+bustly ops ads meta-ads campaigns
+bustly ops ads meta-ads insights --date-preset last_7d
 ```
 
 ## Error Handling
@@ -112,6 +150,7 @@ node skills/ops/ads_core_ops/scripts/run.js meta-ads insights --date-preset last
 
 ## References
 
+- `README.md` - local usage and operator notes
 - Klaviyo API: https://developers.klaviyo.com/
 - Google Ads API: https://developers.google.com/google-ads/api/docs/
 - Meta Ads API: https://developers.facebook.com/docs/marketing-api/

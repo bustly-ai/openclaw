@@ -642,7 +642,7 @@ function printData(data, format = "json") {
 
 function printHelp() {
   console.log(`Usage:
-  node skills/commerce_core_ops/scripts/run.js <command> [args] [flags]
+  bustly ops commerce <command> [args] [flags]
 
 Core Commands (agent-friendly aliases):
   providers                                      # alias: platforms
@@ -725,9 +725,7 @@ function parseReadTarget(positional, flags) {
 
   const entity = normalizeEntity(flags.entity || flags.resource || positional[2]);
   if (!entity) {
-    throw new Error(
-      `--entity is required: ${READ_ENTITIES.join(" | ")}`,
-    );
+    throw new Error(`--entity is required: ${READ_ENTITIES.join(" | ")}`);
   }
 
   const limit = Math.max(1, Math.min(250, parseInteger(flags.limit, 50)));
@@ -783,15 +781,18 @@ async function getPlatformConnectionStatus(config, workspaceId, platform) {
     };
   }
 
-  const integrationRows = asArray(await safeWorkspaceRows(config, "workspace_integrations", workspaceId));
-  const activeIntegration = integrationRows.find((row) => {
-    if (!isActiveStatus(row.status)) return false;
-    const value = String(row.platform || "")
-      .trim()
-      .toLowerCase();
-    if (platform === "magento") return value === "magento" || value === "adobe-commerce";
-    return value === platform;
-  }) || null;
+  const integrationRows = asArray(
+    await safeWorkspaceRows(config, "workspace_integrations", workspaceId),
+  );
+  const activeIntegration =
+    integrationRows.find((row) => {
+      if (!isActiveStatus(row.status)) return false;
+      const value = String(row.platform || "")
+        .trim()
+        .toLowerCase();
+      if (platform === "magento") return value === "magento" || value === "adobe-commerce";
+      return value === platform;
+    }) || null;
 
   const connectionFromMapping = String(active?.nango_connection_id || "").trim();
   const connectionFromIntegration = String(activeIntegration?.nango_connection_id || "").trim();
@@ -811,7 +812,8 @@ async function getPlatformConnectionStatus(config, workspaceId, platform) {
 async function listConnectionStatuses(config, auth) {
   return Promise.all(
     SUPPORTED_PLATFORMS.map((platform) =>
-      getPlatformConnectionStatus(config, auth.workspaceId, platform)),
+      getPlatformConnectionStatus(config, auth.workspaceId, platform),
+    ),
   );
 }
 

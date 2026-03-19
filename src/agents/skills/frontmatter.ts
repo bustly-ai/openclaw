@@ -5,6 +5,7 @@ import type {
   SkillEntry,
   SkillInstallSpec,
   SkillInvocationPolicy,
+  OpenClawSkillCommandHints,
 } from "./types.js";
 import { parseFrontmatterBlock } from "../../markdown/frontmatter.js";
 import {
@@ -78,6 +79,39 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   return spec;
 }
 
+function parseCommandHints(metadataObj: Record<string, unknown>): OpenClawSkillCommandHints | undefined {
+  const aliases = normalizeStringList(metadataObj.aliases);
+  const commandNamespace =
+    typeof metadataObj.commandNamespace === "string" ? metadataObj.commandNamespace.trim() : "";
+  const discoveryCommand =
+    typeof metadataObj.discoveryCommand === "string" ? metadataObj.discoveryCommand.trim() : "";
+  const defaultCommand =
+    typeof metadataObj.defaultCommand === "string" ? metadataObj.defaultCommand.trim() : "";
+  const fallbackCommand =
+    typeof metadataObj.fallbackCommand === "string" ? metadataObj.fallbackCommand.trim() : "";
+  const commandExamples = normalizeStringList(metadataObj.commandExamples);
+
+  if (
+    aliases.length === 0 &&
+    !commandNamespace &&
+    !discoveryCommand &&
+    !defaultCommand &&
+    !fallbackCommand &&
+    commandExamples.length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    aliases: aliases.length > 0 ? aliases : undefined,
+    commandNamespace: commandNamespace || undefined,
+    discoveryCommand: discoveryCommand || undefined,
+    defaultCommand: defaultCommand || undefined,
+    fallbackCommand: fallbackCommand || undefined,
+    commandExamples: commandExamples.length > 0 ? commandExamples : undefined,
+  };
+}
+
 export function resolveOpenClawMetadata(
   frontmatter: ParsedSkillFrontmatter,
 ): OpenClawSkillMetadata | undefined {
@@ -88,6 +122,7 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
+  const commandHints = parseCommandHints(metadataObj);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
@@ -97,6 +132,7 @@ export function resolveOpenClawMetadata(
     os: osRaw.length > 0 ? osRaw : undefined,
     requires: requires,
     install: install.length > 0 ? install : undefined,
+    commandHints,
   };
 }
 

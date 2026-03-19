@@ -23,8 +23,7 @@ type NormalizedOperation =
   | "inventory_adjust"
   | "publish"
   | "unpublish"
-  | "variants_bulk_update"
-  | "native";
+  | "variants_bulk_update";
 type ReadEntity =
   | "products"
   | "orders"
@@ -39,8 +38,6 @@ interface DirectWriteRequest {
   platform: string;
   operation: string;
   resource?: string;
-  mode?: string;
-  write_mode?: string;
   workspace_id?: string;
   workspaceId?: string;
   user_id?: string;
@@ -49,16 +46,7 @@ interface DirectWriteRequest {
   requestId?: string;
   idempotency_key?: string;
   idempotencyKey?: string;
-  native_request?: Record<string, unknown>;
   payload?: Record<string, unknown>;
-}
-
-interface ParsedNativeRequest {
-  method: string;
-  path: string;
-  query: Record<string, unknown>;
-  headers: Record<string, string>;
-  body: unknown;
 }
 
 interface DirectReadRequest {
@@ -81,13 +69,12 @@ interface DirectReadRequest {
 interface ParsedRequest {
   platform: Platform;
   operation: NormalizedOperation;
-  resource: "product" | "native";
+  resource: "product";
   workspaceId: string;
   userId: string;
   requestId: string;
   idempotencyKey: string;
   payload: Record<string, unknown>;
-  nativeRequest: ParsedNativeRequest | null;
 }
 
 interface ParsedReadRequest {
@@ -231,15 +218,14 @@ function parseDirectWriteRequest(input: DirectWriteRequest): ParsedRequest {
   }
 
   const platform = normalizePlatform(input.platform);
-  const payload = (input.payload || {}) as Record<string, unknown>;
-  const nativeRequest = parseNativeWriteRequest(input, payload);
-  const operation = nativeRequest ? "native" : normalizeOperation(input.operation);
-  const resource = nativeRequest ? "native" : normalizeResource(input.resource);
+  const operation = normalizeOperation(input.operation);
+  const resource = normalizeResource(input.resource);
 
   const workspaceId = pickString(input.workspace_id, input.workspaceId);
   const userId = pickString(input.user_id, input.userId);
   const requestId = pickString(input.request_id, input.requestId, crypto.randomUUID());
   const idempotencyKey = pickString(input.idempotency_key, input.idempotencyKey, "");
+  const payload = (input.payload || {}) as Record<string, unknown>;
 
   if (!workspaceId) throw new Error("workspace_id is required");
   if (!userId) throw new Error("user_id is required");
@@ -256,7 +242,6 @@ function parseDirectWriteRequest(input: DirectWriteRequest): ParsedRequest {
     requestId,
     idempotencyKey,
     payload,
-    nativeRequest,
   };
 }
 
@@ -334,17 +319,9 @@ function normalizeOperation(value: unknown): NormalizedOperation {
   if (normalized === "variants_bulk_update" || normalized === "variant_bulk_update") {
     return "variants_bulk_update";
   }
-  if (
-    normalized === "native" ||
-    normalized === "raw" ||
-    normalized === "proxy" ||
-    normalized === "passthrough"
-  ) {
-    return "native";
-  }
 
   throw new Error(
-    "operation must be one of: create, update, upsert, delete, inventory_adjust, publish, unpublish, variants_bulk_update, native",
+    "operation must be one of: create, update, upsert, delete, inventory_adjust, publish, unpublish, variants_bulk_update",
   );
 }
 
@@ -375,90 +352,12 @@ function normalizeResource(value: unknown): "product" {
   throw new Error("Only resource=product is supported");
 }
 
-function normalizeWriteMode(value: unknown): "native" | "" {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  if (
-    normalized === "native" ||
-    normalized === "raw" ||
-    normalized === "proxy" ||
-    normalized === "passthrough" ||
-    normalized === "pass_through"
-  ) {
-    return "native";
-  }
-  return "";
-}
-
 function normalizeObject(value: unknown): Record<string, unknown> {
   if (value === null || value === undefined) return {};
   if (typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
   }
   throw new Error("filters must be a JSON object");
-}
-
-function asObject(value: unknown): Record<string, unknown> | null {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return null;
-}
-
-function normalizeHeaderMap(value: unknown): Record<string, string> {
-  const source = asObject(value);
-  if (!source) return {};
-  const restricted = new Set([
-    "authorization",
-    "x-shopify-access-token",
-    "x-auth-token",
-    "provider-config-key",
-    "connection-id",
-  ]);
-  const out: Record<string, string> = {};
-  for (const [rawKey, rawValue] of Object.entries(source)) {
-    const key = String(rawKey || "").trim();
-    if (!key) continue;
-    if (restricted.has(key.toLowerCase())) continue;
-    if (rawValue === null || rawValue === undefined) continue;
-    out[key] = String(rawValue);
-  }
-  return out;
-}
-
-function parseNativeWriteRequest(
-  input: DirectWriteRequest,
-  payload: Record<string, unknown>,
-): ParsedNativeRequest | null {
-  const directNative = asObject(input.native_request);
-  const payloadNative = asObject(payload.native_request);
-  const writeMode = normalizeWriteMode(
-    pickString(input.write_mode, input.mode, payload.write_mode, payload.mode),
-  );
-  const op = normalizeWriteMode(input.operation);
-  const useNative =
-    Boolean(directNative || payloadNative) || writeMode === "native" || op === "native";
-  if (!useNative) return null;
-
-  const source = directNative || payloadNative || payload;
-  const method = String(source.method || source.http_method || "POST")
-    .trim()
-    .toUpperCase();
-  const path = pickString(source.path, source.endpoint);
-
-  if (!path) throw new Error("native_request.path is required");
-  if (/^https?:\/\//i.test(path)) {
-    throw new Error("native_request.path must be a relative API path (not full URL)");
-  }
-
-  return {
-    method,
-    path: path.startsWith("/") ? path : `/${path}`,
-    query: normalizeObject(source.query),
-    headers: normalizeHeaderMap(source.headers),
-    body: source.body ?? source.payload ?? source.data ?? null,
-  };
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -967,9 +866,6 @@ async function performProductWrite(
   context: ConnectionContext,
   request: ParsedRequest,
 ): Promise<Record<string, unknown>> {
-  if (request.nativeRequest) {
-    return performNativeWrite(context, request.nativeRequest);
-  }
   if (context.platform === "shopify") {
     return writeShopifyProduct(context, request.operation, request.payload);
   }
@@ -980,99 +876,6 @@ async function performProductWrite(
     return writeWooCommerceProduct(context, request.operation, request.payload);
   }
   return writeMagentoProduct(context, request.operation, request.payload);
-}
-
-function buildPathWithQuery(path: string, query: Record<string, unknown>): string {
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const qs = buildQueryString(query);
-  if (!qs) return normalizedPath;
-  if (normalizedPath.includes("?")) {
-    return `${normalizedPath}&${qs.slice(1)}`;
-  }
-  return `${normalizedPath}${qs}`;
-}
-
-async function performNativeWrite(
-  context: ConnectionContext,
-  nativeRequest: ParsedNativeRequest,
-): Promise<Record<string, unknown>> {
-  const method = nativeRequest.method;
-  const pathWithQuery = buildPathWithQuery(nativeRequest.path, nativeRequest.query);
-
-  if (context.platform === "shopify") {
-    const response = await callShopifyRestApi(
-      context,
-      method,
-      normalizeShopifyNativePath(pathWithQuery, nativeRequest.body),
-      nativeRequest.body,
-      nativeRequest.headers,
-    );
-    return {
-      provider: "shopify",
-      mode: "native",
-      method,
-      path: pathWithQuery,
-      response,
-    };
-  }
-
-  if (context.platform === "bigcommerce") {
-    const storeHash = context.storeHash || "";
-    if (!storeHash) throw new Error("Missing BigCommerce store_hash");
-    const accessToken = await getNangoAccessToken(context.nangoConnectionId, "bigcommerce");
-    const response = await callBigCommerceApi(
-      storeHash,
-      accessToken,
-      method,
-      pathWithQuery,
-      nativeRequest.body,
-      nativeRequest.headers,
-    );
-    return {
-      provider: "bigcommerce",
-      mode: "native",
-      method,
-      path: pathWithQuery,
-      response,
-    };
-  }
-
-  if (context.platform === "woocommerce") {
-    const response = await callWooCommerceProxy(
-      context.nangoConnectionId,
-      method,
-      pathWithQuery,
-      nativeRequest.body,
-      nativeRequest.headers,
-    );
-    return {
-      provider: "woocommerce",
-      mode: "native",
-      method,
-      path: pathWithQuery,
-      response,
-    };
-  }
-
-  const baseUrl = normalizeBaseUrl(context.magentoBaseUrl || "");
-  if (!baseUrl) throw new Error("Missing Magento base URL");
-  const accessToken = await getNangoAccessToken(context.nangoConnectionId, "adobe-commerce");
-  const magentoPath = normalizeMagentoNativePath(pathWithQuery);
-  const response = await callMagentoApi(
-    baseUrl,
-    accessToken,
-    method,
-    magentoPath,
-    nativeRequest.body,
-    nativeRequest.headers,
-  );
-  return {
-    provider: "magento",
-    mode: "native",
-    method,
-    path: magentoPath,
-    response,
-  };
 }
 
 async function performDirectRead(
@@ -1125,20 +928,6 @@ function normalizeShopDomain(domain: string): string {
   return trimmed.replace(/^https?:\/\//, "").replace(/\/+$/, "");
 }
 
-function normalizeShopifyNativePath(path: string, body: unknown): string {
-  const normalized = path.startsWith("/") ? path : `/${path}`;
-  if (normalized.startsWith("/admin/")) return normalized;
-  const bodyObj = asObject(body);
-  const apiVersion = pickString(bodyObj?.shopify_api_version, bodyObj?.api_version) || "2025-01";
-  return `/admin/api/${apiVersion}${normalized}`;
-}
-
-function normalizeMagentoNativePath(path: string): string {
-  const normalized = path.startsWith("/") ? path : `/${path}`;
-  if (normalized.startsWith("/rest/")) return normalized.slice("/rest".length) || "/";
-  return normalized;
-}
-
 function toShopifyOrderGid(value: unknown): string {
   const orderId = pickString(value);
   if (!orderId) return "";
@@ -1147,9 +936,38 @@ function toShopifyOrderGid(value: unknown): string {
   return "";
 }
 
-function buildShopifySearch(filters: Record<string, unknown>, since: string): string {
+function normalizeShopifySinceField(
+  value: unknown,
+  fallback: "updated_at" | "processed_at" | "created_at",
+): "updated_at" | "processed_at" | "created_at" {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "updated_at" || normalized === "processed_at" || normalized === "created_at") {
+    return normalized;
+  }
+  return fallback;
+}
+
+function toShopifyOrderSortKey(
+  sinceField: "updated_at" | "processed_at" | "created_at",
+): "UPDATED_AT" | "PROCESSED_AT" | "CREATED_AT" {
+  if (sinceField === "processed_at") return "PROCESSED_AT";
+  if (sinceField === "created_at") return "CREATED_AT";
+  return "UPDATED_AT";
+}
+
+function buildShopifySearch(
+  filters: Record<string, unknown>,
+  since: string,
+  defaultSinceField: "updated_at" | "processed_at" | "created_at" = "updated_at",
+): string {
   const parts: string[] = [];
-  if (since) parts.push(`updated_at:>=${since}`);
+  const sinceField = normalizeShopifySinceField(
+    pickString(filters.since_field, filters.sinceField, filters.time_field, filters.timeField),
+    defaultSinceField,
+  );
+  if (since) parts.push(`${sinceField}:>=${since}`);
   const search = pickString(filters.search, filters.query, filters.q);
   if (search) parts.push(search);
   return parts.join(" AND ");
@@ -1162,6 +980,7 @@ function mapShopifyOrderItems(orders: Record<string, unknown>[]): Record<string,
       order_name: order.name ?? null,
       order_created_at: order.createdAt ?? null,
       order_updated_at: order.updatedAt ?? null,
+      order_processed_at: order.processedAt ?? null,
       line_item_id: item.id ?? null,
       sku: item.sku ?? null,
       title: item.title ?? null,
@@ -1219,37 +1038,22 @@ async function callShopifyGraphQL(
   return parsed;
 }
 
-async function callShopifyRestApi(
-  context: ConnectionContext,
-  method: string,
-  path: string,
-  body?: unknown,
-  extraHeaders: Record<string, string> = {},
-): Promise<Record<string, unknown>> {
-  const token = pickString(context.shopAccessToken);
-  const domain = normalizeShopDomain(pickString(context.shopDomain));
-  if (!token || !domain) {
-    throw new Error("Missing Shopify credentials in connection context");
-  }
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const response = await fetch(`https://${domain}${normalizedPath}`, {
-    method,
-    headers: {
-      "X-Shopify-Access-Token": token,
-      Accept: "application/json",
-      ...(body !== undefined && body !== null ? { "Content-Type": "application/json" } : {}),
-      ...extraHeaders,
-    },
-    ...(body !== undefined && body !== null ? { body: JSON.stringify(body) } : {}),
-  });
-  return parseApiResponse("Shopify", response);
-}
-
 async function readShopifyEntity(
   context: ConnectionContext,
   request: ParsedReadRequest,
 ): Promise<Record<string, unknown>> {
-  const search = buildShopifySearch(request.filters, request.since);
+  const orderSinceDefault =
+    request.entity === "orders" || request.entity === "order_items" ? "processed_at" : "updated_at";
+  const orderSinceField = normalizeShopifySinceField(
+    pickString(
+      request.filters.since_field,
+      request.filters.sinceField,
+      request.filters.time_field,
+      request.filters.timeField,
+    ),
+    orderSinceDefault,
+  );
+  const search = buildShopifySearch(request.filters, request.since, orderSinceField);
   const queryValue = search || null;
 
   if (request.entity === "shop_info") {
@@ -1331,6 +1135,7 @@ async function readShopifyEntity(
               name
               createdAt
               updatedAt
+              processedAt
               displayFinancialStatus
               displayFulfillmentStatus
               currentTotalPriceSet { shopMoney { amount currencyCode } }
@@ -1368,14 +1173,15 @@ async function readShopifyEntity(
     const result = await callShopifyGraphQL(
       context,
       `
-        query Orders($first: Int!, $query: String) {
-          orders(first: $first, sortKey: UPDATED_AT, reverse: true, query: $query) {
+        query Orders($first: Int!, $query: String, $sortKey: OrderSortKeys!) {
+          orders(first: $first, sortKey: $sortKey, reverse: true, query: $query) {
             nodes {
               id
               legacyResourceId
               name
               createdAt
               updatedAt
+              processedAt
               displayFinancialStatus
               displayFulfillmentStatus
               currentTotalPriceSet { shopMoney { amount currencyCode } }
@@ -1394,7 +1200,11 @@ async function readShopifyEntity(
           }
         }
       `,
-      { first: request.limit, query: queryValue },
+      {
+        first: request.limit,
+        query: queryValue,
+        sortKey: toShopifyOrderSortKey(orderSinceField),
+      },
     );
     const data = (result.data || {}) as Record<string, unknown>;
     const ordersNode = (data.orders || {}) as Record<string, unknown>;
@@ -1513,50 +1323,53 @@ function requireShopifyField(obj: Record<string, unknown>, key: string, message:
   }
 }
 
-function extractShopifyNumericProductId(value: unknown): string {
-  const raw = pickString(value);
-  if (!raw) return "";
-  if (/^\d+$/.test(raw)) return raw;
-  const match = raw.match(/gid:\/\/shopify\/Product\/(\d+)/i);
-  if (match?.[1]) return match[1];
-  return "";
-}
-
-function buildShopifyRestProductBody(
-  payload: Record<string, unknown>,
-  productNumericId = "",
-): Record<string, unknown> {
-  const nestedProduct = asObject(payload.product);
-  const source = nestedProduct ? { ...nestedProduct } : { ...payload };
-  delete source.shopify_api_version;
-  delete source.api_version;
-  delete source.id;
-  delete source.product_id;
-  delete source.operation;
-  delete source.mode;
-  delete source.write_mode;
-  delete source.native_request;
-
-  if (source.body_html === undefined && source.bodyHtml !== undefined) {
-    source.body_html = source.bodyHtml;
-  }
-  if (source.body_html === undefined && source.description !== undefined) {
-    source.body_html = source.description;
-  }
-  delete source.bodyHtml;
-
-  const productBody: Record<string, unknown> = { ...source };
-  if (productNumericId) {
-    productBody.id = Number.parseInt(productNumericId, 10);
-  }
-  return { product: productBody };
-}
-
-function buildShopifyGraphQlAdvancedMutation(
+function buildShopifyProductMutation(
   operation: NormalizedOperation,
   payload: Record<string, unknown>,
 ): { query: string; variables: Record<string, unknown> } {
   const op = String(operation || "").toLowerCase();
+  if (op === "create") {
+    const input = (
+      payload.input && typeof payload.input === "object" ? payload.input : payload
+    ) as Record<string, unknown>;
+    requireShopifyField(
+      input,
+      "title",
+      "Shopify create requires payload.title or payload.input.title",
+    );
+    return {
+      query:
+        "mutation ProductCreate($input: ProductInput!, $media: [CreateMediaInput!]) { productCreate(input: $input, media: $media) { product { id title handle status } userErrors { field message } } }",
+      variables: {
+        input,
+        ...(payload.media ? { media: payload.media } : {}),
+      },
+    };
+  }
+
+  if (op === "update") {
+    const input = (
+      payload.input && typeof payload.input === "object" ? payload.input : payload
+    ) as Record<string, unknown>;
+    requireShopifyField(input, "id", "Shopify update requires payload.id or payload.input.id");
+    return {
+      query:
+        "mutation ProductUpdate($input: ProductInput!) { productUpdate(input: $input) { product { id title handle status } userErrors { field message } } }",
+      variables: { input },
+    };
+  }
+
+  if (op === "delete") {
+    const input = (
+      payload.input && typeof payload.input === "object" ? payload.input : { id: payload.id }
+    ) as Record<string, unknown>;
+    requireShopifyField(input, "id", "Shopify delete requires payload.id or payload.input.id");
+    return {
+      query:
+        "mutation ProductDelete($input: ProductDeleteInput!) { productDelete(input: $input) { deletedProductId userErrors { field message } } }",
+      variables: { input },
+    };
+  }
 
   if (op === "publish") {
     requireShopifyField(payload, "publicationId", "Shopify publish requires payload.publicationId");
@@ -1631,7 +1444,7 @@ function buildShopifyGraphQlAdvancedMutation(
   }
 
   throw new Error(
-    `Unsupported Shopify operation '${operation}'. Supported: create, update, upsert, delete, publish, unpublish, variants_bulk_update, inventory_adjust, native`,
+    `Unsupported Shopify operation '${operation}'. Supported: create, update, upsert, delete, publish, unpublish, variants_bulk_update, inventory_adjust`,
   );
 }
 
@@ -1647,75 +1460,8 @@ async function writeShopifyProduct(
         : "create"
       : operation;
 
+  const mutation = buildShopifyProductMutation(finalOperation, payload);
   const apiVersion = pickString(payload.shopify_api_version, payload.api_version) || "2025-01";
-  const restBase = `/admin/api/${apiVersion}`;
-
-  if (finalOperation === "create") {
-    const body = buildShopifyRestProductBody(payload);
-    const product = asObject(body.product) || {};
-    requireShopifyField(
-      product,
-      "title",
-      "Shopify create requires payload.title (or payload.product.title)",
-    );
-    const response = await callShopifyRestApi(context, "POST", `${restBase}/products.json`, body);
-    return {
-      provider: "shopify",
-      operation: finalOperation,
-      api: "rest",
-      response,
-    };
-  }
-
-  if (finalOperation === "update") {
-    const productNumericId = extractShopifyNumericProductId(
-      pickString(payload.id, payload.product_id, (asObject(payload.product) || {}).id),
-    );
-    if (!productNumericId) {
-      throw new Error(
-        "Shopify update requires payload.id or payload.product_id (numeric id or gid)",
-      );
-    }
-    const body = buildShopifyRestProductBody(payload, productNumericId);
-    const response = await callShopifyRestApi(
-      context,
-      "PUT",
-      `${restBase}/products/${productNumericId}.json`,
-      body,
-    );
-    return {
-      provider: "shopify",
-      operation: finalOperation,
-      product_id: productNumericId,
-      api: "rest",
-      response,
-    };
-  }
-
-  if (finalOperation === "delete") {
-    const productNumericId = extractShopifyNumericProductId(
-      pickString(payload.id, payload.product_id, (asObject(payload.product) || {}).id),
-    );
-    if (!productNumericId) {
-      throw new Error(
-        "Shopify delete requires payload.id or payload.product_id (numeric id or gid)",
-      );
-    }
-    const response = await callShopifyRestApi(
-      context,
-      "DELETE",
-      `${restBase}/products/${productNumericId}.json`,
-    );
-    return {
-      provider: "shopify",
-      operation: finalOperation,
-      product_id: productNumericId,
-      api: "rest",
-      response,
-    };
-  }
-
-  const mutation = buildShopifyGraphQlAdvancedMutation(finalOperation, payload);
   const response = await callShopifyGraphQL(
     context,
     mutation.query,
@@ -1726,7 +1472,6 @@ async function writeShopifyProduct(
   return {
     provider: "shopify",
     operation: finalOperation,
-    api: "graphql",
     response,
   };
 }
@@ -2672,7 +2417,6 @@ async function callBigCommerceApi(
   method: string,
   path: string,
   body?: unknown,
-  extraHeaders: Record<string, string> = {},
 ): Promise<Record<string, unknown>> {
   const url = `https://api.bigcommerce.com/stores/${storeHash}${path}`;
   const response = await fetch(url, {
@@ -2681,7 +2425,6 @@ async function callBigCommerceApi(
       "X-Auth-Token": accessToken,
       Accept: "application/json",
       ...(body ? { "Content-Type": "application/json" } : {}),
-      ...extraHeaders,
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
@@ -2806,7 +2549,6 @@ async function callWooCommerceProxy(
   method: string,
   path: string,
   body?: unknown,
-  extraHeaders: Record<string, string> = {},
 ): Promise<Record<string, unknown>> {
   const response = await fetch(`https://api.nango.dev/proxy${path}`, {
     method,
@@ -2816,7 +2558,6 @@ async function callWooCommerceProxy(
       "Connection-Id": connectionId,
       Accept: "application/json",
       ...(body ? { "Content-Type": "application/json" } : {}),
-      ...extraHeaders,
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
@@ -2956,7 +2697,6 @@ async function callMagentoApi(
   method: string,
   path: string,
   body?: unknown,
-  extraHeaders: Record<string, string> = {},
 ): Promise<Record<string, unknown>> {
   const url = `${baseUrl}/rest${path}`;
   const response = await fetch(url, {
@@ -2965,7 +2705,6 @@ async function callMagentoApi(
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
       ...(body ? { "Content-Type": "application/json" } : {}),
-      ...extraHeaders,
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });

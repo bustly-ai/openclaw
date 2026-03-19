@@ -14,10 +14,46 @@ Platforms:
 - WooCommerce
 - Magento
 
-## Entry
+## Standard command surface
+
+Preferred command contract:
 
 ```bash
-node skills/commerce_core_ops/scripts/run.js help
+bustly ops commerce <command>
+```
+
+Repo-local fallback:
+
+```bash
+node scripts/bustly-ops.js ops commerce <command>
+```
+
+Direct implementation fallback:
+
+```bash
+node skills/ops/commerce_core_ops/scripts/run.js <command>
+```
+
+## Discovery commands
+
+```bash
+bustly ops commerce help
+bustly ops commerce providers
+bustly ops commerce connections
+bustly ops commerce auth
+```
+
+## Examples
+
+```bash
+# Read Shopify orders
+bustly ops commerce read --platform shopify --entity orders --limit 50
+
+# Read WooCommerce orders
+bustly ops commerce read:entity --platform woocommerce --entity orders --limit 50 --since 2026-01-01
+
+# Update a Shopify product
+bustly ops commerce write:product --platform shopify --op update --payload '{"id":"gid://shopify/Product/123","title":"New Title"}'
 ```
 
 ## Environment

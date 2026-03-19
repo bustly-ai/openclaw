@@ -6,6 +6,7 @@ import BustlyLoginPage from "./components/Onboard/BustlyLoginPage";
 import ChatPage from "./components/ChatPage/index";
 import ClientAppShell from "./components/ClientAppShell";
 import SkillPage from "./components/SkillPage";
+import StudioPage from "./components/StudioPage";
 import { AppStateProvider, useAppState } from "./providers/AppStateProvider";
 import GlobalLoading from "./components/ui/GlobalLoading";
 
@@ -138,6 +139,14 @@ function AppShell() {
           element={renderProtectedRoute(
             <ClientAppShell>
               <SkillPage />
+            </ClientAppShell>
+          )}
+        />
+        <Route
+          path="/studio"
+          element={renderProtectedRoute(
+            <ClientAppShell>
+              <StudioPage />
             </ClientAppShell>
           )}
         />
