@@ -368,7 +368,7 @@ function TaskItem(props: {
           !props.collapsed ? (
             <div className="flex h-5 w-5 items-center justify-center">
               {props.task.running && !isHovered && !menuOpen ? (
-                <div className="text-[#5A5CFF]">
+                <div className="text-[#666F8D]">
                   <SpinnerIcon className="h-[13px] w-[13px] animate-spin" />
                 </div>
               ) : (
