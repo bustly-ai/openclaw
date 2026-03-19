@@ -190,14 +190,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("<final>...</final>");
   });
 
-  it("includes a CLI quick reference section", () => {
+  it("does not include a CLI quick reference section", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).toContain("## OpenClaw CLI Quick Reference");
-    expect(prompt).toContain("openclaw gateway restart");
-    expect(prompt).toContain("Do not invent commands");
+    expect(prompt).not.toContain("## OpenClaw CLI Quick Reference");
+    expect(prompt).not.toContain("openclaw gateway restart");
   });
 
   it("marks system message blocks as internal and not user-visible", () => {
@@ -363,15 +362,14 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
   });
 
-  it("adds ClaudeBot self-update guidance when gateway tool is available", () => {
+  it("does not include self-update guidance when gateway tool is available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["gateway", "exec"],
     });
 
-    expect(prompt).toContain("## OpenClaw Self-Update");
-    expect(prompt).toContain("config.apply");
-    expect(prompt).toContain("update.run");
+    expect(prompt).not.toContain("## OpenClaw Self-Update");
+    expect(prompt).not.toContain("Get Updates (self-update)");
   });
 
   it("includes skills guidance when skills prompt is present", () => {

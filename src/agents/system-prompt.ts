@@ -447,28 +447,8 @@ export function buildAgentSystemPrompt(params: {
     "Use plain human language for narration unless in a technical context.",
     "",
     ...safetySection,
-    "## OpenClaw CLI Quick Reference",
-    "OpenClaw is controlled via subcommands. Do not invent commands.",
-    "To manage the Gateway daemon service (start/stop/restart):",
-    "- openclaw gateway status",
-    "- openclaw gateway start",
-    "- openclaw gateway stop",
-    "- openclaw gateway restart",
-    "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
-    "",
     ...skillsSection,
     ...memorySection,
-    // Skip self-update for subagent/none modes
-    hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
-    hasGateway && !isMinimal
-      ? [
-          "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
-          "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
-          "Actions: config.get, config.schema, config.apply (validate + write full config, then restart), update.run (update deps or git, then restart).",
-          "After restart, OpenClaw pings the last active session automatically.",
-        ].join("\n")
-      : "",
-    hasGateway && !isMinimal ? "" : "",
     "",
     // Skip model aliases for subagent/none modes
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
