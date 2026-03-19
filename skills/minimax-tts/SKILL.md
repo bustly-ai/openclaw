@@ -1,17 +1,23 @@
 ---
 name: minimax-tts
-description: Convert text to speech audio using MiniMax T2A API. Use when user asks to generate voice, speech, audio from text, read aloud, pronounce something, create voiceover, or wants text-to-speech synthesis. Supports multiple voices and emotions.
-homepage: https://platform.minimaxi.com/docs/api-reference/speech-t2a-http
+description: Convert text to speech audio via Bustly Model Gateway (audio.pro route, upstream MiniMax T2A). Use when user asks to generate voice, speech, audio from text, read aloud, pronounce something, create voiceover, or wants text-to-speech synthesis.
+homepage: https://test-gw.bustly.ai
 user-invocable: true
 disable-model-invocation: false
-metadata: {"openclaw":{"emoji":"🔊","requires":{"bins":["python3"],"env":["MINIMAX_API_KEY"]},"primaryEnv":"MINIMAX_API_KEY"}}
+metadata: {"openclaw":{"emoji":"🔊","requires":{"bins":["python3"]}}}
 ---
 
-# MiniMax Text-to-Speech
+# MiniMax Text-to-Speech (via Bustly Gateway)
 
-Generate high-quality speech audio from text using MiniMax T2A v2 API.
+Generate high-quality speech audio from text through Bustly Model Gateway.
 
-## When to Use This Skill
+Gateway route
+
+- Endpoint: `POST /api/v1/audio/speech`
+- Model route key: `audio.pro` (default)
+- Upstream provider: MiniMax T2A (handled by gateway)
+
+## When To Use This Skill
 
 **ALWAYS use this skill when the user:**
 - Asks to convert text to speech/audio/voice
@@ -45,7 +51,10 @@ python3 {baseDir}/scripts/tts.py "<text>" [options]
 | `--emotion` | Emotion: happy, sad, angry, fearful, disgusted, surprised, calm, whisper | (none) |
 | `--speed` | Speech speed (0.5-2.0) | `1.0` |
 | `--output` | Output file path | `./tts_output.mp3` |
-| `--model` | TTS model version | `speech-2.8-hd` |
+| `--model` | Gateway route key | `audio.pro` |
+| `--gateway-base-url` | Gateway base URL | `https://test-gw.bustly.ai` |
+| `--jwt` | Optional Bustly JWT override | from `bustlyOauth.json` |
+| `--workspace-id` | Optional workspace override | from `bustlyOauth.json` |
 
 ### Available Voices
 
@@ -80,9 +89,15 @@ python3 {baseDir}/scripts/tts.py "Breaking news..." --voice presenter_male --out
 python3 {baseDir}/scripts/tts.py "你好，欢迎使用语音合成服务。"
 ```
 
-## Configuration
+## Auth + Configuration
 
-This skill requires the `MINIMAX_API_KEY` environment variable to be set.
+- Reads `~/.bustly/bustlyOauth.json` automatically:
+  - `user.userAccessToken` (JWT)
+  - `user.workspaceId`
+- Optional gateway override:
+  - `BUSTLY_MODEL_GATEWAY_BASE_URL` (default: `https://test-gw.bustly.ai`)
+- Optional model route override:
+  - `BUSTLY_MODEL_GATEWAY_AUDIO_ROUTE` (default: `audio.pro`)
 
 ## Output
 
