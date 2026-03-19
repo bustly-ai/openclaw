@@ -136,6 +136,31 @@ function buildChannelSessionKey(sessionKey: string): string {
   return `${resolveChannelBaseSessionKey(sessionKey)}:channel:${globalThis.crypto.randomUUID()}`;
 }
 
+function sortSidebarSessions(
+  sessions: GatewaySessionRow[],
+  options: { mainSessionKey: string; pendingSessionKey?: string | null },
+): GatewaySessionRow[] {
+  const mainSessionKey = options.mainSessionKey;
+  const pendingSessionKey = options?.pendingSessionKey?.trim() || null;
+  return [...sessions].sort((left, right) => {
+    if (left.key === mainSessionKey && right.key !== mainSessionKey) {
+      return -1;
+    }
+    if (right.key === mainSessionKey && left.key !== mainSessionKey) {
+      return 1;
+    }
+    if (pendingSessionKey) {
+      if (left.key === pendingSessionKey && right.key !== pendingSessionKey) {
+        return -1;
+      }
+      if (right.key === pendingSessionKey && left.key !== pendingSessionKey) {
+        return 1;
+      }
+    }
+    return left.key.localeCompare(right.key);
+  });
+}
+
 type IconProps = {
   className?: string;
 };
@@ -1275,15 +1300,16 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                 }
                 requestSettled = true;
                 setRecentTasks(
-                  [...result.sessions]
-                    .filter((session) => isMainChannelSessionKey(session.key, activeAgentId))
-                    .map((session) => ({
-                      id: session.key,
-                      name: resolveSessionDisplayName(session, customSessionLabels),
-                      icon: session.icon,
-                      isMain: session.key === activeMainSessionKey,
-                      running: runningTasks[session.key] === true,
-                    })),
+                  sortSidebarSessions(
+                    result.sessions.filter((session) => isMainChannelSessionKey(session.key, activeAgentId)),
+                    { mainSessionKey: activeMainSessionKey, pendingSessionKey },
+                  ).map((session) => ({
+                    id: session.key,
+                    name: resolveSessionDisplayName(session, customSessionLabels),
+                    icon: session.icon,
+                    isMain: session.key === activeMainSessionKey,
+                    running: runningTasks[session.key] === true,
+                  })),
                 );
                 setHasLoadedTasks(true);
                 setTasksLoading(false);
@@ -1340,6 +1366,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     initialized,
     location.pathname,
     location.search,
+    pendingSessionKey,
     runningTasks,
   ]);
 
@@ -1543,6 +1570,19 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       writeCustomSessionLabels(nextLabels);
       setPendingSessionKey(nextSessionKey);
       setHasLoadedTasks(true);
+      setRecentTasks((prev) => {
+        const nextTask: SidebarTask = {
+          id: nextSessionKey,
+          name,
+          icon: selectedIcon,
+          isMain: false,
+          running: false,
+        };
+        const remainingTasks = prev.filter((entry) => entry.id !== nextSessionKey);
+        const mainTask = remainingTasks.find((entry) => entry.id === activeMainSessionKey) ?? null;
+        const otherTasks = remainingTasks.filter((entry) => entry.id !== activeMainSessionKey);
+        return mainTask ? [mainTask, nextTask, ...otherTasks] : [nextTask, ...otherTasks];
+      });
       setDraftScenarioName("");
       setSelectedIcon("SquaresFour");
       setCreateModalOpen(false);
@@ -1719,7 +1759,16 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       >
         {!props.collapsed ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex-1 space-y-0.5 overflow-y-auto px-0 py-4">
+            <div className="flex-1 space-y-0.5 overflow-y-auto px-0 py-3">
+              <SidebarItem
+                icon={Plus}
+                label="New scenario"
+                active={false}
+                onClick={() => {
+                  openCreateModal();
+                }}
+                collapsed={false}
+              />
               {tasksLoading ? (
                 <>
                   <TaskItemSkeleton />
@@ -1749,16 +1798,6 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                   />
                 ))
               )}
-
-              <SidebarItem
-                icon={Plus}
-                label="New scenario"
-                active={false}
-                onClick={() => {
-                  openCreateModal();
-                }}
-                collapsed={false}
-              />
             </div>
 
             <div className="space-y-1 border-t border-[#E5E7EB] bg-gray-50/30 p-3">
@@ -1777,6 +1816,20 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
         ) : (
           <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-4">
             <div className="flex w-full flex-1 flex-col items-center gap-3">
+              <PortalTooltip content="New scenario" side="right">
+                <button
+                  type="button"
+                  onClick={() => {
+                    openCreateModal();
+                  }}
+                  className="flex h-10 w-10 items-center justify-center rounded-xl text-text-sub transition-all hover:bg-[#1A162F]/5 hover:text-text-main"
+                  aria-label="New scenario"
+                >
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent bg-gray-50 transition-colors hover:border-[#1A162F]/10 hover:bg-white">
+                    <Plus size={18} weight="bold" />
+                  </div>
+                </button>
+              </PortalTooltip>
               {recentTasks.length > 0 ? (
                 <CollapsedScenariosButton
                   tasks={recentTasks}
@@ -1794,20 +1847,6 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                   }}
                 />
               ) : null}
-              <PortalTooltip content="New scenario" side="right">
-                <button
-                  type="button"
-                  onClick={() => {
-                    openCreateModal();
-                  }}
-                  className="flex h-10 w-10 items-center justify-center rounded-xl text-text-sub transition-all hover:bg-[#1A162F]/5 hover:text-text-main"
-                  aria-label="New scenario"
-                >
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent bg-gray-50 transition-colors hover:border-[#1A162F]/10 hover:bg-white">
-                    <Plus size={18} weight="bold" />
-                  </div>
-                </button>
-              </PortalTooltip>
             </div>
 
             <div className="w-full space-y-2 border-t border-[#E5E7EB] px-2 pt-4">
