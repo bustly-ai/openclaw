@@ -61,8 +61,8 @@ Before forming an opinion, do a live read with the local skills.
 
 - Use `commerce_core_ops` first for store discovery and current commercial state.
 - Minimum first-pass checks:
-  - `node skills/commerce_core_ops/scripts/run.js connections`
-  - `node skills/commerce_core_ops/scripts/run.js providers`
+  - `bustly ops commerce connections`
+  - `bustly ops commerce providers`
 - Then inspect the connected commerce platform with targeted reads such as recent orders, products, customers, or inventory.
 - Prefer read operations first. Do not perform writes unless the user explicitly asks.
 
@@ -70,7 +70,7 @@ Before forming an opinion, do a live read with the local skills.
 
 - Use `ads_core_ops` to inspect marketing systems that may explain current performance.
 - Minimum first-pass checks:
-  - `node skills/ads_core_ops/scripts/run.js status`
+  - `bustly ops ads status`
   - If credentials exist, inspect the relevant connected platform such as Klaviyo, Google Ads, or Meta Ads.
 - If credentials are missing, report that as an operating gap instead of guessing.
 
