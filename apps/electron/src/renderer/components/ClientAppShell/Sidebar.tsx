@@ -1640,18 +1640,6 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       >
         {!props.collapsed ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="border-b border-[#E5E7EB] px-0 py-3">
-              <SidebarItem
-                icon={Plus}
-                label="New scenario"
-                active={false}
-                onClick={() => {
-                  openCreateModal();
-                }}
-                collapsed={false}
-              />
-            </div>
-
             <div className="flex-1 space-y-0.5 overflow-y-auto px-0 py-4">
               {tasksLoading ? (
                 <>
@@ -1682,6 +1670,16 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                   />
                 ))
               )}
+
+              <SidebarItem
+                icon={Plus}
+                label="New scenario"
+                active={false}
+                onClick={() => {
+                  openCreateModal();
+                }}
+                collapsed={false}
+              />
             </div>
 
             <div className="space-y-1 border-t border-[#E5E7EB] bg-gray-50/30 p-3">
