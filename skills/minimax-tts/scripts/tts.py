@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -111,7 +112,7 @@ def build_payload(args: argparse.Namespace) -> dict:
     }
 
 
-def call_gateway(gateway_base_url: str, jwt: str, workspace_id: str, payload: dict) -> dict:
+def call_gateway(gateway_base_url: str, jwt: str, workspace_id: str, payload: dict) -> tuple[dict | None, bytes]:
     target = audio_speech_url(gateway_base_url)
     req = Request(
         target,
@@ -127,8 +128,18 @@ def call_gateway(gateway_base_url: str, jwt: str, workspace_id: str, payload: di
     )
     try:
         with urlopen(req, timeout=120) as resp:
-            text = resp.read().decode("utf-8", errors="replace")
-            return json.loads(text)
+            raw_body = resp.read()
+            content_type = (resp.headers.get("content-type") or "").lower()
+            if "application/json" in content_type:
+                try:
+                    text = raw_body.decode("utf-8", errors="strict")
+                    parsed = json.loads(text)
+                    if isinstance(parsed, dict):
+                        return parsed, raw_body
+                except Exception:
+                    # Some upstreams may return audio bytes with JSON content-type.
+                    pass
+            return None, raw_body
     except HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
         message = raw
@@ -193,19 +204,30 @@ def main():
     try:
         jwt, workspace_id = resolve_auth(args)
         payload = build_payload(args)
-        data = call_gateway(args.gateway_base_url, jwt, workspace_id, payload)
+        data, raw_body = call_gateway(args.gateway_base_url, jwt, workspace_id, payload)
 
-        status_code = data.get("base_resp", {}).get("status_code", -1)
-        if status_code != 0:
-            raise RuntimeError(data.get("base_resp", {}).get("status_msg", "Unknown error"))
+        extra: dict[str, Any] = {}
+        if isinstance(data, dict):
+            status_code = data.get("base_resp", {}).get("status_code", -1)
+            if status_code != 0:
+                raise RuntimeError(data.get("base_resp", {}).get("status_msg", "Unknown error"))
 
-        raw_audio = data.get("data", {}).get("audio")
-        audio_bytes = decode_audio_payload(raw_audio)
+            raw_audio = data.get("data", {}).get("audio")
+            if isinstance(raw_audio, str) and raw_audio.strip():
+                audio_bytes = decode_audio_payload(raw_audio)
+            elif raw_body:
+                audio_bytes = raw_body
+            else:
+                raise RuntimeError("TTS response did not include audio payload.")
+            extra = data.get("extra_info", {}) if isinstance(data.get("extra_info"), dict) else {}
+        else:
+            if not raw_body:
+                raise RuntimeError("TTS response did not include audio payload.")
+            audio_bytes = raw_body
         output_path = Path(args.output).expanduser().resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(audio_bytes)
 
-        extra = data.get("extra_info", {})
         print(f"SUCCESS: Audio saved to {output_path}")
         print(f"Duration: {extra.get('audio_length', 0)} ms")
         print(f"Size: {extra.get('audio_size', len(audio_bytes))} bytes")
