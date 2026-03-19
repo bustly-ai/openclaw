@@ -385,6 +385,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.",
     );
+    expect(prompt).toContain(
+      "- Treat <location> as the final resolved path for that skill. Use it as authoritative.",
+    );
+    expect(prompt).toContain(
+      "- Do not re-discover, rewrite, or guess a skill path from workspace folders, ~/.bustly/skills, ~/.agents/skills, or the skill name itself.",
+    );
   });
 
   it("appends available skills when provided", () => {

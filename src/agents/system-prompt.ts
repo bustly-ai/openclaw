@@ -26,6 +26,8 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
     "## Skills (mandatory)",
     "Before replying: scan <available_skills> <description> entries.",
     `- If exactly one skill clearly applies: read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it.`,
+    "- Treat <location> as the final resolved path for that skill. Use it as authoritative.",
+    "- Do not re-discover, rewrite, or guess a skill path from workspace folders, ~/.bustly/skills, ~/.agents/skills, or the skill name itself.",
     "- If multiple could apply: choose the most specific one, then read/follow it.",
     "- If none clearly apply: do not read any SKILL.md.",
     "Constraints: never read more than one skill up front; only read after selecting.",
