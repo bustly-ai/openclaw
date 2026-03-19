@@ -1,10 +1,14 @@
 # Ads Core Ops
 
-Declaration-only skill contract for Bustly advertising operations.
+Unified advertising skill contract for Klaviyo / Google Ads / Meta Ads.
 
-Use `bustly ops ads <command>`.
+Preferred command: `bustly-ads <command>`
 
 Runtime package: `@bustly/skill-runtime-ads-core-ops`
-Runtime executable: `bustly-skill-ads`
+Runtime executable: `bustly-ads`
 
-OpenClaw should lazy-install the runtime package on first execution when the executable is missing.
+Compatibility commands:
+- `bustly ads <command>`
+- `bustly ops ads <command>`
+
+Desktop runtime should bundle this package and expose shim commands so users do not need local Node/npm.

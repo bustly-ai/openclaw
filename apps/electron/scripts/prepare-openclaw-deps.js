@@ -13,6 +13,7 @@ import { resolve } from "node:path";
 const repoRoot = resolve(import.meta.dirname, "..", "..", "..");
 const targetDir = resolve(repoRoot, "apps/electron/resources/openclaw");
 const stagingDir = mkdtempSync(resolve(tmpdir(), "openclaw-deps-"));
+const bustlySkillsRoot = resolve(repoRoot, "..", "bustly-skills");
 
 rmSync(targetDir, { recursive: true, force: true });
 
@@ -52,6 +53,34 @@ const installResult = spawnSync(
 );
 if (installResult.status !== 0) {
   process.exit(installResult.status ?? 1);
+}
+
+const skipBustlyRuntimeInstall = String(process.env.BUSTLY_RUNTIME_SKIP_INSTALL || "")
+  .trim()
+  .toLowerCase();
+const shouldInstallBustlyRuntime = !["1", "true", "yes", "on"].includes(skipBustlyRuntimeInstall);
+if (shouldInstallBustlyRuntime) {
+  const runtimeSpecs = [];
+  const commerceLocalPath = resolve(bustlySkillsRoot, "skills", "commerce_core_ops");
+  const adsLocalPath = resolve(bustlySkillsRoot, "skills", "ads_core_ops");
+
+  const commerceSpec = process.env.BUSTLY_RUNTIME_COMMERCE_SPEC?.trim() ||
+    (existsSync(commerceLocalPath) ? `file:${commerceLocalPath}` : "@bustly/skill-runtime-commerce-core-ops@^0.1.0");
+  const adsSpec = process.env.BUSTLY_RUNTIME_ADS_SPEC?.trim() ||
+    (existsSync(adsLocalPath) ? `file:${adsLocalPath}` : "@bustly/skill-runtime-ads-core-ops@^0.1.0");
+
+  runtimeSpecs.push(commerceSpec, adsSpec);
+  console.log("[prepare-openclaw-deps] Installing Bustly runtime packages:", runtimeSpecs.join(", "));
+  const addRuntimeResult = spawnSync(
+    "pnpm",
+    ["add", "--prod", "--ignore-scripts", ...runtimeSpecs],
+    { cwd: stagingDir, stdio: "inherit" },
+  );
+  if (addRuntimeResult.status !== 0) {
+    process.exit(addRuntimeResult.status ?? 1);
+  }
+} else {
+  console.log("[prepare-openclaw-deps] Skip Bustly runtime package install (BUSTLY_RUNTIME_SKIP_INSTALL enabled).");
 }
 
 const removeBinDirs = (dir) => {

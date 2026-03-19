@@ -1,10 +1,14 @@
 # commerce_core_ops
 
-Declaration-only skill contract for Bustly commerce operations.
+Unified commerce skill contract for Shopify / BigCommerce / WooCommerce / Magento.
 
-Use `bustly ops commerce <command>`.
+Preferred command: `bustly-commerce <command>`
 
 Runtime package: `@bustly/skill-runtime-commerce-core-ops`
-Runtime executable: `bustly-skill-commerce`
+Runtime executable: `bustly-commerce`
 
-OpenClaw should lazy-install the runtime package on first execution when the executable is missing.
+Compatibility commands:
+- `bustly commerce <command>`
+- `bustly ops commerce <command>`
+
+Desktop runtime should bundle this package and expose shim commands so users do not need local Node/npm.

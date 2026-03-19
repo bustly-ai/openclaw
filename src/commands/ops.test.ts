@@ -124,4 +124,40 @@ describe("opsCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
+
+  it("supports skills declared with bustly namespace (without legacy bustly ops prefix)", async () => {
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "ads_core_ops"),
+      name: "ads_core_ops",
+      description: "Unified advertising operations",
+      metadata:
+        '{"openclaw":{"skillKey":"ads_core_ops","aliases":["ads"],"commandNamespace":"bustly","discoveryCommand":"bustly-ads help","defaultCommand":"bustly-ads platforms","runtimePackage":"@bustly/skill-runtime-ads-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-ads-core-ops@^0.1.0","runtimeExecutable":"bustly-ads"}}',
+    });
+
+    const available = new Set<string>(["bustly-ads"]);
+    hasBinaryMock.mockImplementation((bin: string) => available.has(bin));
+    runCommandWithTimeoutMock.mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ ok: true }),
+      stderr: "",
+      signal: null,
+      killed: false,
+    });
+
+    await opsCommand(
+      {
+        skill: "ads",
+        args: ["platforms"],
+        config: { skills: { install: { nodeManager: "npm" } } },
+      },
+      runtime,
+    );
+
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      ["bustly-ads", "platforms"],
+      expect.objectContaining({ timeoutMs: 900_000 }),
+    );
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
 });

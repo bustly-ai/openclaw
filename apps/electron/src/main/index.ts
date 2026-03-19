@@ -1067,6 +1067,8 @@ function buildElectronCliEnv(params?: {
 }): NodeJS.ProcessEnv {
   const homeDir = app.getPath("home");
   const stateDir = resolveElectronStateDir();
+  const appPath = app.getAppPath();
+  const resourcesPath = process.resourcesPath || appPath;
   const shellPath = process.env.SHELL?.trim() || "/bin/zsh";
   const loginShellEnv = loadLoginShellEnvironment(shellPath, homeDir);
   const fixedPath =
@@ -1074,13 +1076,15 @@ function buildElectronCliEnv(params?: {
     process.env.PATH?.trim() ||
     "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
   const bundledCliShim = params?.cliPath
-    ? ensureBundledOpenClawShim(params.cliPath, stateDir, { includeBundledNode: true })
+    ? ensureBundledOpenClawShim(params.cliPath, stateDir, {
+      includeBundledNode: true,
+      resourcesPath,
+      appPath,
+    })
     : null;
   const effectivePath = bundledCliShim ? prependPathEntry(fixedPath, bundledCliShim.shimDir) : fixedPath;
   const bunInstall = process.env.BUN_INSTALL?.trim() || resolve(homeDir, ".bun");
   const homebrewPrefix = process.env.HOMEBREW_PREFIX?.trim() || "/opt/homebrew";
-  const appPath = app.getAppPath();
-  const resourcesPath = process.resourcesPath || appPath;
   const bundledSkillsDir = resolve(resourcesPath, "skills");
   const bundledPluginsDir = ensureBundledExtensionsDir({
     resourcesPath,
@@ -1569,7 +1573,11 @@ async function startGateway(): Promise<boolean> {
       loginShellEnv.PATH?.trim() ||
       process.env.PATH?.trim() ||
       "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
-    const bundledCliShim = ensureBundledOpenClawShim(cliPath, stateDir, { includeBundledNode: true });
+    const bundledCliShim = ensureBundledOpenClawShim(cliPath, stateDir, {
+      includeBundledNode: true,
+      resourcesPath,
+      appPath,
+    });
     const effectivePath = bundledCliShim ? prependPathEntry(fixedPath, bundledCliShim.shimDir) : fixedPath;
     const appNodeModules = resolve(appPath, "node_modules");
     const resourcesNodeModules = resolve(resourcesPath, "node_modules");

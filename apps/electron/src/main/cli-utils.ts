@@ -22,6 +22,12 @@ export type CliShim = {
   shimPath: string;
 };
 
+type BundledCliShimOptions = {
+  includeBundledNode?: boolean;
+  resourcesPath?: string;
+  appPath?: string;
+};
+
 function uniqueExistingPaths(candidates: Array<string | null | undefined>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -167,10 +173,176 @@ function escapePosixSingleQuoted(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+function resolveRuntimeScriptPath(params: {
+  packageName: string;
+  resourcesPath: string;
+  appPath?: string;
+  fallbackScriptPath?: string;
+}): string | null {
+  const packageParts = params.packageName.split("/").filter(Boolean);
+  const candidateRoots = [
+    resolve(params.resourcesPath, "node_modules"),
+    resolve(params.resourcesPath, "openclaw", "node_modules"),
+    params.appPath ? resolve(params.appPath, "node_modules") : "",
+    resolve(process.cwd(), "node_modules"),
+    resolve(process.cwd(), "..", "bustly-skills", "skills"),
+    resolve(__dirname, "../../../../../../bustly-skills/skills"),
+  ].filter((candidate) => candidate && candidate.trim().length > 0);
+
+  const candidates: string[] = [];
+  for (const root of candidateRoots) {
+    if (root.endsWith("/skills") || root.endsWith("\\skills")) {
+      if (params.fallbackScriptPath) {
+        candidates.push(resolve(root, params.fallbackScriptPath));
+      }
+      continue;
+    }
+    candidates.push(resolve(root, ...packageParts, "scripts", "run.js"));
+  }
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function writeCommandShim(params: {
+  shimPath: string;
+  command: string;
+  args?: string[];
+}): void {
+  const commandArgs = params.args ?? [];
+
+  if (process.platform === "win32") {
+    const target = [`"${params.command}"`, ...commandArgs.map((arg) => `"${arg}"`), "%*"].join(" ");
+    writeFileSync(params.shimPath, `@echo off\r\n${target}\r\n`, "utf-8");
+    return;
+  }
+
+  const execLine = `exec ${[params.command, ...commandArgs].map((value) => escapePosixSingleQuoted(value)).join(" ")} "$@"`;
+  writeFileSync(params.shimPath, `#!/bin/sh\n${execLine}\n`, { encoding: "utf-8", mode: 0o755 });
+  chmodSync(params.shimPath, 0o755);
+}
+
+function writeBustlyDispatcher(params: {
+  shimDir: string;
+  commerceShimPath: string | null;
+  adsShimPath: string | null;
+}): void {
+  const bustlyShimPath = resolve(params.shimDir, process.platform === "win32" ? "bustly.cmd" : "bustly");
+
+  if (process.platform === "win32") {
+    const commerceCmd = params.commerceShimPath ? `"${params.commerceShimPath}"` : "";
+    const adsCmd = params.adsShimPath ? `"${params.adsShimPath}"` : "";
+    const content = `@echo off
+setlocal
+set "_skill=%~1"
+if /I "%_skill%"=="ops" (
+  shift
+  set "_skill=%~1"
+)
+if "%_skill%"=="" goto :help
+if /I "%_skill%"=="help" goto :help
+if /I "%_skill%"=="--help" goto :help
+if /I "%_skill%"=="-h" goto :help
+if /I "%_skill%"=="list" goto :list
+
+if /I "%_skill%"=="commerce" (
+  shift
+  ${commerceCmd ? `call ${commerceCmd} %*` : 'echo Commerce runtime not available 1>&2 & exit /b 1'}
+  exit /b %errorlevel%
+)
+if /I "%_skill%"=="commerce_core_ops" (
+  shift
+  ${commerceCmd ? `call ${commerceCmd} %*` : 'echo Commerce runtime not available 1>&2 & exit /b 1'}
+  exit /b %errorlevel%
+)
+if /I "%_skill%"=="ads" (
+  shift
+  ${adsCmd ? `call ${adsCmd} %*` : 'echo Ads runtime not available 1>&2 & exit /b 1'}
+  exit /b %errorlevel%
+)
+if /I "%_skill%"=="ads_core_ops" (
+  shift
+  ${adsCmd ? `call ${adsCmd} %*` : 'echo Ads runtime not available 1>&2 & exit /b 1'}
+  exit /b %errorlevel%
+)
+
+echo Unknown skill: %_skill% 1>&2
+exit /b 1
+
+:list
+echo commerce\tcommerce_core_ops\tbustly commerce providers
+echo ads\tads_core_ops\tbustly ads platforms
+exit /b 0
+
+:help
+echo Bustly Runtime CLI
+echo.
+echo Usage:
+echo   bustly ^<skill^> ^<command^> [args...]
+echo   bustly ops ^<skill^> ^<command^> [args...] ^(backward compatible^)
+echo.
+echo Skills:
+echo   - commerce ^(commerce_core_ops^)
+echo   - ads ^(ads_core_ops^)
+exit /b 0
+`;
+    writeFileSync(bustlyShimPath, content, "utf-8");
+    return;
+  }
+
+  const content = `#!/bin/sh
+set -eu
+if [ "\${1:-}" = "ops" ]; then
+  shift
+fi
+skill="\${1:-}"
+if [ -z "$skill" ] || [ "$skill" = "help" ] || [ "$skill" = "--help" ] || [ "$skill" = "-h" ]; then
+  cat <<'EOF'
+Bustly Runtime CLI
+
+Usage:
+  bustly <skill> <command> [args...]
+  bustly ops <skill> <command> [args...]   # backward compatible
+
+Skills:
+  - commerce (commerce_core_ops)
+  - ads (ads_core_ops)
+EOF
+  exit 0
+fi
+
+if [ "$skill" = "list" ]; then
+  printf '%s\\n' "commerce\tcommerce_core_ops\tbustly commerce providers"
+  printf '%s\\n' "ads\tads_core_ops\tbustly ads platforms"
+  exit 0
+fi
+
+shift || true
+case "$skill" in
+  commerce|commerce_core_ops)
+    ${params.commerceShimPath ? `exec ${escapePosixSingleQuoted(params.commerceShimPath)} "$@"` : 'echo "Commerce runtime not available" >&2; exit 1'}
+    ;;
+  ads|ads_core_ops)
+    ${params.adsShimPath ? `exec ${escapePosixSingleQuoted(params.adsShimPath)} "$@"` : 'echo "Ads runtime not available" >&2; exit 1'}
+    ;;
+  *)
+    echo "Unknown skill: $skill" >&2
+    exit 1
+    ;;
+esac
+`;
+  writeFileSync(bustlyShimPath, content, { encoding: "utf-8", mode: 0o755 });
+  chmodSync(bustlyShimPath, 0o755);
+}
+
 export function ensureBundledOpenClawShim(
   cliPath: string,
   stateDir: string,
-  options?: { includeBundledNode?: boolean },
+  options?: BundledCliShimOptions,
 ): CliShim | null {
   const invocation = resolveCliInvocation(cliPath, [], options);
   if (!invocation) {
@@ -187,14 +359,73 @@ export function ensureBundledOpenClawShim(
         ? `"${invocation.nodePath}" "${cliPath}" %*`
         : `"${cliPath}" %*`;
     writeFileSync(shimPath, `@echo off\r\n${target}\r\n`, "utf-8");
-    return { shimDir, shimPath };
+  } else {
+    const execLine =
+      invocation.isMjs && invocation.nodePath
+        ? `exec ${escapePosixSingleQuoted(invocation.nodePath)} ${escapePosixSingleQuoted(cliPath)} "$@"`
+        : `exec ${escapePosixSingleQuoted(cliPath)} "$@"`;
+    writeFileSync(shimPath, `#!/bin/sh\n${execLine}\n`, { encoding: "utf-8", mode: 0o755 });
+    chmodSync(shimPath, 0o755);
   }
 
-  const execLine =
-    invocation.isMjs && invocation.nodePath
-      ? `exec ${escapePosixSingleQuoted(invocation.nodePath)} ${escapePosixSingleQuoted(cliPath)} "$@"`
-      : `exec ${escapePosixSingleQuoted(cliPath)} "$@"`;
-  writeFileSync(shimPath, `#!/bin/sh\n${execLine}\n`, { encoding: "utf-8", mode: 0o755 });
-  chmodSync(shimPath, 0o755);
+  const runtimeNodePath = invocation.nodePath ?? resolveNodeBinary({ includeBundled: options?.includeBundledNode ?? true });
+  const resourcesPath = options?.resourcesPath || process.resourcesPath;
+  const appPath = options?.appPath;
+
+  if (runtimeNodePath) {
+    const commerceRuntimeScript = resolveRuntimeScriptPath({
+      packageName: "@bustly/skill-runtime-commerce-core-ops",
+      resourcesPath,
+      appPath,
+      fallbackScriptPath: "commerce_core_ops/scripts/run.js",
+    });
+    const adsRuntimeScript = resolveRuntimeScriptPath({
+      packageName: "@bustly/skill-runtime-ads-core-ops",
+      resourcesPath,
+      appPath,
+      fallbackScriptPath: "ads_core_ops/scripts/run.js",
+    });
+
+    const commerceShimPath = commerceRuntimeScript
+      ? resolve(shimDir, process.platform === "win32" ? "bustly-commerce.cmd" : "bustly-commerce")
+      : null;
+    if (commerceShimPath && commerceRuntimeScript) {
+      writeCommandShim({
+        shimPath: commerceShimPath,
+        command: runtimeNodePath,
+        args: [commerceRuntimeScript],
+      });
+      writeCommandShim({
+        shimPath: resolve(shimDir, process.platform === "win32" ? "bustly-skill-commerce.cmd" : "bustly-skill-commerce"),
+        command: runtimeNodePath,
+        args: [commerceRuntimeScript],
+      });
+    }
+
+    const adsShimPath = adsRuntimeScript
+      ? resolve(shimDir, process.platform === "win32" ? "bustly-ads.cmd" : "bustly-ads")
+      : null;
+    if (adsShimPath && adsRuntimeScript) {
+      writeCommandShim({
+        shimPath: adsShimPath,
+        command: runtimeNodePath,
+        args: [adsRuntimeScript],
+      });
+      writeCommandShim({
+        shimPath: resolve(shimDir, process.platform === "win32" ? "bustly-skill-ads.cmd" : "bustly-skill-ads"),
+        command: runtimeNodePath,
+        args: [adsRuntimeScript],
+      });
+    }
+
+    if (commerceShimPath || adsShimPath) {
+      writeBustlyDispatcher({
+        shimDir,
+        commerceShimPath,
+        adsShimPath,
+      });
+    }
+  }
+
   return { shimDir, shimPath };
 }

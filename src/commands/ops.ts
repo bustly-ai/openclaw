@@ -39,7 +39,8 @@ function findOpsSkillInWorkspace(
 
   const entries = loadWorkspaceSkillEntries(workspaceDir, { config });
   const entry = entries.find((candidate) => {
-    if (candidate.metadata?.commandHints?.commandNamespace !== "bustly ops") {
+    const namespace = candidate.metadata?.commandHints?.commandNamespace?.trim().toLowerCase() || "";
+    if (namespace !== "bustly ops" && namespace !== "bustly") {
       return false;
     }
     return matchesOpsSkillLookup(candidate, rawSkill);
