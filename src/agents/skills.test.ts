@@ -150,6 +150,31 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
   });
 });
 
+describe("loadWorkspaceSkillEntries command metadata", () => {
+  it("parses flat bustly ops runtime metadata into command hints", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "ads-core-ops"),
+      name: "ads_core_ops",
+      description: "Unified ads operations",
+      metadata:
+        '{"openclaw":{"skillKey":"ads_core_ops","aliases":["ads"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops ads help","defaultCommand":"bustly ops ads platforms","runtimePackage":"@bustly/skill-runtime-ads-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-ads-core-ops@^0.1.0","runtimeExecutable":"bustly-skill-ads"}}',
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+    const entry = entries.find((candidate) => candidate.skill.name === "ads_core_ops");
+
+    expect(entry?.metadata?.commandHints?.aliases).toEqual(["ads"]);
+    expect(entry?.metadata?.commandHints?.commandNamespace).toBe("bustly ops");
+    expect(entry?.metadata?.commandHints?.runtime?.package).toBe(
+      "@bustly/skill-runtime-ads-core-ops",
+    );
+    expect(entry?.metadata?.commandHints?.runtime?.installSpec).toBe(
+      "npm:@bustly/skill-runtime-ads-core-ops@^0.1.0",
+    );
+  });
+});
+
 describe("buildWorkspaceSkillsPrompt", () => {
   it("returns empty prompt when skills dirs are missing", async () => {
     const workspaceDir = await makeWorkspace();

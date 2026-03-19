@@ -10,6 +10,7 @@ import { formatInstallFailureMessage } from "./skills-install-output.js";
 import {
   hasBinary,
   loadWorkspaceSkillEntries,
+  resolveSkillInstallSpecs,
   resolveSkillsInstallPreferences,
   type SkillEntry,
   type SkillInstallSpec,
@@ -89,7 +90,7 @@ function resolveInstallId(spec: SkillInstallSpec, index: number): string {
 }
 
 function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec | undefined {
-  const specs = entry.metadata?.install ?? [];
+  const specs = resolveSkillInstallSpecs(entry);
   for (const [index, spec] of specs.entries()) {
     if (resolveInstallId(spec, index) === installId) {
       return spec;

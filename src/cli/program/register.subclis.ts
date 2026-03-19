@@ -261,6 +261,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "ops",
+    description: "Run Bustly ops skills with lazy runtime installation",
+    hasSubcommands: false,
+    register: async (program) => {
+      const mod = await import("../ops-cli.js");
+      mod.registerOpsCli(program);
+    },
+  },
+  {
     name: "skills",
     description: "List and inspect available skills",
     hasSubcommands: true,

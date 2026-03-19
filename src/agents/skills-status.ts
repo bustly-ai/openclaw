@@ -8,9 +8,11 @@ import {
   isBundledSkillAllowed,
   isConfigPathTruthy,
   loadWorkspaceSkillEntries,
+  resolveSkillInstallSpecs,
   resolveBundledAllowlist,
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
+  type SkillCommandRuntimeSpec,
   type SkillEntry,
   type SkillEligibilityContext,
   type SkillInstallSpec,
@@ -46,6 +48,8 @@ export type SkillStatusEntry = {
   missing: Requirements;
   configChecks: SkillStatusConfigCheck[];
   install: SkillInstallOption[];
+  runtime?: SkillCommandRuntimeSpec;
+  resolvedCommand?: string;
 };
 
 export type SkillStatusReport = {
@@ -113,7 +117,7 @@ function normalizeInstallOptions(
     return [];
   }
 
-  const install = entry.metadata?.install ?? [];
+  const install = resolveSkillInstallSpecs(entry);
   if (install.length === 0) {
     return [];
   }
@@ -166,6 +170,23 @@ function normalizeInstallOptions(
   return [toOption(preferred.spec, preferred.index)];
 }
 
+function resolvePreferredCommand(entry: SkillEntry): string | undefined {
+  const hints = entry.metadata?.commandHints;
+  if (hints?.defaultCommand) {
+    return hints.defaultCommand;
+  }
+  if (hints?.discoveryCommand) {
+    return hints.discoveryCommand;
+  }
+  const runtimeExecutable = hints?.runtime?.executable?.trim();
+  if (runtimeExecutable && hasBinary(runtimeExecutable)) {
+    return runtimeExecutable;
+  }
+  if (hints?.fallbackCommand) {
+    return hints.fallbackCommand;
+  }
+  return undefined;
+}
 function buildSkillStatus(
   entry: SkillEntry,
   config?: OpenClawConfig,
@@ -221,6 +242,8 @@ function buildSkillStatus(
     missing,
     configChecks,
     install: normalizeInstallOptions(entry, prefs ?? resolveSkillsInstallPreferences(config)),
+    runtime: entry.metadata?.commandHints?.runtime,
+    resolvedCommand: resolvePreferredCommand(entry),
   };
 }
 

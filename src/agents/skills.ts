@@ -15,6 +15,8 @@ export {
   applySkillEnvOverridesFromSnapshot,
 } from "./skills/env-overrides.js";
 export type {
+  SkillCommandHints,
+  SkillCommandRuntimeSpec,
   OpenClawSkillMetadata,
   SkillEligibilityContext,
   SkillCommandSpec,
@@ -32,6 +34,13 @@ export {
   resolveSkillsPromptForRun,
   syncSkillsToWorkspace,
 } from "./skills/workspace.js";
+export {
+  matchesOpsSkillLookup,
+  resolveOpsLookupNames,
+  resolveRuntimeInstallSpec,
+  resolveSkillInstallSpecs,
+  resolveSkillRuntime,
+} from "./skills/runtime.js";
 
 export function resolveSkillsInstallPreferences(config?: OpenClawConfig): SkillsInstallPreferences {
   const raw = config?.skills?.install;
