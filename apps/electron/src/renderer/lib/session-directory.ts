@@ -84,6 +84,11 @@ export async function listAgentScenarioSessions(params: {
 
   return [...result.sessions]
     .filter((session) => isMainChannelSessionKey(session.key, params.agentId))
+    .sort((a, b) => {
+      const aUpdatedAt = a.updatedAt ?? 0;
+      const bUpdatedAt = b.updatedAt ?? 0;
+      return bUpdatedAt - aUpdatedAt;
+    })
     .map((session) => ({
       ...session,
       displayLabel: resolveSessionDisplayName(session, params.customSessionLabels),
