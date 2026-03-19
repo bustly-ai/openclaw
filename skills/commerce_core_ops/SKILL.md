@@ -1,69 +1,68 @@
 ---
 name: commerce_core_ops
-category: ecommerce
-api_type: hybrid
-auth_type: jwt
-description: Unified commerce operations for Shopify, BigCommerce, WooCommerce, and Magento. This skill is declaration-first: OpenClaw should treat it as a pluggable skill contract and resolve execution through the published runtime package instead of assuming repo-local scripts. Use this skill when an agent needs one workspace-scoped entrypoint for product, order, customer, or inventory reads plus product writes.
+description: Use when you need to inspect or operate commerce systems through the Bustly ops runtime, including Shopify, BigCommerce, WooCommerce, and Magento. Trigger for requests about stores, providers, connections, products, orders, customers, inventory, catalog reads, product updates, inventory adjustments, or commerce diagnostics. Prefer this skill over generic browser exploration when the task is about structured store or commerce account data.
 metadata: {"openclaw":{"skillKey":"commerce_core_ops","aliases":["commerce"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops commerce help","defaultCommand":"bustly ops commerce providers","commandExamples":["bustly ops commerce providers","bustly ops commerce connections","bustly ops commerce auth","bustly ops commerce read --platform shopify --entity orders --limit 50","bustly ops commerce write:product --platform shopify --op update --payload '{\"id\":\"gid://shopify/Product/123\",\"title\":\"Bustly Commerce Tee\"}'"],"runtimePackage":"@bustly/skill-runtime-commerce-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-commerce-core-ops@^0.1.0","runtimeExecutable":"bustly-skill-commerce","runtimeNotes":["Users and agents should invoke this skill through `bustly ops commerce ...`.","OpenClaw should ensure the runtime package is installed on first use, then route through the shared `bustly ops` dispatcher.","This repo intentionally keeps this skill declaration-only; runtime execution lives in the published package."]}}
 ---
 
-## Role in the architecture
+# Commerce Core Ops
 
-`commerce_core_ops` is a declaration-only skill in this repo.
+Use this skill for structured commerce/store reads and supported commerce write operations.
 
-That means:
-- this `SKILL.md` remains the contract OpenClaw reads
-- runtime logic is published via the runtime package
-- OpenClaw should lazy-install that runtime package on first `bustly ops commerce ...` execution
+Do not default to browser/manual exploration first when the request is about:
+- store connections or provider discovery
+- Shopify / BigCommerce / WooCommerce / Magento data reads
+- orders, products, customers, inventory, or catalog inspection
+- product updates or inventory adjustments
+- commerce account diagnostics
 
-## Preferred execution contract
+## Command contract
 
-Logical command contract exposed to the agent:
+Primary command surface:
 
 ```bash
 bustly ops commerce <command>
 ```
 
-Target runtime package:
-
-```text
-@bustly/skill-runtime-commerce-core-ops
-```
-
-Underlying packaged runtime executable:
+Underlying runtime executable:
 
 ```text
 bustly-skill-commerce
 ```
 
-## Scope
+Runtime package:
 
-This skill focuses on two goals only:
+```text
+@bustly/skill-runtime-commerce-core-ops
+```
 
-1. Data reads (product/order/customer/inventory)
-2. Product writes (import/create/update/delete/inventory adjust)
+## Typical discovery / read commands
 
-## Core command surface
+Start here when you need to understand what commerce providers are connected:
 
 ```bash
 bustly ops commerce help
 bustly ops commerce providers
 bustly ops commerce connections
 bustly ops commerce auth
+```
+
+Common reads / writes:
+
+```bash
 bustly ops commerce read --platform shopify --entity orders --limit 50
 bustly ops commerce write:product --platform shopify --op update --payload '{"id":"gid://shopify/Product/123","title":"Bustly Commerce Tee"}'
 ```
 
-## Runtime expectations
+## Platform coverage
 
-The runtime package behind this skill should provide:
+- **Shopify**
+- **BigCommerce**
+- **WooCommerce**
+- **Magento**
 
-1. provider routing for Shopify / BigCommerce / WooCommerce / Magento
-2. workspace-scoped auth + billing validation
-3. stable command parsing for the `bustly ops commerce ...` contract
-4. consistent read/write adapters
-5. machine-readable error output for OpenClaw consumption
+## Agent guidance
 
-## Migration rule
-
-Treat the package metadata above as canonical. User-facing invocation should stay on `bustly ops commerce ...`, while execution is resolved through the packaged runtime.
+- Prefer this skill whenever the user asks to inspect stores, orders, products, customers, or inventory in a structured way.
+- Use `bustly ops commerce providers` or `bustly ops commerce connections` first when you need quick discovery.
+- If the runtime is not installed yet, OpenClaw should lazy-install it from the declared runtime package before executing the command.
+- Only fall back to browser/manual inspection if this skill is unavailable or the runtime path fails.
