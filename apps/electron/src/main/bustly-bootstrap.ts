@@ -1018,13 +1018,14 @@ export async function initializeBustlyWorkspaceBootstrap(params: {
   await fs.mkdir(workspaceDir, { recursive: true });
   await ensureBustlyLearnings(workspaceDir);
 
-  const [agents, soul, identity, user, tools, heartbeat] = await Promise.all([
+  const [agents, soul, identity, user, tools, heartbeat, bootstrap] = await Promise.all([
     loadRenderedTemplate("AGENTS.md", values),
     loadRenderedTemplate("SOUL.md", values),
     loadRenderedTemplate("IDENTITY.md", values),
     loadRenderedTemplate("USER.md", values),
     loadRenderedTemplate("TOOLS.md", values),
     loadRenderedTemplate("HEARTBEAT.md", values),
+    loadRenderedTemplate("BOOTSTRAP.md", values),
   ]);
 
   await Promise.all([
@@ -1034,5 +1035,6 @@ export async function initializeBustlyWorkspaceBootstrap(params: {
     writeManagedFile(path.join(workspaceDir, "USER.md"), user),
     writeManagedFile(path.join(workspaceDir, "TOOLS.md"), tools),
     writeManagedFile(path.join(workspaceDir, "HEARTBEAT.md"), heartbeat),
+    writeManagedFile(path.join(workspaceDir, "BOOTSTRAP.md"), bootstrap),
   ]);
 }

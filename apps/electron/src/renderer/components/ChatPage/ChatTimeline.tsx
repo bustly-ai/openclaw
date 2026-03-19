@@ -808,6 +808,7 @@ function TimelineStack({
       {items.map((node, index) => {
         const prev = index > 0 ? items[index - 1] : null;
         const needsLooseSpacing = spaced && index > 0 && !shouldTightJoin(prev, node);
+        const spacingClass = needsLooseSpacing && index < items.length - 1 ? "mt-4" : undefined;
         const item = (
           <TimelineItem
             node={node}
@@ -821,13 +822,13 @@ function TimelineStack({
         );
         if (node.kind === "streamFold") {
           return (
-            <div key={node.key} className={cx(needsLooseSpacing && "mt-4")}>
+            <div key={node.key} className={cx(spacingClass)}>
               {item}
             </div>
           );
         }
         return (
-          <TimelineReveal key={node.key} className={cx(needsLooseSpacing && "mt-4")}>
+          <TimelineReveal key={node.key} className={cx(spacingClass)}>
             {item}
           </TimelineReveal>
         );

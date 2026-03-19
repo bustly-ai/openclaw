@@ -1,3 +1,6 @@
 [submodule "bustly_admin_design"]
 	path = bustly_admin_design
 	url = git@github.com:salerio-ai/bustly_admin_design.git
+[submodule "bustly-prompts"]
+	path = bustly-prompts
+	url = git@github.com:salerio-ai/bustly-prompts.git

@@ -5,6 +5,10 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  buildRemoteWorkspaceTemplateSourceKey,
+  loadRemoteWorkspaceTemplate,
+} from "./workspace-remote-templates.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 
 export function resolveDefaultAgentWorkspaceDir(
@@ -67,6 +71,10 @@ Capabilities requested by user that don't currently exist.
 ---
 `;
 
+function buildWorkspaceTemplateCacheKey(name: string, env: NodeJS.ProcessEnv = process.env): string {
+  return `${buildRemoteWorkspaceTemplateSourceKey(env)}::${name}`;
+}
+
 /**
  * Read file with caching based on mtime. Returns cached content if file
  * hasn't changed, otherwise reads from disk and updates cache.
@@ -108,12 +116,17 @@ function stripFrontMatter(content: string): string {
 }
 
 export async function loadWorkspaceTemplate(name: string): Promise<string> {
-  const cached = workspaceTemplateCache.get(name);
+  const cacheKey = buildWorkspaceTemplateCacheKey(name);
+  const cached = workspaceTemplateCache.get(cacheKey);
   if (cached) {
     return cached;
   }
 
   const pending = (async () => {
+    const remoteContent = await loadRemoteWorkspaceTemplate(name);
+    if (typeof remoteContent === "string") {
+      return stripFrontMatter(remoteContent);
+    }
     const templateDir = await resolveWorkspaceTemplateDir();
     const templatePath = path.join(templateDir, name);
     try {
@@ -126,13 +139,17 @@ export async function loadWorkspaceTemplate(name: string): Promise<string> {
     }
   })();
 
-  workspaceTemplateCache.set(name, pending);
+  workspaceTemplateCache.set(cacheKey, pending);
   try {
     return await pending;
   } catch (error) {
-    workspaceTemplateCache.delete(name);
+    workspaceTemplateCache.delete(cacheKey);
     throw error;
   }
+}
+
+export function resetWorkspaceTemplateCache() {
+  workspaceTemplateCache.clear();
 }
 
 export type WorkspaceBootstrapFileName =
@@ -374,21 +391,39 @@ export async function ensureAgentWorkspace(params?: {
   const errorsPath = path.join(learningsDir, DEFAULT_ERRORS_FILENAME);
   const featureRequestsPath = path.join(learningsDir, DEFAULT_FEATURE_REQUESTS_FILENAME);
   const statePath = resolveWorkspaceStatePath(dir);
+  const corePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
+  const coreExists = await Promise.all(corePaths.map(async (p) => await fileExists(p)));
+  const isBrandNewWorkspace = coreExists.every((v) => !v);
+  const allCoreFilesExist = coreExists.every(Boolean);
+  const bootstrapExistsInitially = await fileExists(bootstrapPath);
 
-  const isBrandNewWorkspace = await (async () => {
-    const paths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
-    const existing = await Promise.all(
-      paths.map(async (p) => {
-        try {
-          await fs.access(p);
-          return true;
-        } catch {
-          return false;
-        }
-      }),
-    );
-    return existing.every((v) => !v);
-  })();
+  if (allCoreFilesExist && bootstrapExistsInitially) {
+    await fs.mkdir(learningsDir, { recursive: true });
+    await writeFileIfMissing(learningsPath, DEFAULT_LEARNINGS_TEMPLATE);
+    await writeFileIfMissing(errorsPath, DEFAULT_ERRORS_TEMPLATE);
+    await writeFileIfMissing(featureRequestsPath, DEFAULT_FEATURE_REQUESTS_TEMPLATE);
+
+    const state = await readWorkspaceOnboardingState(statePath);
+    if (!state.bootstrapSeededAt) {
+      await writeWorkspaceOnboardingState(statePath, {
+        ...state,
+        version: WORKSPACE_STATE_VERSION,
+        bootstrapSeededAt: new Date().toISOString(),
+      });
+    }
+    await ensureGitRepo(dir, false);
+
+    return {
+      dir,
+      agentsPath,
+      soulPath,
+      toolsPath,
+      identityPath,
+      userPath,
+      heartbeatPath,
+      bootstrapPath,
+    };
+  }
 
   const agentsTemplate = await loadWorkspaceTemplate(DEFAULT_AGENTS_FILENAME);
   const soulTemplate = await loadWorkspaceTemplate(DEFAULT_SOUL_FILENAME);

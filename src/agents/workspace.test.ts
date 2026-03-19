@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -146,6 +146,32 @@ describe("ensureAgentWorkspace", () => {
     const state = await readOnboardingState(tempDir);
     expect(state.bootstrapSeededAt).toBeUndefined();
     expect(state.onboardingCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("does not reload remote templates when the workspace already has all managed files", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await Promise.all([
+      writeWorkspaceFile({ dir: tempDir, name: DEFAULT_AGENTS_FILENAME, content: "agents" }),
+      writeWorkspaceFile({ dir: tempDir, name: "SOUL.md", content: "soul" }),
+      writeWorkspaceFile({ dir: tempDir, name: DEFAULT_TOOLS_FILENAME, content: "tools" }),
+      writeWorkspaceFile({ dir: tempDir, name: DEFAULT_IDENTITY_FILENAME, content: "identity" }),
+      writeWorkspaceFile({ dir: tempDir, name: DEFAULT_USER_FILENAME, content: "user" }),
+      writeWorkspaceFile({ dir: tempDir, name: "HEARTBEAT.md", content: "heartbeat" }),
+      writeWorkspaceFile({ dir: tempDir, name: DEFAULT_BOOTSTRAP_FILENAME, content: "bootstrap" }),
+    ]);
+    vi.stubEnv("BUSTLY_WORKSPACE_TEMPLATE_BASE_URL", "https://example.com/openclaw-prompts");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("fetch should not be called");
+      }),
+    );
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 });
 

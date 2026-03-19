@@ -67,6 +67,7 @@ import {
   ELECTRON_DEFAULT_MODEL,
   ELECTRON_OPENCLAW_PROFILE,
   getElectronOpenrouterApiKey,
+  resolveElectronBustlyWorkspaceTemplateBaseUrl,
 } from "./defaults.js";
 import {
   buildBustlyAgentPresetChannelSessionKey,
@@ -128,6 +129,23 @@ function loadMainProcessEnvFromDotEnv(): void {
 }
 
 loadMainProcessEnvFromDotEnv();
+
+if (!process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL?.trim()) {
+  const appVersion = app.getVersion();
+  const isDevelopment = !app.isPackaged;
+  const isBetaVersion = !isDevelopment && appVersion.toLowerCase().includes("beta");
+  const prodUrl = process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL_PROD?.trim();
+  const testUrl = process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL_TEST?.trim();
+  process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL =
+    ((isDevelopment || isBetaVersion) ? testUrl : prodUrl) ||
+    resolveElectronBustlyWorkspaceTemplateBaseUrl(isDevelopment ? "beta" : appVersion);
+  console.log("[Bustly Prompts] Selected template base URL:", {
+    appVersion,
+    isPackaged: app.isPackaged,
+    channel: isDevelopment ? "test-dev" : isBetaVersion ? "test" : "prod",
+    url: process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL,
+  });
+}
 
 const autoUpdater = updater.autoUpdater;
 const APP_DISPLAY_NAME = "Bustly";
@@ -796,10 +814,6 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
     writeFileSync(configPath, JSON.stringify(nextConfig, null, 2));
   }
 
-  await ensureAgentWorkspace({
-    dir: workspaceDir,
-    ensureBootstrapFiles: true,
-  });
   await initializeBustlyWorkspaceBootstrap({
     workspaceDir,
     workspaceId,
