@@ -8,6 +8,7 @@ const buildWorkspaceSkillStatusMock = vi.fn();
 const formatSkillsListMock = vi.fn();
 const formatSkillInfoMock = vi.fn();
 const formatSkillsCheckMock = vi.fn();
+const installSkillMock = vi.fn();
 
 const runtime = {
   log: vi.fn(),
@@ -26,6 +27,10 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../agents/skills-status.js", () => ({
   buildWorkspaceSkillStatus: buildWorkspaceSkillStatusMock,
+}));
+
+vi.mock("../agents/skills-install.js", () => ({
+  installSkill: installSkillMock,
 }));
 
 vi.mock("./skills-cli.format.js", () => ({
@@ -66,6 +71,13 @@ describe("registerSkillsCli", () => {
     formatSkillsListMock.mockReturnValue("skills-list-output");
     formatSkillInfoMock.mockReturnValue("skills-info-output");
     formatSkillsCheckMock.mockReturnValue("skills-check-output");
+    installSkillMock.mockResolvedValue({
+      ok: true,
+      message: "Installed",
+      stdout: "",
+      stderr: "",
+      code: 0,
+    });
   });
 
   it("runs list command with resolved report and formatter options", async () => {
@@ -108,6 +120,18 @@ describe("registerSkillsCli", () => {
 
     expect(formatSkillsListMock).toHaveBeenCalledWith(report, {});
     expect(runtime.log).toHaveBeenCalledWith("skills-list-output");
+  });
+
+  it("runs install command and forwards skill/install ids", async () => {
+    await runCli(["skills", "install", "ads_core_ops", "runtime-node"]);
+
+    expect(installSkillMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      skillName: "ads_core_ops",
+      installId: "runtime-node",
+      config: { gateway: {} },
+    });
+    expect(runtime.log).toHaveBeenCalled();
   });
 
   it("reports runtime errors when report loading fails", async () => {

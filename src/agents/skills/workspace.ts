@@ -83,6 +83,21 @@ function buildPromptSkillDescription(entry: SkillEntry): string {
   if (hints.commandExamples && hints.commandExamples.length > 0) {
     extras.push(`Examples: ${hints.commandExamples.join(" | ")}.`);
   }
+  if (hints.runtime?.package) {
+    extras.push(`Runtime package: ${hints.runtime.package}.`);
+  }
+  if (hints.runtime?.version) {
+    extras.push(`Runtime version: ${hints.runtime.version}.`);
+  }
+  if (hints.runtime?.installSpec) {
+    extras.push(`Runtime install spec: ${hints.runtime.installSpec}.`);
+  }
+  if (hints.runtime?.executable) {
+    extras.push(`Runtime executable: ${hints.runtime.executable}.`);
+  }
+  if (hints.runtime?.notes && hints.runtime.notes.length > 0) {
+    extras.push(`Runtime notes: ${hints.runtime.notes.join(" | ")}.`);
+  }
 
   return extras.length > 0 ? `${base} ${extras.join(" ")}` : base;
 }

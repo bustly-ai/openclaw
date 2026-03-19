@@ -24,6 +24,8 @@ function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatus
     disabled: false,
     blockedByAllowlist: false,
     eligible: true,
+    runtime: undefined,
+    resolvedCommand: undefined,
     ...createEmptyInstallChecks(),
     ...overrides,
   };
@@ -95,6 +97,19 @@ describe("skills-cli", () => {
       expect(output).toContain("os:");
     });
 
+    it("formats skills check with install commands", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "runtime-skill",
+          eligible: false,
+          missing: { bins: ["bustly-skill-runtime"], anyBins: [], env: [], config: [], os: [] },
+          install: [{ id: "runtime-node", kind: "node", label: "Install runtime", bins: [] }],
+        }),
+      ]);
+      const output = formatSkillsCheck(report, {});
+      expect(output).toContain("openclaw skills install runtime-skill runtime-node");
+    });
+
     it("filters to eligible only with --eligible flag", () => {
       const report = createMockReport([
         createMockSkill({ name: "eligible-one", eligible: true }),
@@ -116,6 +131,37 @@ describe("skills-cli", () => {
       const output = formatSkillInfo(report, "unknown-skill", {});
       expect(output).toContain("not found");
       expect(output).toContain("npx clawhub");
+    });
+
+    it("shows runtime package details in skill info", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "ads-core-ops",
+          runtime: {
+            package: "@bustly/skill-runtime-ads-core-ops",
+            version: "^0.1.0",
+            installSpec: "npm:@bustly/skill-runtime-ads-core-ops@^0.1.0",
+            executable: "bustly-skill-ads",
+          },
+          resolvedCommand: "bustly ops ads platforms",
+          eligible: false,
+          missing: {
+            bins: ["bustly-skill-ads"],
+            anyBins: [],
+            env: [],
+            config: [],
+            os: [],
+          },
+          install: [{ id: "runtime-node", kind: "node", label: "Install runtime", bins: [] }],
+        }),
+      ]);
+      const output = formatSkillInfo(report, "ads-core-ops", {});
+      expect(output).toContain("Runtime:");
+      expect(output).toContain("@bustly/skill-runtime-ads-core-ops");
+      expect(output).toContain("bustly-skill-ads");
+      expect(output).toContain("Resolved command");
+      expect(output).toContain("bustly ops ads platforms");
+      expect(output).toContain("openclaw skills install ads-core-ops runtime-node");
     });
 
     it("shows detailed info for a skill", () => {

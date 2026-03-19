@@ -90,6 +90,15 @@ function parseCommandHints(metadataObj: Record<string, unknown>): OpenClawSkillC
   const fallbackCommand =
     typeof metadataObj.fallbackCommand === "string" ? metadataObj.fallbackCommand.trim() : "";
   const commandExamples = normalizeStringList(metadataObj.commandExamples);
+  const runtimePackage =
+    typeof metadataObj.runtimePackage === "string" ? metadataObj.runtimePackage.trim() : "";
+  const runtimeVersion =
+    typeof metadataObj.runtimeVersion === "string" ? metadataObj.runtimeVersion.trim() : "";
+  const runtimeInstallSpec =
+    typeof metadataObj.runtimeInstallSpec === "string" ? metadataObj.runtimeInstallSpec.trim() : "";
+  const runtimeExecutable =
+    typeof metadataObj.runtimeExecutable === "string" ? metadataObj.runtimeExecutable.trim() : "";
+  const runtimeNotes = normalizeStringList(metadataObj.runtimeNotes);
 
   if (
     aliases.length === 0 &&
@@ -97,7 +106,12 @@ function parseCommandHints(metadataObj: Record<string, unknown>): OpenClawSkillC
     !discoveryCommand &&
     !defaultCommand &&
     !fallbackCommand &&
-    commandExamples.length === 0
+    commandExamples.length === 0 &&
+    !runtimePackage &&
+    !runtimeVersion &&
+    !runtimeInstallSpec &&
+    !runtimeExecutable &&
+    runtimeNotes.length === 0
   ) {
     return undefined;
   }
@@ -109,6 +123,62 @@ function parseCommandHints(metadataObj: Record<string, unknown>): OpenClawSkillC
     defaultCommand: defaultCommand || undefined,
     fallbackCommand: fallbackCommand || undefined,
     commandExamples: commandExamples.length > 0 ? commandExamples : undefined,
+    runtime:
+      runtimePackage || runtimeVersion || runtimeInstallSpec || runtimeExecutable || runtimeNotes.length > 0
+        ? {
+            package: runtimePackage || undefined,
+            version: runtimeVersion || undefined,
+            installSpec: runtimeInstallSpec || undefined,
+            executable: runtimeExecutable || undefined,
+            notes: runtimeNotes.length > 0 ? runtimeNotes : undefined,
+          }
+        : undefined,
+  };
+}
+
+function parseRuntimeNodePackageSpec(runtime: OpenClawSkillCommandHints["runtime"]): string | undefined {
+  const installSpec = runtime?.installSpec?.trim();
+  if (installSpec) {
+    return installSpec.startsWith("npm:") ? installSpec.slice(4) : installSpec;
+  }
+  const pkg = runtime?.package?.trim();
+  if (!pkg) {
+    return undefined;
+  }
+  const version = runtime?.version?.trim();
+  return version ? `${pkg}@${version}` : pkg;
+}
+
+function deriveRuntimeInstallSpec(commandHints?: OpenClawSkillCommandHints): SkillInstallSpec | undefined {
+  const runtime = commandHints?.runtime;
+  const packageSpec = parseRuntimeNodePackageSpec(runtime);
+  if (!packageSpec) {
+    return undefined;
+  }
+  return {
+    id: "runtime-node",
+    kind: "node",
+    label: `Install ${packageSpec} runtime`,
+    package: packageSpec,
+    bins: runtime?.executable ? [runtime.executable] : undefined,
+  };
+}
+
+function mergeRuntimeRequirements(
+  requires: OpenClawSkillMetadata["requires"],
+  commandHints?: OpenClawSkillCommandHints,
+): OpenClawSkillMetadata["requires"] {
+  const runtimeExecutable = commandHints?.runtime?.executable?.trim();
+  if (!runtimeExecutable) {
+    return requires;
+  }
+
+  const bins = Array.from(new Set([...(requires?.bins ?? []), runtimeExecutable]));
+  return {
+    bins,
+    anyBins: requires?.anyBins ?? [],
+    env: requires?.env ?? [],
+    config: requires?.config ?? [],
   };
 }
 
@@ -123,6 +193,8 @@ export function resolveOpenClawMetadata(
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
   const commandHints = parseCommandHints(metadataObj);
+  const derivedRuntimeInstall = deriveRuntimeInstallSpec(commandHints);
+  const mergedRequires = mergeRuntimeRequirements(requires, commandHints);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
@@ -130,8 +202,13 @@ export function resolveOpenClawMetadata(
     skillKey: typeof metadataObj.skillKey === "string" ? metadataObj.skillKey : undefined,
     primaryEnv: typeof metadataObj.primaryEnv === "string" ? metadataObj.primaryEnv : undefined,
     os: osRaw.length > 0 ? osRaw : undefined,
-    requires: requires,
-    install: install.length > 0 ? install : undefined,
+    requires: mergedRequires,
+    install:
+      install.length > 0
+        ? install
+        : derivedRuntimeInstall
+          ? [derivedRuntimeInstall]
+          : undefined,
     commandHints,
   };
 }

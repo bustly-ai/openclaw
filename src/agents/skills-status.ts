@@ -27,6 +27,14 @@ export type SkillInstallOption = {
   bins: string[];
 };
 
+export type SkillStatusRuntime = {
+  package?: string;
+  version?: string;
+  installSpec?: string;
+  executable?: string;
+  notes?: string[];
+};
+
 export type SkillStatusEntry = {
   name: string;
   description: string;
@@ -46,6 +54,8 @@ export type SkillStatusEntry = {
   missing: Requirements;
   configChecks: SkillStatusConfigCheck[];
   install: SkillInstallOption[];
+  runtime?: SkillStatusRuntime;
+  resolvedCommand?: string;
 };
 
 export type SkillStatusReport = {
@@ -166,6 +176,21 @@ function normalizeInstallOptions(
   return [toOption(preferred.spec, preferred.index)];
 }
 
+function resolvePreferredCommand(entry: SkillEntry): string | undefined {
+  const hints = entry.metadata?.commandHints;
+  const runtimeExecutable = hints?.runtime?.executable?.trim();
+  if (runtimeExecutable && hasBinary(runtimeExecutable)) {
+    return runtimeExecutable;
+  }
+  if (hints?.defaultCommand) {
+    return hints.defaultCommand;
+  }
+  if (hints?.fallbackCommand) {
+    return hints.fallbackCommand;
+  }
+  return undefined;
+}
+
 function buildSkillStatus(
   entry: SkillEntry,
   config?: OpenClawConfig,
@@ -221,6 +246,8 @@ function buildSkillStatus(
     missing,
     configChecks,
     install: normalizeInstallOptions(entry, prefs ?? resolveSkillsInstallPreferences(config)),
+    runtime: entry.metadata?.commandHints?.runtime,
+    resolvedCommand: resolvePreferredCommand(entry),
   };
 }
 

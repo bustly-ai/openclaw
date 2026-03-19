@@ -25,6 +25,10 @@ function appendClawHubHint(output: string, json?: boolean): string {
   return `${output}\n\nTip: use \`npx clawhub\` to search, install, and sync skills.`;
 }
 
+function formatInstallCommand(skill: SkillStatusEntry, installId: string): string {
+  return formatCliCommand(`openclaw skills install ${skill.name} ${installId}`);
+}
+
 function formatSkillStatus(skill: SkillStatusEntry): string {
   if (skill.eligible) {
     return theme.success("✓ ready");
@@ -82,6 +86,8 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         primaryEnv: s.primaryEnv,
         homepage: s.homepage,
         missing: s.missing,
+        runtime: s.runtime,
+        resolvedCommand: s.resolvedCommand,
       })),
     };
     return JSON.stringify(jsonReport, null, 2);
@@ -177,6 +183,28 @@ export function formatSkillInfo(
   if (skill.primaryEnv) {
     lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
   }
+  if (skill.resolvedCommand) {
+    lines.push(`${theme.muted("  Resolved command:")} ${skill.resolvedCommand}`);
+  }
+  if (skill.runtime?.package || skill.runtime?.executable || skill.runtime?.installSpec) {
+    lines.push("");
+    lines.push(theme.heading("Runtime:"));
+    if (skill.runtime.package) {
+      lines.push(`${theme.muted("  Package:")} ${skill.runtime.package}`);
+    }
+    if (skill.runtime.version) {
+      lines.push(`${theme.muted("  Version:")} ${skill.runtime.version}`);
+    }
+    if (skill.runtime.executable) {
+      lines.push(`${theme.muted("  Executable:")} ${skill.runtime.executable}`);
+    }
+    if (skill.runtime.installSpec) {
+      lines.push(`${theme.muted("  Install spec:")} ${skill.runtime.installSpec}`);
+    }
+    if (skill.runtime.notes && skill.runtime.notes.length > 0) {
+      lines.push(`${theme.muted("  Notes:")} ${skill.runtime.notes.join(" | ")}`);
+    }
+  }
 
   const hasRequirements =
     skill.requirements.bins.length > 0 ||
@@ -231,6 +259,7 @@ export function formatSkillInfo(
     lines.push(theme.heading("Install options:"));
     for (const inst of skill.install) {
       lines.push(`  ${theme.warn("→")} ${inst.label}`);
+      lines.push(`    ${theme.muted("Run:")} ${formatInstallCommand(skill, inst.id)}`);
     }
   }
 
@@ -262,6 +291,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
           name: s.name,
           missing: s.missing,
           install: s.install,
+          runtime: s.runtime,
         })),
       },
       null,
@@ -294,6 +324,12 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
       const emoji = skill.emoji ?? "📦";
       const missing = formatSkillMissingSummary(skill);
       lines.push(`  ${emoji} ${skill.name} ${theme.muted(`(${missing})`)}`);
+      if (skill.install.length > 0) {
+        for (const inst of skill.install) {
+          lines.push(`    ${theme.warn("→")} ${inst.label}`);
+          lines.push(`      ${theme.muted("Run:")} ${formatInstallCommand(skill, inst.id)}`);
+        }
+      }
     }
   }
 

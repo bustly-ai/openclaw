@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
@@ -154,17 +155,23 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
   it("surfaces command hints in the skills prompt", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const binDir = path.join(workspaceDir, "bin");
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(path.join(binDir, "bustly-skill-commerce"), "#!/bin/sh\nexit 0\n", {
+      mode: 0o755,
+    });
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "commerce-core-ops"),
       name: "commerce-core-ops",
       description: "Unified commerce operations",
       metadata:
-        '{"openclaw":{"aliases":["commerce"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops commerce help","defaultCommand":"bustly ops commerce providers","fallbackCommand":"node skills/ops/commerce_core_ops/scripts/run.js providers","commandExamples":["bustly ops commerce providers"]}}',
+        '{"openclaw":{"aliases":["commerce"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops commerce help","defaultCommand":"bustly ops commerce providers","fallbackCommand":"node skills/ops/commerce_core_ops/scripts/run.js providers","commandExamples":["bustly ops commerce providers"],"runtimePackage":"@bustly/skill-runtime-commerce-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-commerce-core-ops@^0.1.0","runtimeExecutable":"bustly-skill-commerce"}}',
     });
 
-    const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
+    const prompt = withEnv({ HOME: workspaceDir, PATH: binDir }, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
       }),
     );
 
@@ -175,5 +182,11 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain(
       "Fallback command: node skills/ops/commerce_core_ops/scripts/run.js providers.",
     );
+    expect(prompt).toContain("Runtime package: @bustly/skill-runtime-commerce-core-ops.");
+    expect(prompt).toContain("Runtime version: ^0.1.0.");
+    expect(prompt).toContain(
+      "Runtime install spec: npm:@bustly/skill-runtime-commerce-core-ops@^0.1.0.",
+    );
+    expect(prompt).toContain("Runtime executable: bustly-skill-commerce.");
   });
 });

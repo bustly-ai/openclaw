@@ -4,6 +4,7 @@ import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 export type {
@@ -28,6 +29,58 @@ async function runSkillsAction(render: (report: SkillStatusReport) => string): P
   try {
     const report = await loadSkillsStatusReport();
     defaultRuntime.log(render(report));
+  } catch (err) {
+    defaultRuntime.error(String(err));
+    defaultRuntime.exit(1);
+  }
+}
+
+async function runSkillsInstall(params: { skillName: string; installId: string }): Promise<void> {
+  try {
+    const config = loadConfig();
+    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const { installSkill } = await import("../agents/skills-install.js");
+    const result = await installSkill({
+      workspaceDir,
+      skillName: params.skillName,
+      installId: params.installId,
+      config,
+    });
+
+    const lines: string[] = [];
+    lines.push(
+      result.ok
+        ? `${theme.success("✓")} Installed ${theme.command(params.skillName)} (${params.installId})`
+        : `${theme.error("✗")} Failed to install ${theme.command(params.skillName)} (${params.installId})`,
+    );
+    if (result.message) {
+      lines.push(result.message);
+    }
+    if (result.stdout) {
+      lines.push("");
+      lines.push(result.stdout);
+    }
+    if (result.stderr) {
+      lines.push("");
+      lines.push(result.stderr);
+    }
+    if (result.warnings && result.warnings.length > 0) {
+      lines.push("");
+      lines.push(theme.heading("Warnings:"));
+      for (const warning of result.warnings) {
+        lines.push(`  ${theme.warn("→")} ${warning}`);
+      }
+    }
+    if (!result.ok) {
+      lines.push("");
+      lines.push(
+        `${theme.muted("Tip:")} inspect ${formatCliCommand(`openclaw skills info ${params.skillName}`)} for runtime/install details.`,
+      );
+    }
+    defaultRuntime.log(lines.join("\n"));
+    if (!result.ok) {
+      defaultRuntime.exit(1);
+    }
   } catch (err) {
     defaultRuntime.error(String(err));
     defaultRuntime.exit(1);
@@ -72,6 +125,15 @@ export function registerSkillsCli(program: Command) {
     .option("--json", "Output as JSON", false)
     .action(async (opts) => {
       await runSkillsAction((report) => formatSkillsCheck(report, opts));
+    });
+
+  skills
+    .command("install")
+    .description("Install a skill runtime/dependency using the skill's declared install option")
+    .argument("<name>", "Skill name")
+    .argument("<install-id>", "Installer id (for example: runtime-node)")
+    .action(async (name, installId) => {
+      await runSkillsInstall({ skillName: name, installId });
     });
 
   // Default action (no subcommand) - show list

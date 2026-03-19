@@ -93,4 +93,37 @@ describe("loadWorkspaceSkillEntries", () => {
 
     expect(entries.map((entry) => entry.skill.name)).not.toContain("prose");
   });
+
+  it("derives a node install option from runtime package metadata", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const skillDir = path.join(workspaceDir, "skills", "ads-core-ops");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      `---\nname: ads_core_ops\ndescription: test\nmetadata: {"openclaw":{"runtimePackage":"@bustly/skill-runtime-ads-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-ads-core-ops@^0.1.0","runtimeExecutable":"bustly-skill-ads"}}\n---\n`,
+      "utf-8",
+    );
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.metadata?.install).toEqual([
+      {
+        id: "runtime-node",
+        kind: "node",
+        label: "Install @bustly/skill-runtime-ads-core-ops@^0.1.0 runtime",
+        package: "@bustly/skill-runtime-ads-core-ops@^0.1.0",
+        bins: ["bustly-skill-ads"],
+      },
+    ]);
+    expect(entries[0]?.metadata?.requires).toEqual({
+      bins: ["bustly-skill-ads"],
+      anyBins: [],
+      env: [],
+      config: [],
+    });
+  });
 });

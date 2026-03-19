@@ -139,6 +139,11 @@ Fields under `metadata.openclaw`:
 - `defaultCommand` — optional standard command the agent should prefer for the skill.
 - `fallbackCommand` — optional implementation-level fallback when the preferred command is unavailable.
 - `commandExamples` — optional example commands surfaced to the agent in the skills prompt.
+- `runtimePackage` — optional npm/runtime package that implements the skill logic.
+- `runtimeVersion` — optional preferred version/range for the runtime package.
+- `runtimeInstallSpec` — optional install hint/specifier used by the host runtime to acquire the package.
+- `runtimeExecutable` — optional executable/entry name exposed by the runtime package.
+- `runtimeNotes` — optional runtime-side notes shown to the agent/host.
 
 Prompt hint example:
 
@@ -146,7 +151,7 @@ Prompt hint example:
 ---
 name: commerce_core_ops
 description: Unified commerce operations across storefront platforms
-metadata: {"openclaw":{"aliases":["commerce"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops commerce help","defaultCommand":"bustly ops commerce providers","fallbackCommand":"node skills/ops/commerce_core_ops/scripts/run.js providers","commandExamples":["bustly ops commerce providers","bustly ops commerce read --platform shopify --entity orders --limit 20"]}}
+metadata: {"openclaw":{"aliases":["commerce"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops commerce help","defaultCommand":"bustly ops commerce providers","fallbackCommand":"node skills/ops/commerce_core_ops/scripts/run.js providers","commandExamples":["bustly ops commerce providers","bustly ops commerce read --platform shopify --entity orders --limit 20"],"runtimePackage":"@bustly/skill-runtime-commerce-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-commerce-core-ops@^0.1.0","runtimeExecutable":"bustly-skill-commerce"}}
 ---
 ```
 
