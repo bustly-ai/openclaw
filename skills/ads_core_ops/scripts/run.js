@@ -8,6 +8,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { MetaAdsClient } from "../src/meta-ads.js";
 import {
   loadCredentials,
   saveCredentials,
@@ -15,7 +16,6 @@ import {
   sanitizeCredentials,
   validateMetaAdsCredentials,
 } from "../src/credentials.js";
-import { MetaAdsClient } from "../src/meta-ads.js";
 
 const DEFAULT_ADS_OPS_FUNCTION = process.env.ADS_CORE_OPS_FUNCTION || "ads-core-ops";
 
@@ -62,25 +62,17 @@ function loadBustlyOauthConfig() {
 
 function hasWorkspaceContext() {
   const oauth = loadBustlyOauthConfig();
-  return Boolean(
-    oauth?.supabaseUrl &&
-    oauth?.supabaseAnonKey &&
-    oauth?.supabaseToken &&
-    oauth?.workspaceId &&
-    oauth?.userId,
-  );
+  return Boolean(oauth?.supabaseUrl && oauth?.supabaseAnonKey && oauth?.supabaseToken && oauth?.workspaceId && oauth?.userId);
 }
 
 function getGatewayConfig() {
-  return (
-    loadBustlyOauthConfig() || {
-      supabaseUrl: "",
-      supabaseAnonKey: "",
-      supabaseToken: "",
-      workspaceId: "",
-      userId: "",
-    }
-  );
+  return loadBustlyOauthConfig() || {
+    supabaseUrl: "",
+    supabaseAnonKey: "",
+    supabaseToken: "",
+    workspaceId: "",
+    userId: "",
+  };
 }
 
 function parseArgs(argv) {
@@ -190,10 +182,9 @@ async function callAdsCoreOpsFunction(config, payload) {
   }
 
   if (!response.ok) {
-    const rawMessage =
-      typeof parsed === "object" && parsed && parsed.error
-        ? parsed.error
-        : `Edge function error (${response.status}): ${typeof parsed === "string" ? parsed : JSON.stringify(parsed)}`;
+    const rawMessage = typeof parsed === "object" && parsed && parsed.error
+      ? parsed.error
+      : `Edge function error (${response.status}): ${typeof parsed === "string" ? parsed : JSON.stringify(parsed)}`;
     throw new Error(normalizeGatewayError(rawMessage, payload.platform));
   }
 
@@ -301,10 +292,7 @@ async function handleKlaviyo(subcommand, flags) {
   const command = subcommand || "profiles";
 
   if (command === "raw" || command === "native") {
-    const result = await callGatewayRelay(
-      "klaviyo",
-      buildRelayRequest(flags, flags.body ? "POST" : "GET"),
-    );
+    const result = await callGatewayRelay("klaviyo", buildRelayRequest(flags, flags.body ? "POST" : "GET"));
     printJson(result);
     return;
   }
@@ -324,9 +312,7 @@ async function handleKlaviyo(subcommand, flags) {
   const entity = entityMap[command];
   if (!entity) {
     printError(`Unknown Klaviyo command: ${command}`);
-    console.log(
-      "\nAvailable commands: profiles, lists, segments, campaigns, flows, metrics, events, templates, raw",
-    );
+    console.log("\nAvailable commands: profiles, lists, segments, campaigns, flows, metrics, events, templates, raw");
     process.exit(1);
   }
 
@@ -342,10 +328,7 @@ async function handleGoogleAds(subcommand, flags) {
   const command = subcommand || "customers";
 
   if (command === "raw" || command === "native") {
-    const result = await callGatewayRelay(
-      "google-ads",
-      buildRelayRequest(flags, flags.body ? "POST" : "GET"),
-    );
+    const result = await callGatewayRelay("google-ads", buildRelayRequest(flags, flags.body ? "POST" : "GET"));
     printJson(result);
     return;
   }
@@ -378,9 +361,7 @@ async function handleGoogleAds(subcommand, flags) {
   const entity = entityMap[command];
   if (!entity) {
     printError(`Unknown Google Ads command: ${command}`);
-    console.log(
-      "\nAvailable commands: customers, campaigns, ad-groups, keywords, ads, search, raw",
-    );
+    console.log("\nAvailable commands: customers, campaigns, ad-groups, keywords, ads, search, raw");
     process.exit(1);
   }
 
@@ -407,21 +388,17 @@ async function handleMetaAds(subcommand, flags) {
       printJson(await client.getAdAccount());
       break;
     case "campaigns":
-      printJson(
-        await client.getCampaigns({
-          limit: typeof flags.limit === "string" ? parseInt(flags.limit, 10) : undefined,
-          status: flags.status ? [flags.status] : undefined,
-        }),
-      );
+      printJson(await client.getCampaigns({
+        limit: typeof flags.limit === "string" ? parseInt(flags.limit, 10) : undefined,
+        status: flags.status ? [flags.status] : undefined,
+      }));
       break;
     case "adsets":
     case "ad-sets":
       printJson(await client.getAdSets({ campaignId: flags["campaign-id"] }));
       break;
     case "ads":
-      printJson(
-        await client.getAds({ campaignId: flags["campaign-id"], adSetId: flags["adset-id"] }),
-      );
+      printJson(await client.getAds({ campaignId: flags["campaign-id"], adSetId: flags["adset-id"] }));
       break;
     case "insights": {
       const campaignId = flags["campaign-id"];
@@ -552,7 +529,7 @@ async function handleStatus() {
       name: info.name,
       mode: info.mode,
       configured,
-      status: configured ? "ready" : hasCreds ? "incomplete" : "not_configured",
+      status: configured ? "ready" : (hasCreds ? "incomplete" : "not_configured"),
       ...(missingFields.length > 0 ? { missing_fields: missingFields } : {}),
     });
   }
@@ -582,9 +559,7 @@ async function handleConfig(subcommand, args) {
       break;
     case "set-klaviyo":
     case "set-google-ads":
-      printError(
-        `${subcommand.replace("set-", "")} now uses Gateway Mode. Configure via workspace authorization.`,
-      );
+      printError(`${subcommand.replace("set-", "")} now uses Gateway Mode. Configure via workspace authorization.`);
       process.exit(1);
       break;
     case "set-meta-ads": {
@@ -651,9 +626,7 @@ async function main() {
         break;
       default:
         printError(`Unknown command: ${command}`);
-        console.log(
-          "\nAvailable commands: platforms, status, klaviyo, google-ads, meta-ads, config",
-        );
+        console.log("\nAvailable commands: platforms, status, klaviyo, google-ads, meta-ads, config");
         process.exit(1);
     }
   } catch (error) {

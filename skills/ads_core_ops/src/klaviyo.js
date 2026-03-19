@@ -71,7 +71,13 @@ Then configure it:
   }
 
   async request(path, options = {}) {
-    const { method = "GET", params, body, fields, wrapBody = true } = options;
+    const {
+      method = "GET",
+      params,
+      body,
+      fields,
+      wrapBody = true,
+    } = options;
 
     let url = this.buildUrl(path, params);
 
@@ -97,7 +103,9 @@ Then configure it:
     };
 
     if (body && method !== "GET") {
-      requestConfig.body = wrapBody ? JSON.stringify({ data: body }) : JSON.stringify(body);
+      requestConfig.body = wrapBody
+        ? JSON.stringify({ data: body })
+        : JSON.stringify(body);
     }
 
     const response = await fetch(url, requestConfig);

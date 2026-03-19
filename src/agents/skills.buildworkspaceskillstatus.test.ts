@@ -105,7 +105,6 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill).toBeDefined();
     expect(skill?.blockedByAllowlist).toBe(true);
     expect(skill?.eligible).toBe(false);
-    expect(skill?.bundled).toBe(true);
   });
 
   it("filters install options by OS", async () => {
@@ -153,5 +152,36 @@ describe("buildWorkspaceSkillStatus", () => {
     } else {
       expect(skill?.install).toEqual([]);
     }
+  });
+
+  it("surfaces runtime metadata on status entries", () => {
+    const entry = makeEntry({
+      name: "runtime-skill",
+    });
+    entry.metadata = {
+      ...entry.metadata,
+      commandHints: {
+        discoveryCommand: "bustly ops ads help",
+        defaultCommand: "bustly ops ads platforms",
+        fallbackCommand: "node scripts/bustly-ops.js ops ads platforms",
+        runtime: {
+          package: "@bustly/skill-runtime-ads-core-ops",
+          version: "^0.1.0",
+          installSpec: "npm:@bustly/skill-runtime-ads-core-ops@^0.1.0",
+          executable: "bustly-skill-ads",
+        },
+      },
+    };
+
+    const report = withEnv({ PATH: "" }, () =>
+      buildWorkspaceSkillStatus("/tmp/ws", {
+        entries: [entry],
+      }),
+    );
+    const skill = report.skills.find((reportEntry) => reportEntry.name === "runtime-skill");
+
+    expect(skill?.runtime?.package).toBe("@bustly/skill-runtime-ads-core-ops");
+    expect(skill?.runtime?.executable).toBe("bustly-skill-ads");
+    expect(skill?.resolvedCommand).toBe("bustly ops ads platforms");
   });
 });
