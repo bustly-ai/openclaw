@@ -230,6 +230,13 @@ async function callGatewayRelay(platform, request) {
   });
 }
 
+async function callGatewayStatus() {
+  const config = requireWorkspaceContext();
+  return callAdsCoreOpsFunction(config, {
+    action: "GET_STATUS",
+  });
+}
+
 function buildRelayRequest(flags, fallbackMethod = "GET") {
   const method = String(flags.method || fallbackMethod).toUpperCase();
   const path = String(flags.path || "").trim();
@@ -475,19 +482,57 @@ function handlePlatforms() {
   });
 }
 
-function handleStatus() {
+async function handleStatus() {
   const hasWorkspace = hasWorkspaceContext();
   const creds = loadCredentials();
   const results = [];
+  let gatewayStatusMap = new Map();
+  let gatewayStatusError = null;
+
+  if (hasWorkspace) {
+    try {
+      const gatewayStatus = await callGatewayStatus();
+      const platforms = Array.isArray(gatewayStatus?.platforms) ? gatewayStatus.platforms : [];
+      gatewayStatusMap = new Map(platforms.map((item) => [item.platform, item]));
+    } catch (error) {
+      gatewayStatusError = error instanceof Error ? error.message : String(error);
+    }
+  }
 
   for (const [id, info] of Object.entries(PLATFORMS)) {
     if (info.mode === "gateway") {
+      if (!hasWorkspace) {
+        results.push({
+          platform: id,
+          name: info.name,
+          mode: info.mode,
+          configured: false,
+          status: "not_authorized",
+          message: "Sign in through Bustly first.",
+        });
+        continue;
+      }
+
+      const gatewayEntry = gatewayStatusMap.get(id);
+      if (gatewayEntry) {
+        results.push({
+          platform: id,
+          name: info.name,
+          mode: info.mode,
+          configured: gatewayEntry.status === "ready",
+          status: gatewayEntry.status,
+          ...(gatewayEntry.message ? { message: gatewayEntry.message } : {}),
+        });
+        continue;
+      }
+
       results.push({
         platform: id,
         name: info.name,
         mode: info.mode,
-        configured: hasWorkspace,
-        status: hasWorkspace ? "ready" : "not_authorized",
+        configured: false,
+        status: "unknown",
+        ...(gatewayStatusError ? { message: gatewayStatusError } : {}),
       });
       continue;
     }
@@ -588,7 +633,7 @@ async function main() {
         break;
       case "status":
       case "connections":
-        handleStatus();
+        await handleStatus();
         break;
       case "klaviyo":
         await handleKlaviyo(subcommand, flags);

@@ -3,18 +3,54 @@ name: commerce_core_ops
 category: ecommerce
 api_type: hybrid
 auth_type: jwt
-description: Unified commerce operations for Shopify, BigCommerce, WooCommerce, and Magento. Use this skill when an agent needs one workspace-scoped entrypoint for product, order, customer, or inventory reads plus product writes, especially when provider-specific skills are too fragmented.
+description: Unified commerce operations for Shopify, BigCommerce, WooCommerce, and Magento. Prefer the standard CLI contract `bustly ops commerce <command>` so agents can discover commands without depending on internal script paths. Use this skill when an agent needs one workspace-scoped entrypoint for product, order, customer, or inventory reads plus product writes.
+metadata:
+  {
+    "openclaw":
+      {
+        "skillKey": "commerce_core_ops",
+        "aliases": ["commerce"],
+        "commandNamespace": "bustly ops",
+        "discoveryCommand": "bustly ops commerce help",
+        "defaultCommand": "bustly ops commerce providers",
+        "fallbackCommand": "node skills/ops/commerce_core_ops/scripts/run.js providers",
+        "commandExamples":
+          [
+            "bustly ops commerce providers",
+            "bustly ops commerce connections",
+            "bustly ops commerce read --platform shopify --entity orders --limit 50",
+            'bustly ops commerce write:product --platform shopify --op update --payload ''{"id":"gid://shopify/Product/123","title":"Bustly Commerce Tee"}''',
+          ],
+      },
+  }
 ---
 
 This skill is the unified commerce layer inside `bustly-skills`.
+
+## Preferred CLI contract
+
+Use the standardized entrypoint first:
+
+```bash
+bustly ops commerce <command>
+```
+
+Repo-local fallback when the `bustly` launcher is not on `PATH`:
+
+```bash
+node scripts/bustly-ops.js ops commerce <command>
+```
+
+Direct script fallback only when debugging the skill implementation itself:
+
+```bash
+node skills/ops/commerce_core_ops/scripts/run.js <command>
+```
 
 It focuses on two goals only:
 
 1. Data reads (product/order/customer/inventory)
 2. Product writes (import/create/update/delete/inventory adjust)
-
-Use the standalone Node entrypoint directly:
-`node skills/commerce_core_ops/scripts/run.js ...`
 
 ## Architecture
 
@@ -50,38 +86,40 @@ The CLI does this automatically (unless explicit debug bypass flags are used).
 
 ## Command Map
 
+### Discovery / Core
+
+```bash
+bustly ops commerce help
+bustly ops commerce providers
+bustly ops commerce connections
+bustly ops commerce auth
+```
+
 ### Read
 
 ```bash
-node skills/commerce_core_ops/scripts/run.js providers
-node skills/commerce_core_ops/scripts/run.js connections
-node skills/commerce_core_ops/scripts/run.js read shopify products --limit 20 --since 2026-01-01
-node skills/commerce_core_ops/scripts/run.js read shopify orders --limit 50 --since 2026-03-01
-node skills/commerce_core_ops/scripts/run.js read shopify orders --limit 50 --since 2026-03-01 --filter '{"since_field":"updated_at"}'
-node skills/commerce_core_ops/scripts/run.js read:entity --platform woocommerce --entity orders --limit 50 --since 2026-01-01
-node skills/commerce_core_ops/scripts/run.js read:entity --platform magento --entity order_items --order-id 100001234
+bustly ops commerce read shopify products --limit 20 --since 2026-01-01
+bustly ops commerce read shopify orders --limit 50 --since 2026-03-01
+bustly ops commerce read shopify orders --limit 50 --since 2026-03-01 --filter '{"since_field":"updated_at"}'
+bustly ops commerce read:entity --platform woocommerce --entity orders --limit 50 --since 2026-01-01
+bustly ops commerce read:entity --platform magento --entity order_items --order-id 100001234
 ```
 
 Shopify order reads default `since` filtering to `processed_at` (for historical import/mock windows).  
 If you need the old behavior, pass `filters.since_field=updated_at`.
 
-### Auth Check
-
-```bash
-node skills/commerce_core_ops/scripts/run.js auth
-```
-
 ### Product Write (all platforms)
 
 ```bash
-node skills/commerce_core_ops/scripts/run.js write:product --platform shopify --op update --payload '{"id":"gid://shopify/Product/123","title":"Bustly Commerce Tee"}' --function commerce-core-ops
-node skills/commerce_core_ops/scripts/run.js write:product --platform bigcommerce --op create --payload '{"name":"Sample","sku":"sample-1","price":19.99}' --function commerce-core-ops
-node skills/commerce_core_ops/scripts/run.js write:product --platform woocommerce --op update --payload '{"id":"385","name":"New Name"}' --function commerce-core-ops
-node skills/commerce_core_ops/scripts/run.js write:product --platform magento --op inventory_adjust --payload '{"sku":"sample-1","delta":5}' --function commerce-core-ops
+bustly ops commerce write:product --platform shopify --op update --payload '{"id":"gid://shopify/Product/123","title":"Bustly Commerce Tee"}' --function commerce-core-ops
+bustly ops commerce write:product --platform bigcommerce --op create --payload '{"name":"Sample","sku":"sample-1","price":19.99}' --function commerce-core-ops
+bustly ops commerce write:product --platform woocommerce --op update --payload '{"id":"385","name":"New Name"}' --function commerce-core-ops
+bustly ops commerce write:product --platform magento --op inventory_adjust --payload '{"sku":"sample-1","delta":5}' --function commerce-core-ops
 ```
 
 ## References
 
+- `README.md` - local usage and environment notes
 - `references/contracts.md` - direct product write API contract
 - `references/edge-function-commerce-core-ops.ts` - secure direct read/write edge function (JWT + workspace + Nango-backed token)
-- `scripts/run.js` - unified CLI implementation
+- `scripts/run.js` - skill implementation entrypoint behind `bustly ops commerce ...`
