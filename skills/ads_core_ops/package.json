@@ -1,0 +1,20 @@
+{
+  "name": "bustly-ads-core-ops",
+  "version": "1.0.0",
+  "description": "Unified advertising operations for Klaviyo, Google Ads, and Meta Ads",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node scripts/run.js",
+    "klaviyo": "node scripts/run.js klaviyo",
+    "google-ads": "node scripts/run.js google-ads",
+    "meta-ads": "node scripts/run.js meta-ads"
+  },
+  "keywords": [
+    "klaviyo",
+    "google-ads",
+    "meta-ads",
+    "advertising",
+    "marketing"
+  ]
+}
