@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -173,61 +173,33 @@ function escapePosixSingleQuoted(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function resolveExecutableBinary(binary: string, params: {
+function resolveRuntimeScriptPath(params: {
+  packageName: string;
   resourcesPath: string;
   appPath?: string;
+  fallbackScriptPath?: string;
 }): string | null {
-  const executableName = process.platform === "win32" ? `${binary}.cmd` : binary;
-  const candidateDirs = [
-    resolve(params.resourcesPath, "node_modules", ".bin"),
-    resolve(params.resourcesPath, "openclaw", "node_modules", ".bin"),
-    params.appPath ? resolve(params.appPath, "node_modules", ".bin") : "",
-    params.appPath ? resolve(params.appPath, "..", "resources", "openclaw", "node_modules", ".bin") : "",
-    resolve(process.cwd(), "node_modules", ".bin"),
-    resolve(process.cwd(), "resources", "openclaw", "node_modules", ".bin"),
-    resolve(process.cwd(), "..", "resources", "openclaw", "node_modules", ".bin"),
-    resolve(process.cwd(), "..", "bustly-skills", "node_modules", ".bin"),
-  ].filter((candidate) => candidate && candidate.trim().length > 0);
-
-  const shellResolved: Array<string | null> = [];
-  try {
-    const which = spawnSync("/usr/bin/which", [binary], { encoding: "utf-8" });
-    shellResolved.push(which.stdout?.trim() || null);
-  } catch {
-    // ignore
-  }
-
-  try {
-    const shell = process.env.SHELL?.trim() || "/bin/zsh";
-    const resolved = spawnSync(shell, ["-lc", `command -v ${binary}`], { encoding: "utf-8" });
-    shellResolved.push(resolved.stdout?.trim() || null);
-  } catch {
-    // ignore
-  }
-
-  const candidates = uniqueExistingPaths([
-    ...candidateDirs.map((dir) => resolve(dir, executableName)),
-    ...shellResolved,
-  ]);
-  return candidates[0] ?? null;
-}
-
-function resolveRuntimePackageScript(packageName: string, params: {
-  resourcesPath: string;
-  appPath?: string;
-}): string | null {
-  const packageParts = packageName.split("/").filter(Boolean);
+  const packageParts = params.packageName.split("/").filter(Boolean);
   const candidateRoots = [
     resolve(params.resourcesPath, "node_modules"),
     resolve(params.resourcesPath, "openclaw", "node_modules"),
     params.appPath ? resolve(params.appPath, "node_modules") : "",
-    params.appPath ? resolve(params.appPath, "..", "resources", "openclaw", "node_modules") : "",
     resolve(process.cwd(), "node_modules"),
-    resolve(process.cwd(), "resources", "openclaw", "node_modules"),
-    resolve(process.cwd(), "..", "resources", "openclaw", "node_modules"),
+    resolve(process.cwd(), "..", "bustly-skills", "skills"),
+    resolve(__dirname, "../../../../../../bustly-skills/skills"),
   ].filter((candidate) => candidate && candidate.trim().length > 0);
 
-  const candidates = candidateRoots.map((root) => resolve(root, ...packageParts, "scripts", "run.js"));
+  const candidates: string[] = [];
+  for (const root of candidateRoots) {
+    if (root.endsWith("/skills") || root.endsWith("\\skills")) {
+      if (params.fallbackScriptPath) {
+        candidates.push(resolve(root, params.fallbackScriptPath));
+      }
+      continue;
+    }
+    candidates.push(resolve(root, ...packageParts, "scripts", "run.js"));
+  }
+
   for (const candidate of candidates) {
     if (existsSync(candidate)) {
       return candidate;
@@ -254,34 +226,16 @@ function writeCommandShim(params: {
   chmodSync(params.shimPath, 0o755);
 }
 
-function removeCommandShims(paths: string[]): void {
-  for (const shimPath of paths) {
-    try {
-      if (existsSync(shimPath)) {
-        rmSync(shimPath, { force: true });
-      }
-    } catch {
-      // best effort cleanup
-    }
-  }
-}
-
 function writeBustlyDispatcher(params: {
   shimDir: string;
   commerceShimPath: string | null;
   adsShimPath: string | null;
-  minimaxTtsShimPath: string | null;
-  nanoBananaShimPath: string | null;
-  sourceProductShimPath: string | null;
 }): void {
   const bustlyShimPath = resolve(params.shimDir, process.platform === "win32" ? "bustly.cmd" : "bustly");
 
   if (process.platform === "win32") {
     const commerceCmd = params.commerceShimPath ? `"${params.commerceShimPath}"` : "";
     const adsCmd = params.adsShimPath ? `"${params.adsShimPath}"` : "";
-    const minimaxTtsCmd = params.minimaxTtsShimPath ? `"${params.minimaxTtsShimPath}"` : "";
-    const nanoBananaCmd = params.nanoBananaShimPath ? `"${params.nanoBananaShimPath}"` : "";
-    const sourceProductCmd = params.sourceProductShimPath ? `"${params.sourceProductShimPath}"` : "";
     const content = `@echo off
 setlocal
 set "_skill=%~1"
@@ -315,51 +269,6 @@ if /I "%_skill%"=="ads_core_ops" (
   ${adsCmd ? `call ${adsCmd} %*` : 'echo Ads runtime not available 1>&2 & exit /b 1'}
   exit /b %errorlevel%
 )
-if /I "%_skill%"=="minimax-tts" (
-  shift
-  ${minimaxTtsCmd ? `call ${minimaxTtsCmd} %*` : 'echo MiniMax TTS runtime not available 1>&2 & exit /b 1'}
-  exit /b %errorlevel%
-)
-if /I "%_skill%"=="minimax_tts" (
-  shift
-  ${minimaxTtsCmd ? `call ${minimaxTtsCmd} %*` : 'echo MiniMax TTS runtime not available 1>&2 & exit /b 1'}
-  exit /b %errorlevel%
-)
-if /I "%_skill%"=="tts" (
-  shift
-  ${minimaxTtsCmd ? `call ${minimaxTtsCmd} %*` : 'echo MiniMax TTS runtime not available 1>&2 & exit /b 1'}
-  exit /b %errorlevel%
-)
-if /I "%_skill%"=="nano-banana-pro" (
-  shift
-  ${nanoBananaCmd ? `call ${nanoBananaCmd} %*` : 'echo Nano Banana runtime not available 1>&2 & exit /b 1'}
-  exit /b %errorlevel%
-)
-if /I "%_skill%"=="nano_banana_pro" (
-  shift
-  ${nanoBananaCmd ? `call ${nanoBananaCmd} %*` : 'echo Nano Banana runtime not available 1>&2 & exit /b 1'}
-  exit /b %errorlevel%
-)
-if /I "%_skill%"=="nano-banana" (
-  shift
-  ${nanoBananaCmd ? `call ${nanoBananaCmd} %*` : 'echo Nano Banana runtime not available 1>&2 & exit /b 1'}
-  exit /b %errorlevel%
-)
-if /I "%_skill%"=="source-product" (
-  shift
-  ${sourceProductCmd ? `call ${sourceProductCmd} %*` : 'echo Source Product runtime not available 1>&2 & exit /b 1'}
-  exit /b %errorlevel%
-)
-if /I "%_skill%"=="source_product" (
-  shift
-  ${sourceProductCmd ? `call ${sourceProductCmd} %*` : 'echo Source Product runtime not available 1>&2 & exit /b 1'}
-  exit /b %errorlevel%
-)
-if /I "%_skill%"=="source" (
-  shift
-  ${sourceProductCmd ? `call ${sourceProductCmd} %*` : 'echo Source Product runtime not available 1>&2 & exit /b 1'}
-  exit /b %errorlevel%
-)
 
 echo Unknown skill: %_skill% 1>&2
 exit /b 1
@@ -367,9 +276,6 @@ exit /b 1
 :list
 echo commerce\tcommerce_core_ops\tbustly commerce providers
 echo ads\tads_core_ops\tbustly ads platforms
-echo minimax-tts\tminimax_tts\tbustly minimax-tts --help
-echo nano-banana-pro\tnano_banana_pro\tbustly nano-banana-pro --help
-echo source-product\tsource_product\tbustly source-product help
 exit /b 0
 
 :help
@@ -382,9 +288,6 @@ echo.
 echo Skills:
 echo   - commerce ^(commerce_core_ops^)
 echo   - ads ^(ads_core_ops^)
-echo   - minimax-tts ^(minimax_tts^)
-echo   - nano-banana-pro ^(nano_banana_pro^)
-echo   - source-product ^(source_product^)
 exit /b 0
 `;
     writeFileSync(bustlyShimPath, content, "utf-8");
@@ -408,9 +311,6 @@ Usage:
 Skills:
   - commerce (commerce_core_ops)
   - ads (ads_core_ops)
-  - minimax-tts (minimax_tts)
-  - nano-banana-pro (nano_banana_pro)
-  - source-product (source_product)
 EOF
   exit 0
 fi
@@ -418,9 +318,6 @@ fi
 if [ "$skill" = "list" ]; then
   printf '%s\\n' "commerce\tcommerce_core_ops\tbustly commerce providers"
   printf '%s\\n' "ads\tads_core_ops\tbustly ads platforms"
-  printf '%s\\n' "minimax-tts\tminimax_tts\tbustly minimax-tts --help"
-  printf '%s\\n' "nano-banana-pro\tnano_banana_pro\tbustly nano-banana-pro --help"
-  printf '%s\\n' "source-product\tsource_product\tbustly source-product help"
   exit 0
 fi
 
@@ -431,15 +328,6 @@ case "$skill" in
     ;;
   ads|ads_core_ops)
     ${params.adsShimPath ? `exec ${escapePosixSingleQuoted(params.adsShimPath)} "$@"` : 'echo "Ads runtime not available" >&2; exit 1'}
-    ;;
-  minimax-tts|minimax_tts|tts)
-    ${params.minimaxTtsShimPath ? `exec ${escapePosixSingleQuoted(params.minimaxTtsShimPath)} "$@"` : 'echo "MiniMax TTS runtime not available" >&2; exit 1'}
-    ;;
-  nano-banana-pro|nano_banana_pro|nano-banana)
-    ${params.nanoBananaShimPath ? `exec ${escapePosixSingleQuoted(params.nanoBananaShimPath)} "$@"` : 'echo "Nano Banana runtime not available" >&2; exit 1'}
-    ;;
-  source-product|source_product|source)
-    ${params.sourceProductShimPath ? `exec ${escapePosixSingleQuoted(params.sourceProductShimPath)} "$@"` : 'echo "Source Product runtime not available" >&2; exit 1'}
     ;;
   *)
     echo "Unknown skill: $skill" >&2
@@ -480,203 +368,63 @@ export function ensureBundledOpenClawShim(
     chmodSync(shimPath, 0o755);
   }
 
+  const runtimeNodePath = invocation.nodePath ?? resolveNodeBinary({ includeBundled: options?.includeBundledNode ?? true });
   const resourcesPath = options?.resourcesPath || process.resourcesPath;
   const appPath = options?.appPath;
-  const runtimeNodePath = invocation.nodePath ?? resolveNodeBinary({ includeBundled: options?.includeBundledNode ?? true });
-  const commerceBinary = resolveExecutableBinary("bustly-commerce", { resourcesPath, appPath });
-  const adsBinary = resolveExecutableBinary("bustly-ads", { resourcesPath, appPath });
-  const minimaxTtsBinary = resolveExecutableBinary("bustly-minimax-tts", { resourcesPath, appPath });
-  const nanoBananaBinary = resolveExecutableBinary("bustly-nano-banana-pro", { resourcesPath, appPath });
-  const sourceProductBinary = resolveExecutableBinary("bustly-source-product", { resourcesPath, appPath });
-  const commerceScript = runtimeNodePath
-    ? resolveRuntimePackageScript("@bustly/skill-runtime-commerce-core-ops", { resourcesPath, appPath })
-    : null;
-  const adsScript = runtimeNodePath
-    ? resolveRuntimePackageScript("@bustly/skill-runtime-ads-core-ops", { resourcesPath, appPath })
-    : null;
-  const minimaxTtsScript = runtimeNodePath
-    ? resolveRuntimePackageScript("@bustly/skill-runtime-minimax-tts", { resourcesPath, appPath })
-    : null;
-  const nanoBananaScript = runtimeNodePath
-    ? resolveRuntimePackageScript("@bustly/skill-runtime-nano-banana-pro", { resourcesPath, appPath })
-    : null;
-  const sourceProductScript = runtimeNodePath
-    ? resolveRuntimePackageScript("@bustly/skill-runtime-source-product", { resourcesPath, appPath })
-    : null;
 
-  const commerceCommand = commerceBinary
-    ? { command: commerceBinary, args: [] as string[] }
-    : runtimeNodePath && commerceScript
-      ? { command: runtimeNodePath, args: [commerceScript] as string[] }
-      : null;
-  const adsCommand = adsBinary
-    ? { command: adsBinary, args: [] as string[] }
-    : runtimeNodePath && adsScript
-      ? { command: runtimeNodePath, args: [adsScript] as string[] }
-      : null;
-  const minimaxTtsCommand = minimaxTtsBinary
-    ? { command: minimaxTtsBinary, args: [] as string[] }
-    : runtimeNodePath && minimaxTtsScript
-      ? { command: runtimeNodePath, args: [minimaxTtsScript] as string[] }
-      : null;
-  const nanoBananaCommand = nanoBananaBinary
-    ? { command: nanoBananaBinary, args: [] as string[] }
-    : runtimeNodePath && nanoBananaScript
-      ? { command: runtimeNodePath, args: [nanoBananaScript] as string[] }
-      : null;
-  const sourceProductCommand = sourceProductBinary
-    ? { command: sourceProductBinary, args: [] as string[] }
-    : runtimeNodePath && sourceProductScript
-      ? { command: runtimeNodePath, args: [sourceProductScript] as string[] }
-      : null;
+  if (runtimeNodePath) {
+    const commerceRuntimeScript = resolveRuntimeScriptPath({
+      packageName: "@bustly/skill-runtime-commerce-core-ops",
+      resourcesPath,
+      appPath,
+      fallbackScriptPath: "commerce_core_ops/scripts/run.js",
+    });
+    const adsRuntimeScript = resolveRuntimeScriptPath({
+      packageName: "@bustly/skill-runtime-ads-core-ops",
+      resourcesPath,
+      appPath,
+      fallbackScriptPath: "ads_core_ops/scripts/run.js",
+    });
 
-  const commerceShimPath = commerceCommand
-    ? resolve(shimDir, process.platform === "win32" ? "bustly-commerce.cmd" : "bustly-commerce")
-    : null;
-  const commerceAliasShimPath = resolve(
-    shimDir,
-    process.platform === "win32" ? "bustly-skill-commerce.cmd" : "bustly-skill-commerce",
-  );
-  if (commerceShimPath && commerceCommand) {
-    writeCommandShim({
-      shimPath: commerceShimPath,
-      command: commerceCommand.command,
-      args: commerceCommand.args,
-    });
-    writeCommandShim({
-      shimPath: commerceAliasShimPath,
-      command: commerceCommand.command,
-      args: commerceCommand.args,
-    });
-  } else {
-    removeCommandShims([
-      resolve(shimDir, process.platform === "win32" ? "bustly-commerce.cmd" : "bustly-commerce"),
-      commerceAliasShimPath,
-    ]);
-  }
+    const commerceShimPath = commerceRuntimeScript
+      ? resolve(shimDir, process.platform === "win32" ? "bustly-commerce.cmd" : "bustly-commerce")
+      : null;
+    if (commerceShimPath && commerceRuntimeScript) {
+      writeCommandShim({
+        shimPath: commerceShimPath,
+        command: runtimeNodePath,
+        args: [commerceRuntimeScript],
+      });
+      writeCommandShim({
+        shimPath: resolve(shimDir, process.platform === "win32" ? "bustly-skill-commerce.cmd" : "bustly-skill-commerce"),
+        command: runtimeNodePath,
+        args: [commerceRuntimeScript],
+      });
+    }
 
-  const adsShimPath = adsCommand
-    ? resolve(shimDir, process.platform === "win32" ? "bustly-ads.cmd" : "bustly-ads")
-    : null;
-  const adsAliasShimPath = resolve(
-    shimDir,
-    process.platform === "win32" ? "bustly-skill-ads.cmd" : "bustly-skill-ads",
-  );
-  if (adsShimPath && adsCommand) {
-    writeCommandShim({
-      shimPath: adsShimPath,
-      command: adsCommand.command,
-      args: adsCommand.args,
-    });
-    writeCommandShim({
-      shimPath: adsAliasShimPath,
-      command: adsCommand.command,
-      args: adsCommand.args,
-    });
-  } else {
-    removeCommandShims([
-      resolve(shimDir, process.platform === "win32" ? "bustly-ads.cmd" : "bustly-ads"),
-      adsAliasShimPath,
-    ]);
-  }
+    const adsShimPath = adsRuntimeScript
+      ? resolve(shimDir, process.platform === "win32" ? "bustly-ads.cmd" : "bustly-ads")
+      : null;
+    if (adsShimPath && adsRuntimeScript) {
+      writeCommandShim({
+        shimPath: adsShimPath,
+        command: runtimeNodePath,
+        args: [adsRuntimeScript],
+      });
+      writeCommandShim({
+        shimPath: resolve(shimDir, process.platform === "win32" ? "bustly-skill-ads.cmd" : "bustly-skill-ads"),
+        command: runtimeNodePath,
+        args: [adsRuntimeScript],
+      });
+    }
 
-  const minimaxTtsShimPath = minimaxTtsCommand
-    ? resolve(shimDir, process.platform === "win32" ? "bustly-minimax-tts.cmd" : "bustly-minimax-tts")
-    : null;
-  const minimaxAliasShimPath = resolve(
-    shimDir,
-    process.platform === "win32" ? "bustly-skill-minimax-tts.cmd" : "bustly-skill-minimax-tts",
-  );
-  if (minimaxTtsShimPath && minimaxTtsCommand) {
-    writeCommandShim({
-      shimPath: minimaxTtsShimPath,
-      command: minimaxTtsCommand.command,
-      args: minimaxTtsCommand.args,
-    });
-    writeCommandShim({
-      shimPath: minimaxAliasShimPath,
-      command: minimaxTtsCommand.command,
-      args: minimaxTtsCommand.args,
-    });
-  } else {
-    removeCommandShims([
-      resolve(
+    if (commerceShimPath || adsShimPath) {
+      writeBustlyDispatcher({
         shimDir,
-        process.platform === "win32" ? "bustly-minimax-tts.cmd" : "bustly-minimax-tts",
-      ),
-      minimaxAliasShimPath,
-    ]);
-  }
-
-  const nanoBananaShimPath = nanoBananaCommand
-    ? resolve(shimDir, process.platform === "win32" ? "bustly-nano-banana-pro.cmd" : "bustly-nano-banana-pro")
-    : null;
-  const nanoBananaAliasShimPath = resolve(
-    shimDir,
-    process.platform === "win32"
-      ? "bustly-skill-nano-banana-pro.cmd"
-      : "bustly-skill-nano-banana-pro",
-  );
-  if (nanoBananaShimPath && nanoBananaCommand) {
-    writeCommandShim({
-      shimPath: nanoBananaShimPath,
-      command: nanoBananaCommand.command,
-      args: nanoBananaCommand.args,
-    });
-    writeCommandShim({
-      shimPath: nanoBananaAliasShimPath,
-      command: nanoBananaCommand.command,
-      args: nanoBananaCommand.args,
-    });
-  } else {
-    removeCommandShims([
-      resolve(
-        shimDir,
-        process.platform === "win32" ? "bustly-nano-banana-pro.cmd" : "bustly-nano-banana-pro",
-      ),
-      nanoBananaAliasShimPath,
-    ]);
-  }
-
-  const sourceProductShimPath = sourceProductCommand
-    ? resolve(shimDir, process.platform === "win32" ? "bustly-source-product.cmd" : "bustly-source-product")
-    : null;
-  const sourceAliasShimPath = resolve(
-    shimDir,
-    process.platform === "win32"
-      ? "bustly-skill-source-product.cmd"
-      : "bustly-skill-source-product",
-  );
-  if (sourceProductShimPath && sourceProductCommand) {
-    writeCommandShim({
-      shimPath: sourceProductShimPath,
-      command: sourceProductCommand.command,
-      args: sourceProductCommand.args,
-    });
-    writeCommandShim({
-      shimPath: sourceAliasShimPath,
-      command: sourceProductCommand.command,
-      args: sourceProductCommand.args,
-    });
-  } else {
-    removeCommandShims([
-      resolve(
-        shimDir,
-        process.platform === "win32" ? "bustly-source-product.cmd" : "bustly-source-product",
-      ),
-      sourceAliasShimPath,
-    ]);
-  }
-
-  if (commerceShimPath || adsShimPath || minimaxTtsShimPath || nanoBananaShimPath || sourceProductShimPath) {
-    writeBustlyDispatcher({
-      shimDir,
-      commerceShimPath,
-      adsShimPath,
-      minimaxTtsShimPath,
-      nanoBananaShimPath,
-      sourceProductShimPath,
-    });
+        commerceShimPath,
+        adsShimPath,
+      });
+    }
   }
 
   return { shimDir, shimPath };
