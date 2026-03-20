@@ -33,7 +33,6 @@ import {
 import {
   ensureBundledOpenClawShim,
   resolveBundledBustlyBinDir,
-  resolveBundledBustlySkillsDir,
   resolveCliInvocation,
   resolveOpenClawCliPath,
 } from "./cli-utils.js";
@@ -1104,11 +1103,7 @@ function buildElectronCliEnv(params?: {
   ]);
   const bunInstall = process.env.BUN_INSTALL?.trim() || resolve(homeDir, ".bun");
   const homebrewPrefix = process.env.HOMEBREW_PREFIX?.trim() || "/opt/homebrew";
-  const bundledSkillsDir =
-    resolveBundledBustlySkillsDir({
-      resourcesPath,
-      appPath,
-    }) || resolve(resourcesPath, "skills");
+  const bundledSkillsDir = resolve(resourcesPath, "skills");
   const bundledPluginsDir = ensureBundledExtensionsDir({
     resourcesPath,
     appPath,
