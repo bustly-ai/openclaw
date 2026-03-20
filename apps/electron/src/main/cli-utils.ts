@@ -28,6 +28,11 @@ type BundledCliShimOptions = {
   appPath?: string;
 };
 
+type BundledBustlyPathsOptions = {
+  resourcesPath?: string;
+  appPath?: string;
+};
+
 function uniqueExistingPaths(candidates: Array<string | null | undefined>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -63,6 +68,56 @@ function getOpenClawCliCandidates(): string[] {
     resolve(__dirname, "../../../dist/cli.js"),
     resolve(__dirname, "../../dist/cli.js"),
   ];
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function getBundledBustlyRootCandidates(options?: BundledBustlyPathsOptions): string[] {
+  const resourcesPath = options?.resourcesPath || process.resourcesPath;
+  const appPath = options?.appPath;
+
+  return uniqueStrings([
+    resolve(resourcesPath, "bustly-skills"),
+    appPath ? resolve(appPath, "resources", "bustly-skills") : "",
+    resolve(process.cwd(), "resources", "bustly-skills"),
+    resolve(process.cwd(), "..", "..", "bustly-skills"),
+    resolve(__dirname, "../../../resources/bustly-skills"),
+    resolve(__dirname, "../../../../bustly-skills"),
+    resolve(__dirname, "../../../../../bustly-skills"),
+  ]);
+}
+
+export function resolveBundledBustlyBinDir(options?: BundledBustlyPathsOptions): string | null {
+  for (const root of getBundledBustlyRootCandidates(options)) {
+    const candidate = resolve(root, "bin");
+    if (existsSync(resolve(candidate, process.platform === "win32" ? "bustly.cmd" : "bustly"))
+      || existsSync(resolve(candidate, "bustly"))) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+export function resolveBundledBustlySkillsDir(options?: BundledBustlyPathsOptions): string | null {
+  for (const root of getBundledBustlyRootCandidates(options)) {
+    const candidate = resolve(root, "skills");
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 export function resolveOpenClawCliPath(logger?: CliLogger): string | null {
@@ -180,13 +235,20 @@ function resolveRuntimeScriptPath(params: {
   fallbackScriptPath?: string;
 }): string | null {
   const packageParts = params.packageName.split("/").filter(Boolean);
+  const bundledBustlySkillsDir = resolveBundledBustlySkillsDir({
+    resourcesPath: params.resourcesPath,
+    appPath: params.appPath,
+  });
   const candidateRoots = [
     resolve(params.resourcesPath, "node_modules"),
     resolve(params.resourcesPath, "openclaw", "node_modules"),
     params.appPath ? resolve(params.appPath, "node_modules") : "",
+    params.appPath ? resolve(params.appPath, "resources", "openclaw", "node_modules") : "",
     resolve(process.cwd(), "node_modules"),
-    resolve(process.cwd(), "..", "bustly-skills", "skills"),
-    resolve(__dirname, "../../../../../../bustly-skills/skills"),
+    resolve(process.cwd(), "resources", "openclaw", "node_modules"),
+    bundledBustlySkillsDir,
+    resolve(process.cwd(), "..", "..", "bustly-skills", "skills"),
+    resolve(__dirname, "../../../../../bustly-skills/skills"),
   ].filter((candidate) => candidate && candidate.trim().length > 0);
 
   const candidates: string[] = [];
