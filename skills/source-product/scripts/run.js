@@ -283,13 +283,13 @@ function displayRawProductInfo(result, showRawResponse) {
 
 function printHelp() {
   console.log(`Usage:
-  node skills/source-product/scripts/run.js get:accounts
-  node skills/source-product/scripts/run.js test:token
-  node skills/source-product/scripts/run.js search:text "<query>" [--page <n>] [--pageSize <n>] [--sort <v>] [--category <id>] [--country <code>]
-  node skills/source-product/scripts/run.js search:image "<image_url_or_path>" [--ship-to <code>] [--sort-type <v>] [--sort-order <v>] [--search-type <v>]
-  node skills/source-product/scripts/run.js search:image --base64 "<base64>"
-  node skills/source-product/scripts/run.js get:product --url "<url>" [--country <code>] [--currency <code>] [--language <code>] [--raw-response]
-  node skills/source-product/scripts/run.js get:product --product-id "<id>" [--country <code>] [--currency <code>] [--language <code>] [--raw-response]
+  bustly-source-product get:accounts
+  bustly-source-product test:token
+  bustly-source-product search:text "<query>" [--page <n>] [--pageSize <n>] [--sort <v>] [--category <id>] [--country <code>]
+  bustly-source-product search:image "<image_url_or_path>" [--ship-to <code>] [--sort-type <v>] [--sort-order <v>] [--search-type <v>]
+  bustly-source-product search:image --base64 "<base64>"
+  bustly-source-product get:product --url "<url>" [--country <code>] [--currency <code>] [--language <code>] [--raw-response]
+  bustly-source-product get:product --product-id "<id>" [--country <code>] [--currency <code>] [--language <code>] [--raw-response]
 `);
 }
 

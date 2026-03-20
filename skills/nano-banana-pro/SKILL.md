@@ -1,70 +1,31 @@
 ---
 name: nano-banana-pro
-description: Generate or edit images via Bustly Model Gateway using the image.advanced route (backed by Gemini image models). Use this skill whenever users ask for "nano banana", "nano banana pro", image generation, image editing, style transfer, or photo remix tasks.
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "🍌",
-        "requires": { "bins": ["uv"] },
-        "install":
-          [
-            {
-              "id": "uv-brew",
-              "kind": "brew",
-              "formula": "uv",
-              "bins": ["uv"],
-              "label": "Install uv (brew)",
-            },
-          ],
-      },
-  }
+description: Generate and edit images via Bustly gateway image route. Use this skill whenever users ask for nano banana, image generation, image editing, style transfer, or multi-image composition.
+metadata: {"openclaw":{"skillKey":"nano-banana-pro","aliases":["nano-banana","nano_banana_pro"],"commandNamespace":"bustly","discoveryCommand":"bustly-nano-banana-pro --help","defaultCommand":"bustly-nano-banana-pro --prompt \"A cozy coffee shop interior\" --filename cozy-shop.png","commandExamples":["bustly-nano-banana-pro --prompt \"A cinematic portrait of a robot chef\" --filename robot-chef.png","bustly-nano-banana-pro --prompt \"Turn this into anime style\" --filename anime.png --input-image input.png","bustly-nano-banana-pro --prompt \"Combine these references\" --filename composite.png --input-image img1.png --input-image img2.png"],"runtimePackage":"@bustly/skill-runtime-nano-banana-pro","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-nano-banana-pro@^0.1.0","runtimeExecutable":"bustly-nano-banana-pro","runtimeNotes":["Preferred execution: bustly-nano-banana-pro ...","No repo-local script fallback."]},"requires":{"bins":["uv"]},"install":[{"id":"uv-brew","kind":"brew","formula":"uv","bins":["uv"],"label":"Install uv (brew)"}]}
 ---
 
-# Nano Banana Pro (Bustly Gateway Image Route)
+## Command Contract
 
-Use the bundled script to generate or edit images.
-
-Trigger guidance
-
-- If user asks for `nano banana`, `nano banana pro`, image generation, image edit, or style transfer, use this skill directly.
-- Do not redirect to `find_skills` for these requests.
-- Prefer running the script first, then report output path/results.
-
-Generate
+Always use runtime command:
 
 ```bash
-uv run {baseDir}/scripts/generate_image.py --prompt "your image description" --filename "output.png" --resolution 1K
+bustly-nano-banana-pro --prompt "<text>" --filename <output.png> [options]
 ```
 
-Edit (single image)
+Do not call `{baseDir}/scripts/*.py` directly from this skill contract.
+
+## Core Options
+
+- `--input-image` (repeatable)
+- `--resolution` (`1K`, `2K`, `4K`)
+- `--model`
+- `--jwt`
+- `--workspace-id`
+
+## Examples
 
 ```bash
-uv run {baseDir}/scripts/generate_image.py --prompt "edit instructions" --filename "output.png" -i "/path/in.png" --resolution 2K
+bustly-nano-banana-pro --prompt "A futuristic city at dusk" --filename city.png
+bustly-nano-banana-pro --prompt "Turn this into anime style" --filename out.png --input-image input.png
+bustly-nano-banana-pro --prompt "Combine these references" --filename composite.png --input-image img1.png --input-image img2.png
 ```
-
-Multi-image composition (up to 14 images)
-
-```bash
-uv run {baseDir}/scripts/generate_image.py --prompt "combine these into one scene" --filename "output.png" -i img1.png -i img2.png -i img3.png
-```
-
-Auth + routing
-
-- Reads `~/.bustly/bustlyOauth.json` automatically:
-  - `user.userAccessToken` (JWT)
-  - `user.workspaceId`
-- Calls Bustly gateway: `POST /api/v1/chat/completions`
-- Uses `model=image.advanced` as the default route key.
-- Gateway base URL:
-  - `~/.bustly/openclaw.json` -> `models.providers.bustly.baseUrl`
-  - fallback: `https://gw.bustly.ai`
-
-Notes
-
-- Resolutions: `1K` (default), `2K`, `4K` (sent as prompt preference).
-- Input images are auto-compressed/resized before upload to reduce `413 Request Entity Too Large` failures.
-- Use timestamps in filenames: `yyyy-mm-dd-hh-mm-ss-name.png`.
-- The script prints a `MEDIA:` line for OpenClaw to auto-attach on supported chat providers.
-- Do not read the image back; report the saved path only.
-- On failure, return the concrete gateway error and one actionable next step. Do not suggest unrelated third-party apps.
