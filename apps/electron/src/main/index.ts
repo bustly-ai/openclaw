@@ -32,6 +32,7 @@ import {
 } from "./auto-init.js";
 import {
   ensureBundledOpenClawShim,
+  resolveBundledBustlyBinDir,
   resolveCliInvocation,
   resolveOpenClawCliPath,
 } from "./cli-utils.js";
@@ -884,6 +885,16 @@ function prependPathEntry(pathValue: string, entry: string): string {
   return parts.join(delimiter);
 }
 
+function prependPathEntries(pathValue: string, entries: Array<string | null | undefined>): string {
+  return entries.reduceRight((currentPath, entry) => {
+    const normalized = entry?.trim();
+    if (!normalized) {
+      return currentPath;
+    }
+    return prependPathEntry(currentPath, normalized);
+  }, pathValue);
+}
+
 function getPathDelimiter(): string {
   return process.platform === "win32" ? ";" : ":";
 }
@@ -1082,7 +1093,14 @@ function buildElectronCliEnv(params?: {
       appPath,
     })
     : null;
-  const effectivePath = bundledCliShim ? prependPathEntry(fixedPath, bundledCliShim.shimDir) : fixedPath;
+  const bundledBustlyBinDir = resolveBundledBustlyBinDir({
+    resourcesPath,
+    appPath,
+  });
+  const effectivePath = prependPathEntries(fixedPath, [
+    bundledBustlyBinDir,
+    bundledCliShim?.shimDir,
+  ]);
   const bunInstall = process.env.BUN_INSTALL?.trim() || resolve(homeDir, ".bun");
   const homebrewPrefix = process.env.HOMEBREW_PREFIX?.trim() || "/opt/homebrew";
   const bundledSkillsDir = resolve(resourcesPath, "skills");
@@ -1126,7 +1144,16 @@ function buildElectronCliEnv(params?: {
     COLORTERM: process.env.COLORTERM?.trim() || "truecolor",
     TERM_PROGRAM: process.env.TERM_PROGRAM?.trim() || "OpenClaw",
     NODE_PATH: effectiveNodePath,
-    ...(bundledCliShim ? { OPENCLAW_EXEC_PATH_PREPEND: bundledCliShim.shimDir } : {}),
+    ...(bundledCliShim || bundledBustlyBinDir
+      ? {
+        OPENCLAW_EXEC_PATH_PREPEND: [
+          bundledBustlyBinDir,
+          bundledCliShim?.shimDir,
+        ]
+          .filter((value) => Boolean(value && value.length > 0))
+          .join(getPathDelimiter()),
+      }
+      : {}),
     ...(typeof params?.oauthCallbackPort === "number"
       ? { OPENCLAW_OAUTH_CALLBACK_PORT: String(params.oauthCallbackPort) }
       : {}),
@@ -1578,7 +1605,14 @@ async function startGateway(): Promise<boolean> {
       resourcesPath,
       appPath,
     });
-    const effectivePath = bundledCliShim ? prependPathEntry(fixedPath, bundledCliShim.shimDir) : fixedPath;
+    const bundledBustlyBinDir = resolveBundledBustlyBinDir({
+      resourcesPath,
+      appPath,
+    });
+    const effectivePath = prependPathEntries(fixedPath, [
+      bundledBustlyBinDir,
+      bundledCliShim?.shimDir,
+    ]);
     const appNodeModules = resolve(appPath, "node_modules");
     const resourcesNodeModules = resolve(resourcesPath, "node_modules");
     const openclawNodeModules = resolve(resourcesPath, "openclaw", "node_modules");

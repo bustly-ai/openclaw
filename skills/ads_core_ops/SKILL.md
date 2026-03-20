@@ -1,67 +1,154 @@
 ---
 name: ads_core_ops
-description: Unified advertising runtime for Klaviyo, Google Ads, and Meta Ads. Use this skill for campaign/insight reads with strict workspace auth for gateway-backed platforms and local credential handling for Meta Ads.
-metadata: {"openclaw":{"skillKey":"ads_core_ops","aliases":["ads"],"commandNamespace":"bustly","discoveryCommand":"bustly-ads help","defaultCommand":"bustly-ads platforms","commandExamples":["bustly-ads platforms","bustly-ads status","bustly-ads auth","bustly-ads klaviyo campaigns --limit 20","bustly-ads google-ads customers","bustly-ads meta-ads insights --date-preset last_7d","bustly ads platforms","bustly ops ads platforms"],"runtimePackage":"@bustly/skill-runtime-ads-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-ads-core-ops@^0.1.0","runtimeExecutable":"bustly-ads","runtimeNotes":["Preferred execution: `bustly-ads ...` (direct runtime command).","Compatibility: `bustly ads ...` and `bustly ops ads ...` are still supported.","Desktop packaging should bundle runtime + shim commands so end users do not need local Node/npm setup."]}}
+description: Use the Bustly ads CLI to inspect auth, check connectivity, read entities, write supported entities, and invoke native provider APIs for Klaviyo and Google Ads.
+metadata:
+  {
+    "openclaw":
+      {
+        "requires": { "bins": ["bustly"] }
+      },
+  }
 ---
 
-## What This Skill Solves
+# Ads Core Ops
 
-- Unified ads entry for:
-  - Klaviyo
-  - Google Ads
-  - Meta Ads
-- Gateway-backed auth checks (Klaviyo/Google Ads):
-  - JWT validity
-  - workspace membership
-  - workspace active status
-  - workspace subscription active window
-- Direct mode for Meta Ads with local credentials.
+Use this skill when you need Bustly marketing and ads operations through the local CLI.
 
-## Platform Modes
+Supported platforms
 
-| Platform | Mode | Details |
-|----------|------|---------|
-| Klaviyo | Gateway | Route requests through the Supabase Edge Function. |
-| Google Ads | Gateway | Route requests through the Supabase Edge Function. |
-| Meta Ads | Direct | Use local credentials from the current machine. |
+- `klaviyo`
+- `google-ads`
 
-## Agent Operating Rules
-
-When user asks ad performance analysis:
-- Use `status` + platform-specific reads first.
-- Keep first query narrow (`--limit`, explicit fields), then deepen.
-- If gateway auth fails, return exact failing check and stop.
-- If Meta Ads credentials missing, guide user to `config` command and rerun.
-
-## Primary Commands (Direct-first)
+CLI shape
 
 ```bash
-# discovery / status
-bustly-ads help
-bustly-ads platforms
-bustly-ads status
-bustly-ads auth
-
-# gateway reads
-bustly-ads klaviyo profiles --limit 20
-bustly-ads klaviyo campaigns --limit 20
-bustly-ads google-ads customers
-bustly-ads google-ads campaigns --customer-id 1234567890 --limit 20
-
-# direct meta ads
-bustly-ads config set-meta-ads '{"accessToken":"xxx","adAccountId":"123456789"}'
-bustly-ads meta-ads campaigns
-bustly-ads meta-ads insights --date-preset last_7d
+bustly ops <platform> <command> [args...]
 ```
 
-Compatibility aliases (still valid):
-- `bustly ads ...`
-- `bustly ops ads ...`
+Auth context
 
-## Runtime Contract
+- Local auth state is loaded from `~/.bustly/bustlyOauth.json`
+- Required values include `supabase.url`, `supabase.anonKey`, `user.userAccessToken`, `user.workspaceId`, and `user.userId`
 
-The runtime package must keep:
-- stable JSON output for agent parsing
-- strict gateway auth validation
-- provider-specific adapters isolated by platform
-- machine-readable errors with actionable hints
+Available commands on every ads platform
+
+- `platforms`
+- `status`
+- `auth`
+- `read`
+- `write`
+- `invoke`
+
+Common flags
+
+- `--entity <entity>`
+- `--limit <n>`
+- `--filters '<json>'`
+- `--customer-id <customer-id>`
+- `--action <action>`
+- `--payload '<json>'`
+- `--method <GET|POST|PUT|PATCH|DELETE>`
+- `--path <relative-provider-path>`
+- `--query "<gaql>"` for Google Ads `read --entity search`
+- `--query '<json>'` for native `invoke` query params
+- `--headers '<json>'`
+- `--body '<json>'`
+
+Status
+
+```bash
+bustly ops klaviyo status
+bustly ops google-ads status
+```
+
+Auth
+
+```bash
+bustly ops klaviyo auth
+```
+
+Klaviyo
+
+Readable entities
+
+- `profiles`
+- `lists`
+- `segments`
+- `campaigns`
+- `flows`
+- `metrics`
+- `events`
+- `templates`
+
+Writable actions
+
+- `profiles`: `update`
+- `lists`: `update`
+- `segments`: `update`
+- `campaigns`: `update`
+- `flows`: `update`
+- `metrics`: `update`
+- `events`: `update`
+- `templates`: `update`
+
+Examples
+
+```bash
+bustly ops klaviyo help
+bustly ops klaviyo read --entity profiles --limit 20
+bustly ops klaviyo read --entity campaigns --filters '{"channel":"email"}'
+bustly ops klaviyo write --entity profiles --action update --payload '{"request":{"method":"GET","path":"/profiles/01KJVWSQK8Y7W1HHS919AJ7AG9"}}'
+bustly ops klaviyo invoke --method GET --path /profiles/ --query '{"page[size]":20}'
+```
+
+Google Ads
+
+Readable entities
+
+- `customers`
+- `campaigns`
+- `ad_groups`
+- `keywords`
+- `ads`
+- `search`
+
+Writable actions
+
+- `customers`: `update`
+- `campaigns`: `update`
+- `ad_groups`: `update`
+- `keywords`: `update`
+- `ads`: `update`
+- `search`: `update`
+
+Google Ads notes
+
+- Most entity reads require `--customer-id <customer-id>`
+- `search` additionally requires a GAQL query
+
+Examples
+
+```bash
+bustly ops google-ads help
+bustly ops google-ads read --entity customers
+bustly ops google-ads read --entity campaigns --customer-id 8922277297
+bustly ops google-ads read --entity search --customer-id 8922277297 --query "SELECT campaign.id, campaign.name FROM campaign LIMIT 10"
+bustly ops google-ads write --entity search --action update --payload '{"request":{"method":"POST","path":"/customers/8922277297/googleAds:search","body":{"query":"SELECT campaign.id FROM campaign LIMIT 1"}}}'
+bustly ops google-ads invoke --method POST --path /customers/8922277297/googleAds:search --body '{"query":"SELECT campaign.id FROM campaign LIMIT 10"}'
+```
+
+Platform notes
+
+- Klaviyo aliases: `klaviyo`
+- Google Ads aliases: `google-ads`, `googleads`
+- Both platforms route through `ads-core-ops`
+- `invoke` is the escape hatch for native provider-relative requests
+- `write` can be used with `payload.request` when a native request shape is required
+
+Recommended workflow
+
+1. Run `help` to inspect entities and writable actions.
+2. Run `status` to confirm the workspace is connected.
+3. Use `read` to verify the target object or discover IDs.
+4. Use `write` for supported entity actions.
+5. Use `invoke` for provider-native calls that are not covered by the high-level entity command.

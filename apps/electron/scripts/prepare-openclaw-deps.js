@@ -2,20 +2,27 @@ import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
+  realpathSync,
   rmSync,
   readdirSync,
+  symlinkSync,
+  unlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..", "..", "..");
 const targetDir = resolve(repoRoot, "apps/electron/resources/openclaw");
+const bustlySkillsTargetDir = resolve(repoRoot, "apps/electron/resources/bustly-skills");
 const stagingDir = mkdtempSync(resolve(tmpdir(), "openclaw-deps-"));
 const bustlySkillsRoot = resolve(repoRoot, "..", "bustly-skills");
 
 rmSync(targetDir, { recursive: true, force: true });
+rmSync(bustlySkillsTargetDir, { recursive: true, force: true });
 
 console.log("[prepare-openclaw-deps] Building root OpenClaw package artifacts.");
 const buildResult = spawnSync(
@@ -121,4 +128,104 @@ pruneDevDependencies();
 // Ensure any symlinks are copied as real files.
 // Otherwise they can point at the temp staging dir after it is removed.
 cpSync(stagingDir, targetDir, { recursive: true, dereference: true });
+
+const rewriteStagingSymlinks = () => {
+  const targetRoot = resolve(targetDir);
+  const targetRootReal = realpathSync.native(targetRoot);
+  const stagingPrefixes = [
+    resolve(stagingDir),
+    realpathSync.native(stagingDir),
+  ];
+
+  const mapTargetIntoBundle = (symlinkTarget) => {
+    for (const prefix of stagingPrefixes) {
+      if (symlinkTarget === prefix) {
+        return targetRootReal;
+      }
+      if (symlinkTarget.startsWith(`${prefix}/`)) {
+        return resolve(targetRootReal, symlinkTarget.slice(prefix.length + 1));
+      }
+    }
+    return null;
+  };
+
+  const visit = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = resolve(dir, entry.name);
+      const stat = lstatSync(fullPath);
+      if (stat.isSymbolicLink()) {
+        const originalTarget = readlinkSync(fullPath);
+        const mappedTarget = mapTargetIntoBundle(originalTarget);
+        if (!mappedTarget) {
+          continue;
+        }
+        const relativeTarget = relative(dirname(fullPath), mappedTarget) || ".";
+        unlinkSync(fullPath);
+        symlinkSync(relativeTarget, fullPath);
+        continue;
+      }
+      if (stat.isDirectory()) {
+        visit(fullPath);
+      }
+    }
+  };
+
+  visit(targetRoot);
+};
+
+const assertNoStagingSymlinksRemain = () => {
+  const stagingPrefixes = [
+    resolve(stagingDir),
+    realpathSync.native(stagingDir),
+  ];
+  const staleLinks = [];
+
+  const visit = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = resolve(dir, entry.name);
+      const stat = lstatSync(fullPath);
+      if (stat.isSymbolicLink()) {
+        const symlinkTarget = readlinkSync(fullPath);
+        if (stagingPrefixes.some((prefix) => symlinkTarget === prefix || symlinkTarget.startsWith(`${prefix}/`))) {
+          staleLinks.push(`${fullPath} -> ${symlinkTarget}`);
+        }
+        continue;
+      }
+      if (stat.isDirectory()) {
+        visit(fullPath);
+      }
+    }
+  };
+
+  visit(targetDir);
+  if (staleLinks.length > 0) {
+    console.error("[prepare-openclaw-deps] Found copied symlinks that still point at stagingDir.");
+    for (const link of staleLinks.slice(0, 20)) {
+      console.error(`  ${link}`);
+    }
+    process.exit(1);
+  }
+};
+
+rewriteStagingSymlinks();
+assertNoStagingSymlinksRemain();
+
+if (existsSync(bustlySkillsRoot)) {
+  console.log("[prepare-openclaw-deps] Copying bustly-skills bundle.");
+  cpSync(bustlySkillsRoot, bustlySkillsTargetDir, {
+    recursive: true,
+    dereference: true,
+    filter: (source) => {
+      const relative = source.slice(bustlySkillsRoot.length).replace(/^[/\\]/, "");
+      if (!relative) {
+        return true;
+      }
+      const firstSegment = relative.split(/[/\\]/)[0];
+      return ["README.md", "package.json", "bin", "scripts", "skills", "platforms"].includes(firstSegment);
+    },
+  });
+} else {
+  console.warn("[prepare-openclaw-deps] bustly-skills repo not found, skip bundled bustly-skills copy.");
+}
+
 rmSync(stagingDir, { recursive: true, force: true });
