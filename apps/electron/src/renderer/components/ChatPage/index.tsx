@@ -2037,7 +2037,7 @@ export default function ChatPage() {
         }));
       return nextEntries.length > 0 ? [...prev, ...nextEntries] : prev;
     });
-  }, []);
+  }, [currentSessionKey, setSessionContextPaths]);
 
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search);

@@ -1119,6 +1119,8 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [pendingSessionKey, setPendingSessionKey] = useState<string | null>(null);
   const [runningTasks, setRunningTasks] = useState<Record<string, boolean>>({});
   const userMenuRef = useRef<HTMLDivElement | null>(null);
+  const userMenuTriggerRef = useRef<HTMLDivElement | null>(null);
+  const [userMenuLayout, setUserMenuLayout] = useState({ top: 0, left: 0, width: 224 });
   const location = useLocation();
   const navigate = useNavigate();
   const isSettingsPage = false;
@@ -1153,6 +1155,32 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     }
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isUserMenuOpen]);
+
+  const computeUserMenuLayout = useCallback(() => {
+    const rect = userMenuTriggerRef.current?.getBoundingClientRect();
+    if (!rect) {
+      return;
+    }
+    const viewportPadding = 12;
+    const width = props.collapsed ? 224 : Math.max(224, rect.width);
+    let left = Math.max(viewportPadding, rect.left);
+    if (left + width + viewportPadding > window.innerWidth) {
+      left = Math.max(viewportPadding, window.innerWidth - width - viewportPadding);
+    }
+    const estimatedHeight = 92;
+    const top = Math.max(viewportPadding, rect.top - 8 - estimatedHeight);
+    setUserMenuLayout({ top, left, width });
+  }, [props.collapsed]);
+
+  useEffect(() => {
+    if (!isUserMenuOpen) {
+      return;
+    }
+    computeUserMenuLayout();
+    const onResize = () => computeUserMenuLayout();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [computeUserMenuLayout, isUserMenuOpen]);
 
   useEffect(() => {
     let disposed = false;
@@ -1888,47 +1916,57 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
           props.collapsed ? "flex flex-col items-center px-2" : "px-4"
         }`}
       >
-        {isUserMenuOpen ? (
-          <div className={`absolute z-50 ${props.collapsed ? "bottom-full left-0 mb-2 ml-2 w-56" : "bottom-full left-0 mb-2 w-full px-4"}`}>
-            <div className="space-y-0.5 rounded-xl border border-gray-200 bg-white p-1.5 shadow-lg animate-in fade-in zoom-in-95 duration-200">
-              <button
-                type="button"
-                onClick={() => {
-                  void handleOpenSettings();
-                }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
+        {isUserMenuOpen
+          ? createPortal(
+              <div
+                className="fixed z-[9999]"
+                style={{ top: userMenuLayout.top, left: userMenuLayout.left, width: userMenuLayout.width }}
+                onMouseDown={(e) => e.stopPropagation()}
               >
-                <GearIcon className="h-4 w-4 text-gray-500" />
-                Settings
-              </button>
-              <div className="mx-2 my-1 h-px bg-gray-100" />
-              <button
-                type="button"
-                onClick={() => {
-                  void handleSignOut();
-                }}
-                disabled={isLoggingOut}
-                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <SignOutIcon className="h-4 w-4 shrink-0" />
-                <span className="truncate">Sign out</span>
-              </button>
-            </div>
-          </div>
-        ) : null}
+                <div className="space-y-0.5 rounded-xl border border-gray-200 bg-white p-1.5 shadow-lg animate-in fade-in zoom-in-95 duration-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleOpenSettings();
+                    }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                  >
+                    <GearIcon className="h-4 w-4 text-gray-500" />
+                    Settings
+                  </button>
+                  <div className="mx-2 my-1 h-px bg-gray-100" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleSignOut();
+                    }}
+                    disabled={isLoggingOut}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <SignOutIcon className="h-4 w-4 shrink-0" />
+                    <span className="truncate">Sign out</span>
+                  </button>
+                </div>
+              </div>,
+              document.body,
+            )
+          : null}
 
         <div
+          ref={userMenuTriggerRef}
           className={`relative cursor-pointer rounded-xl p-1.5 outline-none transition-colors hover:bg-gray-200 focus-visible:ring-2 focus-visible:ring-[#1A162F]/20 ${
             isUserMenuOpen ? "bg-gray-200" : ""
           } ${props.collapsed ? "flex justify-center" : "flex items-center gap-3"}`}
           tabIndex={0}
           onClick={(e) => {
             e.stopPropagation();
+            computeUserMenuLayout();
             setIsUserMenuOpen((prev) => !prev);
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
+              computeUserMenuLayout();
               setIsUserMenuOpen((prev) => !prev);
             }
           }}
