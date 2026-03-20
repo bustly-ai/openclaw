@@ -74,7 +74,9 @@ export type HeartbeatDeps = OutboundSendDeps &
   };
 
 const log = createSubsystemLogger("gateway/heartbeat");
-let heartbeatsEnabled = true;
+// SET HEARTBEAT false
+let heartbeatsEnabled = false;
+// let heartbeatsEnabled = true;
 
 export function setHeartbeatsEnabled(enabled: boolean) {
   heartbeatsEnabled = enabled;
