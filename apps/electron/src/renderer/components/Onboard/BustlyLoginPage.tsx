@@ -5,7 +5,6 @@ import {
   SignOut,
   Sparkle,
 } from "@phosphor-icons/react";
-import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import OnboardContainer from "./OnboardContainer";
 import bustlyWordmark from "../../assets/imgs/bustly_wordmark.png";
@@ -21,32 +20,54 @@ type BustlyLoginPageProps = {
 
 const HOME_CAROUSEL_ITEMS = [
   {
-    id: "shopify",
-    text: "Update low-stock alerts in Shopify.",
-    brandIcon: "https://cdn.brandfetch.io/shopify.com/icon",
+    id: "shopify-orders",
+    text: "Fix failed orders in Shopify.",
     icon: ShoppingBag,
-    alt: "Shopify",
   },
   {
-    id: "google",
-    text: "Write weekly performance summary.",
-    brandIcon: "https://cdn.brandfetch.io/google.com/icon",
-    icon: MagnifyingGlass,
-    alt: "Google",
-  },
-  {
-    id: "klaviyo",
-    text: "Launch abandoned-cart flow in Klaviyo.",
-    brandIcon: "https://cdn.brandfetch.io/klaviyo.com/icon",
+    id: "attention",
+    text: "Show me what needs attention today.",
     icon: Sparkle,
-    alt: "Klaviyo",
   },
   {
-    id: "woocommerce",
-    text: "Fix failed orders in WooCommerce.",
-    brandIcon: "https://cdn.brandfetch.io/woocommerce.com/icon",
+    id: "sales-diagnosis",
+    text: "Explain why sales are down this week.",
+    icon: MagnifyingGlass,
+  },
+  {
+    id: "conversion",
+    text: "Find products losing conversion.",
     icon: FileText,
-    alt: "WooCommerce",
+  },
+  {
+    id: "customers",
+    text: "Identify my highest-value customers.",
+    icon: Sparkle,
+  },
+  {
+    id: "reengagement",
+    text: "Create a re-engagement campaign draft.",
+    icon: FileText,
+  },
+  {
+    id: "growth-actions",
+    text: "Recommend 3 actions to grow this store.",
+    icon: Sparkle,
+  },
+  {
+    id: "revenue-summary",
+    text: "Summarize today’s revenue and orders.",
+    icon: FileText,
+  },
+  {
+    id: "traffic-drops",
+    text: "Spot unusual traffic drops.",
+    icon: MagnifyingGlass,
+  },
+  {
+    id: "win-back",
+    text: "Flag customers I should win back.",
+    icon: ShoppingBag,
   },
 ] as const;
 
@@ -77,7 +98,7 @@ export default function BustlyLoginPage({
   useEffect(() => {
     const interval = window.setInterval(() => {
       setActiveIndex((prev) => (prev + 1) % HOME_CAROUSEL_ITEMS.length);
-    }, 2500);
+    }, 3200);
     return () => window.clearInterval(interval);
   }, []);
 
@@ -174,67 +195,31 @@ export default function BustlyLoginPage({
             )}
           </div>
 
-          <div className="relative mx-auto h-24 w-full max-w-[520px] [perspective:1000px]">
+          <div className="relative mx-auto h-16 w-full max-w-[520px]">
             {HOME_CAROUSEL_ITEMS.map((item, index) => {
-              const diff = (index - activeIndex + HOME_CAROUSEL_ITEMS.length) % HOME_CAROUSEL_ITEMS.length;
               const Icon = item.icon;
-              let style: CSSProperties;
-
-              if (diff === 0) {
-                style = {
-                  transform: "translateY(0) scale(1)",
-                  opacity: 1,
-                  zIndex: 30,
-                  filter: "blur(0px)",
-                };
-              } else if (diff === 1) {
-                style = {
-                  transform: "translateY(16px) scale(0.92)",
-                  opacity: 0.6,
-                  zIndex: 20,
-                  filter: "blur(1px)",
-                };
-              } else if (diff === 2) {
-                style = {
-                  transform: "translateY(32px) scale(0.84)",
-                  opacity: 0.3,
-                  zIndex: 10,
-                  filter: "blur(2px)",
-                };
-              } else {
-                style = {
-                  transform: "translateY(-20px) scale(0.9)",
-                  opacity: 0,
-                  zIndex: 0,
-                  pointerEvents: "none",
-                };
-              }
+              const isActive = index === activeIndex;
 
               return (
                 <div
                   key={item.id}
-                  className="absolute inset-x-0 top-0 transition-all duration-700 ease-in-out"
-                  style={style}
+                  className="absolute inset-x-0 top-0 transition-all duration-500 ease-out"
+                  style={{
+                    opacity: isActive ? 1 : 0,
+                    transform: isActive ? "translateY(0px)" : "translateY(8px)",
+                    pointerEvents: "none",
+                  }}
+                  aria-hidden={!isActive}
                 >
-                  <div className="mx-auto flex w-full items-center gap-3 overflow-hidden rounded-xl border border-gray-100 bg-white/90 px-5 py-3 text-[12px] text-gray-700 shadow-lg backdrop-blur-md">
+                  <div className="mx-auto flex h-14 w-full items-center gap-3 overflow-hidden rounded-xl border border-gray-100 bg-white/90 px-5 py-3 text-[12px] text-gray-700 shadow-lg backdrop-blur-md">
                     <div className="flex h-5 w-5 shrink-0 items-center justify-center">
                       <Icon size={16} weight="bold" className="text-[#1A162F]" />
                     </div>
                     <span className="flex-1 whitespace-nowrap text-left font-medium">{item.text}</span>
-                    <img
-                      src={item.brandIcon}
-                      alt={item.alt}
-                      className="h-4 w-4 opacity-100 transition-opacity"
-                      onError={(event) => {
-                        event.currentTarget.style.display = "none";
-                      }}
-                    />
                   </div>
                 </div>
               );
             })}
-
-            
           </div>
         </div>
       </div>
