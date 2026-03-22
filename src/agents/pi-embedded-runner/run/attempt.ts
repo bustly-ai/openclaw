@@ -88,7 +88,8 @@ import {
   sanitizeSessionHistory,
   sanitizeToolsForGoogle,
 } from "../google.js";
-import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
+import { assembleContextMessages } from "../context-assembly.js";
+import { getDmHistoryLimitFromSessionKey } from "../history.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
 import {
@@ -589,7 +590,7 @@ export async function runEmbeddedAttempt(
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
     });
-    const systemPromptReport = buildSystemPromptReport({
+    let systemPromptReport = buildSystemPromptReport({
       source: "run",
       generatedAt: Date.now(),
       sessionId: params.sessionId,
@@ -914,16 +915,18 @@ export async function runEmbeddedAttempt(
         const validated = transcriptPolicy.validateAnthropicTurns
           ? validateAnthropicTurns(validatedGemini)
           : validatedGemini;
-        const truncated = limitHistoryTurns(
-          validated,
-          getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
-        );
-        // Re-run tool_use/tool_result pairing repair after truncation, since
-        // limitHistoryTurns can orphan tool_result blocks by removing the
-        // assistant message that contained the matching tool_use.
+        const assembled = assembleContextMessages({
+          messages: validated,
+          turnLimit: getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+          contextWindowTokens: params.model.contextWindow,
+        });
         const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairing(truncated)
-          : truncated;
+          ? sanitizeToolUseResultPairing(assembled.messages)
+          : assembled.messages;
+        systemPromptReport = {
+          ...systemPromptReport,
+          dynamicContext: assembled.report,
+        };
         cacheTrace?.recordStage("session:limited", { messages: limited });
         if (limited.length > 0) {
           activeSession.agent.replaceMessages(limited);
@@ -1207,6 +1210,7 @@ export async function runEmbeddedAttempt(
             const systemLen = systemPromptText?.length ?? 0;
             const promptLen = effectivePrompt.length;
             const sessionSummary = summarizeSessionContext(activeSession.messages);
+            const assembly = systemPromptReport.dynamicContext;
             log.debug(
               `[context-diag] pre-prompt: sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `messages=${msgCount} roleCounts=${sessionSummary.roleCounts} ` +
@@ -1216,6 +1220,9 @@ export async function runEmbeddedAttempt(
                 `systemPromptChars=${systemLen} promptChars=${promptLen} ` +
                 `promptImages=${imageResult.images.length} ` +
                 `historyImageMessages=${imageResult.historyImagesByIndex.size} ` +
+                `assembledTokens=${assembly?.finalTokens ?? "unknown"} ` +
+                `droppedMessages=${assembly?.droppedMessages ?? 0} ` +
+                `previewedToolResults=${assembly?.previewedToolResults ?? 0} ` +
                 `provider=${params.provider}/${params.modelId} sessionFile=${params.sessionFile}`,
             );
           }

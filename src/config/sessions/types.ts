@@ -162,6 +162,18 @@ export type SessionSkillSnapshot = {
   version?: number;
 };
 
+export type SessionContextAssemblyReport = {
+  originalMessages: number;
+  finalMessages: number;
+  originalTokens: number;
+  finalTokens: number;
+  droppedMessages: number;
+  turnLimitApplied: boolean;
+  tokenBudgetApplied: boolean;
+  previewedToolResults: number;
+  anchoredMessages: number;
+};
+
 export type SessionSystemPromptReport = {
   source: "run" | "estimate";
   generatedAt: number;
@@ -203,6 +215,7 @@ export type SessionSystemPromptReport = {
       propertiesCount?: number | null;
     }>;
   };
+  dynamicContext?: SessionContextAssemblyReport;
 };
 
 export const DEFAULT_RESET_TRIGGER = "/new";

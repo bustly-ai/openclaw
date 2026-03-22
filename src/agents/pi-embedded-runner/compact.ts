@@ -70,7 +70,8 @@ import {
   sanitizeSessionHistory,
   sanitizeToolsForGoogle,
 } from "./google.js";
-import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
+import { assembleContextMessages } from "./context-assembly.js";
+import { getDmHistoryLimitFromSessionKey } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { buildModelAliasLines, resolveModel } from "./model.js";
@@ -604,16 +605,20 @@ export async function compactEmbeddedPiSessionDirect(
           : validatedGemini;
         // Capture full message history BEFORE limiting — plugins need the complete conversation
         const preCompactionMessages = [...session.messages];
-        const truncated = limitHistoryTurns(
-          validated,
-          getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
-        );
-        // Re-run tool_use/tool_result pairing repair after truncation, since
-        // limitHistoryTurns can orphan tool_result blocks by removing the
+        const assembled = assembleContextMessages({
+          messages: validated,
+          turnLimit: getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+          contextWindowTokens: model?.contextWindow,
+          historyBudgetRatio: 0.55,
+          historyBudgetMaxTokens: 64_000,
+          toolResultPreviewMaxChars: 1_500,
+        });
+        // Re-run tool_use/tool_result pairing repair after assembly, since
+        // turn limiting / token budgeting can orphan tool_result blocks by removing the
         // assistant message that contained the matching tool_use.
         const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairing(truncated)
-          : truncated;
+          ? sanitizeToolUseResultPairing(assembled.messages)
+          : assembled.messages;
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }

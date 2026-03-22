@@ -140,6 +140,9 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     ? `Tools: ${formatNameList(toolNames, 30)}`
     : "Tools: (none)";
   const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
+  const dynamicContextLine = report.dynamicContext
+    ? `Dynamic context assembly: ${formatInt(report.dynamicContext.originalMessages)} → ${formatInt(report.dynamicContext.finalMessages)} messages, ~${formatInt(report.dynamicContext.originalTokens)} → ~${formatInt(report.dynamicContext.finalTokens)} tok, dropped ${formatInt(report.dynamicContext.droppedMessages)}, previewed tool results ${formatInt(report.dynamicContext.previewedToolResults)}`
+    : "Dynamic context assembly: n/a";
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
   const bootstrapMaxLabel =
     typeof report.bootstrapMaxChars === "number"
@@ -209,6 +212,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         `Bootstrap max/total: ${bootstrapTotalLabel}`,
         sandboxLine,
         systemPromptLine,
+        dynamicContextLine,
         ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
         "",
         "Injected workspace files:",
@@ -248,6 +252,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       `Bootstrap max/total: ${bootstrapTotalLabel}`,
       sandboxLine,
       systemPromptLine,
+      dynamicContextLine,
       ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
       "",
       "Injected workspace files:",
