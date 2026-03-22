@@ -62,6 +62,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [gatewayMessage, setGatewayMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const ensurePromiseRef = useRef<Promise<boolean> | null>(null);
+  const hasLoadedInitialAppStateRef = useRef(false);
 
   const refreshAppState = useCallback(async () => {
     if (!window.electronAPI) {
@@ -70,7 +71,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    setChecking(true);
+    const isInitialLoad = !hasLoadedInitialAppStateRef.current;
+    if (isInitialLoad) {
+      setChecking(true);
+    }
     try {
       const [status, info, nextInitialized, nextLoggedIn] = await Promise.all([
         window.electronAPI.gatewayStatus(),
@@ -90,6 +94,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      hasLoadedInitialAppStateRef.current = true;
       setChecking(false);
     }
   }, []);
