@@ -191,7 +191,15 @@ export {
   type SenderGroupAccessDecision,
   type SenderGroupAccessReason,
 } from "./group-access.js";
-export { resolveSenderCommandAuthorization } from "./command-auth.js";
+export {
+  resolveDirectDmAuthorizationOutcome,
+  resolveSenderCommandAuthorization,
+  resolveSenderCommandAuthorizationWithRuntime,
+} from "./command-auth.js";
+export type {
+  DirectDmAuthorizationOutcome,
+  ResolveSenderCommandAuthorizationWithRuntimeParams,
+} from "./command-auth.js";
 export { handleSlackMessageAction } from "./slack-message-actions.js";
 export { extractToolSend } from "./tool-send.js";
 export {

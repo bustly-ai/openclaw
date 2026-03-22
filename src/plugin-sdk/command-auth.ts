@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 
 export type ResolveSenderCommandAuthorizationParams = {
   cfg: OpenClawConfig;
@@ -49,4 +50,51 @@ export async function resolveSenderCommandAuthorization(
     senderAllowedForCommands,
     commandAuthorized,
   };
+}
+
+export type ResolveSenderCommandAuthorizationWithRuntimeParams = Omit<
+  ResolveSenderCommandAuthorizationParams,
+  "shouldComputeCommandAuthorized" | "resolveCommandAuthorizedFromAuthorizers"
+> & {
+  configuredGroupAllowFrom?: string[];
+  runtime: PluginRuntime["channel"]["commands"];
+};
+
+export async function resolveSenderCommandAuthorizationWithRuntime(
+  params: ResolveSenderCommandAuthorizationWithRuntimeParams,
+): Promise<{
+  shouldComputeAuth: boolean;
+  effectiveAllowFrom: string[];
+  senderAllowedForCommands: boolean;
+  commandAuthorized: boolean | undefined;
+}> {
+  return await resolveSenderCommandAuthorization({
+    cfg: params.cfg,
+    rawBody: params.rawBody,
+    isGroup: params.isGroup,
+    dmPolicy: params.dmPolicy,
+    configuredAllowFrom: params.configuredAllowFrom,
+    senderId: params.senderId,
+    isSenderAllowed: params.isSenderAllowed,
+    readAllowFromStore: params.readAllowFromStore,
+    shouldComputeCommandAuthorized: params.runtime.shouldComputeCommandAuthorized,
+    resolveCommandAuthorizedFromAuthorizers:
+      params.runtime.resolveCommandAuthorizedFromAuthorizers,
+  });
+}
+
+export type DirectDmAuthorizationOutcome = "authorized" | "unauthorized" | "disabled";
+
+export function resolveDirectDmAuthorizationOutcome(params: {
+  isGroup: boolean;
+  dmPolicy: string;
+  senderAllowedForCommands: boolean;
+}): DirectDmAuthorizationOutcome {
+  if (params.isGroup || params.dmPolicy === "disabled") {
+    return "disabled";
+  }
+  if (params.dmPolicy === "open") {
+    return "authorized";
+  }
+  return params.senderAllowedForCommands ? "authorized" : "unauthorized";
 }
