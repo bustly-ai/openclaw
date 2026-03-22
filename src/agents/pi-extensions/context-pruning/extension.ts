@@ -9,7 +9,7 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
       return undefined;
     }
 
-    if (runtime.settings.mode === "cache-ttl") {
+    if (runtime.settings.mode === "cache-ttl" && runtime.cacheTtlEligible !== false) {
       const ttlMs = runtime.settings.ttlMs;
       const lastTouch = runtime.lastCacheTouchAt ?? null;
       if (!lastTouch || ttlMs <= 0) {

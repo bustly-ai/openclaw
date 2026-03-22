@@ -38,20 +38,20 @@ function buildContextPruningFactory(params: {
   if (raw?.mode !== "cache-ttl") {
     return undefined;
   }
-  if (!isCacheTtlEligibleProvider(params.provider, params.modelId)) {
-    return undefined;
-  }
 
   const settings = computeEffectiveSettings(raw);
   if (!settings) {
     return undefined;
   }
 
+  const cacheTtlEligible = isCacheTtlEligibleProvider(params.provider, params.modelId);
+
   setContextPruningRuntime(params.sessionManager, {
     settings,
     contextWindowTokens: resolveContextWindowTokens(params),
     isToolPrunable: makeToolPrunablePredicate(settings.tools),
-    lastCacheTouchAt: readLastCacheTtlTimestamp(params.sessionManager),
+    lastCacheTouchAt: cacheTtlEligible ? readLastCacheTtlTimestamp(params.sessionManager) : null,
+    cacheTtlEligible,
   });
 
   return contextPruningExtension;

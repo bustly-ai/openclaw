@@ -51,6 +51,51 @@ import {
 } from "../media.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 
+const THREAD_HISTORY_SUMMARY_MAX_CHARS = 3_500;
+const THREAD_HISTORY_SUMMARY_MAX_ITEMS = 8;
+
+function summarizeSlackThreadHistory(params: {
+  history: Array<{
+    text?: string;
+    ts?: string;
+    userId?: string;
+    botId?: string;
+  }>;
+  resolveSenderName: (entry: { userId?: string; botId?: string }) => string;
+}): string | undefined {
+  const lines: string[] = [];
+  let chars = 0;
+
+  for (const entry of params.history.slice(-THREAD_HISTORY_SUMMARY_MAX_ITEMS)) {
+    const rawText = (entry.text ?? "").replace(/\s+/g, " ").trim();
+    if (!rawText) {
+      continue;
+    }
+    const senderName = params.resolveSenderName(entry);
+    const snippet = rawText.length > 240 ? `${rawText.slice(0, 237)}...` : rawText;
+    const line = `- ${senderName}: ${snippet}`;
+    if (chars + line.length + 1 > THREAD_HISTORY_SUMMARY_MAX_CHARS) {
+      break;
+    }
+    lines.push(line);
+    chars += line.length + 1;
+  }
+
+  if (lines.length === 0) {
+    return undefined;
+  }
+
+  const omitted = Math.max(0, params.history.length - lines.length);
+  const suffix = omitted > 0 ? `\n- ...and ${omitted} earlier message(s)` : "";
+  return [
+    "[Thread history summary for first thread turn]",
+    ...lines,
+    suffix,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -520,7 +565,7 @@ export async function prepareSlackMessage(params: {
     // Fetch full thread history for new thread sessions
     // This provides context of previous messages (including bot replies) in the thread
     // Use the thread session key (not base session key) to determine if this is a new session
-    const threadInitialHistoryLimit = account.config?.thread?.initialHistoryLimit ?? 20;
+    const threadInitialHistoryLimit = account.config?.thread?.initialHistoryLimit ?? 8;
     threadSessionPreviousTimestamp = readSessionUpdatedAt({
       storePath,
       sessionKey, // Thread-specific session key
@@ -549,29 +594,18 @@ export async function prepareSlackMessage(params: {
           }),
         );
 
-        const historyParts: string[] = [];
-        for (const historyMsg of threadHistory) {
-          const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
-          const msgSenderName =
-            msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown");
-          const isBot = Boolean(historyMsg.botId);
-          const role = isBot ? "assistant" : "user";
-          const msgWithId = `${historyMsg.text}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${message.channel}]`;
-          historyParts.push(
-            formatInboundEnvelope({
-              channel: "Slack",
-              from: `${msgSenderName} (${role})`,
-              timestamp: historyMsg.ts ? Math.round(Number(historyMsg.ts) * 1000) : undefined,
-              body: msgWithId,
-              chatType: "channel",
-              envelope: envelopeOptions,
-            }),
+        threadHistoryBody = summarizeSlackThreadHistory({
+          history: threadHistory,
+          resolveSenderName: (historyMsg) => {
+            const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
+            return msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown");
+          },
+        });
+        if (threadHistoryBody) {
+          logVerbose(
+            `slack: populated summarized thread history with ${threadHistory.length} messages for new session`,
           );
         }
-        threadHistoryBody = historyParts.join("\n\n");
-        logVerbose(
-          `slack: populated thread history with ${threadHistory.length} messages for new session`,
-        );
       }
     }
   }

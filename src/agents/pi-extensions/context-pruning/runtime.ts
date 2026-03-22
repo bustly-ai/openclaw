@@ -6,6 +6,11 @@ export type ContextPruningRuntimeValue = {
   contextWindowTokens?: number | null;
   isToolPrunable: (toolName: string) => boolean;
   lastCacheTouchAt?: number | null;
+  /**
+   * When false, pruning still runs but skips cache-TTL gating.
+   * This lets non-cache-aware providers benefit from the same context slimming.
+   */
+  cacheTtlEligible?: boolean;
 };
 
 // Important: this relies on Pi passing the same SessionManager object instance into

@@ -479,9 +479,11 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.IsFirstThreadTurn).toBe(true);
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("[Thread history summary for first thread turn]");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("follow-up question");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("slack message id:");
     expect(replies).toHaveBeenCalledTimes(2);
   });
 
@@ -532,9 +534,11 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.IsFirstThreadTurn).toBeUndefined();
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("[Thread history summary for first thread turn]");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant follow-up");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("user follow-up");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("slack message id:");
     expect(replies).toHaveBeenCalledTimes(2);
   });
 

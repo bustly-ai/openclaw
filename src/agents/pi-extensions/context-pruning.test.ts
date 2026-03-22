@@ -327,6 +327,7 @@ describe("context-pruning", () => {
       contextWindowTokens: 1000,
       isToolPrunable: () => true,
       lastCacheTouchAt: lastTouch,
+      cacheTtlEligible: true,
     });
 
     const messages: AgentMessage[] = [
@@ -354,6 +355,34 @@ describe("context-pruning", () => {
 
     const second = runContextHandler(handler, messages, sessionManager);
     expect(second).toBeUndefined();
+  });
+
+  it("prunes for non-cache-ttl-eligible providers without waiting for a cache touch", () => {
+    const sessionManager = {};
+    setContextPruningRuntime(sessionManager, {
+      settings: makeAggressiveSettings(),
+      contextWindowTokens: 1000,
+      isToolPrunable: () => true,
+      lastCacheTouchAt: null,
+      cacheTtlEligible: false,
+    });
+
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeAssistant("a1"),
+      makeToolResult({
+        toolCallId: "t1",
+        toolName: "exec",
+        text: "x".repeat(20_000),
+      }),
+    ];
+
+    const handler = createContextHandler();
+    const result = runContextHandler(handler, messages, sessionManager);
+    if (!result) {
+      throw new Error("expected prune result");
+    }
+    expect(toolText(findToolResult(result.messages, "t1"))).toBe("[cleared]");
   });
 
   it("respects tools allow/deny (deny wins; wildcards supported)", () => {
