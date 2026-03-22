@@ -1720,22 +1720,26 @@ function buildControlUiUrl(params: { port: number; token?: string | null }) {
   return `${baseUrl}?token=${params.token}`;
 }
 
+async function probeGatewayPort(port: number, timeoutMs = 1_000): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const socket = new Socket();
+    const onDone = (result: boolean) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(result);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => onDone(true));
+    socket.once("timeout", () => onDone(false));
+    socket.once("error", () => onDone(false));
+    socket.connect(port, "127.0.0.1");
+  });
+}
+
 async function waitForGatewayPort(port: number, timeoutMs = 20_000): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const ready = await new Promise<boolean>((resolve) => {
-      const socket = new Socket();
-      const onDone = (result: boolean) => {
-        socket.removeAllListeners();
-        socket.destroy();
-        resolve(result);
-      };
-      socket.setTimeout(1_000);
-      socket.once("connect", () => onDone(true));
-      socket.once("timeout", () => onDone(false));
-      socket.once("error", () => onDone(false));
-      socket.connect(port, "127.0.0.1");
-    });
+    const ready = await probeGatewayPort(port, 1_000);
     if (ready) {
       return true;
     }
@@ -2212,15 +2216,17 @@ function setupIpcHandlers(): void {
   });
 
   // Get gateway status
-  ipcMain.handle("gateway-status", () => {
+  ipcMain.handle("gateway-status", async () => {
     const configToken = readGatewayTokenFromConfig();
     const token = configToken ?? gatewayToken;
     const wsUrl = token
       ? `ws://${GATEWAY_HOST}:${gatewayPort}?token=${token}`
       : `ws://${GATEWAY_HOST}:${gatewayPort}`;
+    const processRunning = gatewayProcess !== null && !gatewayProcess.killed;
+    const portReachable = await probeGatewayPort(gatewayPort, 300);
 
     return {
-      running: gatewayProcess !== null && !gatewayProcess.killed,
+      running: processRunning || portReachable,
       pid: gatewayProcess?.pid ?? null,
       port: gatewayPort,
       host: GATEWAY_HOST,
