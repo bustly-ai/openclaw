@@ -105,12 +105,7 @@ function AppShell() {
   const showGatewayLoading =
     !isBustlyLoginWindow &&
     loggedIn &&
-    (
-      !gatewayReady ||
-      gatewayPhase === "idle" ||
-      gatewayPhase === "checking" ||
-      gatewayPhase === "starting"
-    );
+    gatewayPhase === "starting";
   return (
     <>
       <Routes>
