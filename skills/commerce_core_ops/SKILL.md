@@ -93,13 +93,26 @@ Readable commerce entities on every commerce platform
 - `shop_info`
 - `order_items`
 
+Shopify-only readable entity
+
+- `pixel_events` (reads from `semantic.dm_shopify_pixel_events` with workspace-scoped RLS)
+
+Shopify `pixel_events` interpretation rules
+
+- `count: 0` with successful command means "no matching pixel rows in the selected window/filter", not "store disconnected".
+- Treat store connectivity as broken only when command returns an explicit auth/mapping error (for example 401/403 or "No active Shopify mapping found for this workspace").
+- If rows are empty, retry with a wider time range before concluding data is missing.
+
 Examples
 
 ```bash
 bustly ops shopify read --entity orders --limit 20
 bustly ops bigcommerce read --entity products --limit 20
 bustly ops woocommerce read --entity customers --limit 20
+bustly ops woocommerce read --entity variants --filters '{"product_id":"388"}'
+bustly ops woocommerce read --entity order_items --filters '{"order_id":"512"}'
 bustly ops magento read --entity orders --filters '{"id":"2"}'
+bustly ops shopify read --entity pixel_events --limit 50 --since '2026-03-01T00:00:00Z' --filters '{"event_names":["page_viewed","checkout_completed"]}'
 ```
 
 Write
@@ -173,6 +186,8 @@ Platform notes
 - Shopify aliases: `shopify`
 - BigCommerce aliases: `bigcommerce`, `bc`
 - WooCommerce aliases: `woocommerce`, `woo`, `wc`
+- WooCommerce `variants` read requires `--filters '{"product_id":"<product-id>"}'`
+- WooCommerce `order_items` read requires `--filters '{"order_id":"<order-id>"}'`
 - Magento aliases: `magento`, `adobe`, `adobe-commerce`
 - All commerce platforms route through `commerce-core-ops`
 - `write` can use higher-level entity actions or pass a native proxy request via `payload.request`
