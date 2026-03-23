@@ -75,7 +75,10 @@ import {
   buildBustlyAgentPresetChannelSessionKey,
   buildBustlyWorkspaceAgentId,
 } from "../shared/bustly-agent.js";
-import { BUSTLY_PRESET_CHANNELS } from "../shared/bustly-preset-channels.js";
+import {
+  BUSTLY_MAIN_AGENT_PRESET,
+  BUSTLY_PRESET_CHANNELS,
+} from "../shared/bustly-preset-channels.js";
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 
@@ -694,20 +697,36 @@ async function ensureBustlyMainSession(params: { agentId: string }): Promise<voi
   const storePath = resolveDefaultSessionStorePath(params.agentId);
   const mainSessionKey = buildAgentMainSessionKey({ agentId: params.agentId });
   await updateSessionStore(storePath, (store) => {
-    if (store[mainSessionKey]) {
+    const existing = store[mainSessionKey];
+    if (!existing) {
+      store[mainSessionKey] = {
+        sessionId: randomUUID(),
+        updatedAt: Date.now(),
+        label: BUSTLY_MAIN_AGENT_PRESET.label,
+        icon: BUSTLY_MAIN_AGENT_PRESET.icon,
+      };
       return store;
     }
-    store[mainSessionKey] = {
-      sessionId: randomUUID(),
-      updatedAt: Date.now(),
-      label: "Overview",
-    };
+    const label = existing.label?.trim();
+    if (!label) {
+      existing.label = BUSTLY_MAIN_AGENT_PRESET.label;
+    }
+    const icon = existing.icon?.trim();
+    if (!icon) {
+      existing.icon = BUSTLY_MAIN_AGENT_PRESET.icon;
+    }
     return store;
   });
 }
 
 async function ensureBustlyPresetChannels(params: { agentId: string }): Promise<void> {
-  const legacyPresetIcons = new Set(["ChartBar", "TrendUp", "ChatCircleText"]);
+  const legacyPresetLabels = new Map<string, string>([
+    ["daily-ops", "Daily Ops"],
+    ["campaigns", "Campaigns"],
+    ["inventory", "Inventory"],
+    ["support", "Support"],
+  ]);
+  const legacyPresetIcons = new Set(["ChartBar", "TrendUp", "ChatCircleText", "Package", "Storefront", "User", "Tag"]);
   const presets = listEnabledBustlyPresetChannels();
   if (presets.length === 0) {
     return;
@@ -727,10 +746,15 @@ async function ensureBustlyPresetChannels(params: { agentId: string }): Promise<
         model?: string;
       } = { key: storeKey };
 
-      if (!existing?.label?.trim()) {
+      const existingLabel = existing?.label?.trim();
+      const shouldReplaceLegacyLabel =
+        existingLabel != null &&
+        existingLabel.length > 0 &&
+        existingLabel === legacyPresetLabels.get(preset.slug);
+      if (!existingLabel || shouldReplaceLegacyLabel) {
         nextPatch.label = preset.label;
       }
-      if (!existing?.icon?.trim() || legacyPresetIcons.has(existing.icon.trim())) {
+      if (shouldReplaceLegacyLabel || !existing?.icon?.trim() || legacyPresetIcons.has(existing.icon.trim())) {
         nextPatch.icon = preset.icon;
       }
       if (!existing?.modelOverride?.trim() && preset.model?.trim()) {

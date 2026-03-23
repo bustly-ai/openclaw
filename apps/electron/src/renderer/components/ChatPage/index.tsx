@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowDown,
+  ArrowUpRight,
   ArrowUp,
   File,
   Folder,
@@ -19,6 +20,7 @@ import {
   resolveSessionIconComponent,
 } from "../../lib/session-icons";
 import { buildBustlyWorkspaceMainSessionKey } from "../../../shared/bustly-agent";
+import { resolveBustlyPresetUseCases, type BustlyPresetUseCase } from "../../../shared/bustly-preset-channels";
 import { extractText, extractThinking } from "../../lib/chat-extract";
 import PortalTooltip from "../ui/PortalTooltip";
 import ChatModelPicker from "./ChatModelPicker";
@@ -821,7 +823,6 @@ export default function ChatPage() {
   const composerAreaRef = useRef<HTMLDivElement | null>(null);
   const composerIsComposingRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
-  const bootstrapWakeAttemptedSessionsRef = useRef<Set<string>>(new Set());
   const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
   const lastAppliedContextRef = useRef<string | null>(null);
   const currentSessionKey = useMemo(() => {
@@ -832,6 +833,10 @@ export default function ChatPage() {
     const searchParams = new URLSearchParams(location.search);
     return deriveScenarioLabel(currentSessionKey, searchParams.get("label"));
   }, [currentSessionKey, location.search]);
+  const currentUseCases = useMemo(
+    () => resolveBustlyPresetUseCases({ sessionKey: currentSessionKey, workspaceId: activeWorkspaceId }),
+    [activeWorkspaceId, currentSessionKey],
+  );
   const canSendMessage =
     connected && !subscriptionExpired && !sending && (draft.trim() || attachments.length > 0 || contextPaths.length > 0);
   const showPlaceholderTicker =
@@ -1997,10 +2002,7 @@ export default function ChatPage() {
     if (!gatewayReady) {
       setConnected(false);
       setSessionLoading(currentSessionKeyRef.current, true);
-      setConnectionNotice({
-        message: "Waiting for gateway...",
-        tone: "warning",
-      });
+      setConnectionNotice(null);
       return;
     }
 
@@ -2356,68 +2358,6 @@ export default function ChatPage() {
       clearComposer: true,
     });
   }, [attachments, contextPaths, currentSessionKey, draft, sendPreparedChatMessage]);
-
-  useEffect(() => {
-    if (!activeWorkspaceId || !connected || !clientRef.current || sending) {
-      return;
-    }
-    const expectedBootstrapSessionKey = buildBustlyWorkspaceMainSessionKey(activeWorkspaceId);
-    if (currentSessionKey !== expectedBootstrapSessionKey) {
-      return;
-    }
-    if (!/^agent:bustly-[a-z0-9_-]+:main$/i.test(currentSessionKey)) {
-      return;
-    }
-    const runtime = getSessionRuntime(currentSessionKey);
-    if (!runtime.historyLoaded) {
-      return;
-    }
-    if (bootstrapWakeAttemptedSessionsRef.current.has(currentSessionKey)) {
-      return;
-    }
-    const client = clientRef.current;
-    let cancelled = false;
-    bootstrapWakeAttemptedSessionsRef.current.add(currentSessionKey);
-
-    void client.request<{ messages?: unknown[] }>("chat.history", {
-      sessionKey: currentSessionKey,
-      limit: 1,
-    }).then((res) => {
-      if (cancelled) {
-        return;
-      }
-      const hasHistory = Array.isArray(res.messages) && res.messages.length > 0;
-      if (hasHistory) {
-        return;
-      }
-      return sendPreparedChatMessage({
-        sessionKey: currentSessionKey,
-        draftText: "Review the current state of my store and give me the next operating recommendations.",
-        attachments: [],
-        contextPaths: [],
-        clearComposer: false,
-      }).then((ok) => {
-        if (!ok && !cancelled) {
-          bootstrapWakeAttemptedSessionsRef.current.delete(currentSessionKey);
-        }
-      });
-    }).catch(() => {
-      if (!cancelled) {
-        bootstrapWakeAttemptedSessionsRef.current.delete(currentSessionKey);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activeWorkspaceId,
-    connected,
-    currentSessionKey,
-    getSessionRuntime,
-    sendPreparedChatMessage,
-    sending,
-  ]);
 
   const handleSend = useCallback(async () => {
     await sendChatMessage();
@@ -2942,6 +2882,18 @@ export default function ChatPage() {
     }
     return `Context left: ${formatTokenCount(sessionUsage.remainingTokens)} / ${formatTokenCount(sessionUsage.contextTokens)}`;
   }, [sessionUsage.contextTokens, sessionUsage.remainingTokens]);
+  const handleUseCaseClick = useCallback((useCase: BustlyPresetUseCase) => {
+    setSessionDraft(currentSessionKey, useCase.prompt);
+    requestAnimationFrame(() => {
+      const textarea = composerRef.current;
+      if (!textarea) {
+        return;
+      }
+      textarea.focus();
+      const cursor = useCase.prompt.length;
+      textarea.setSelectionRange(cursor, cursor);
+    });
+  }, [currentSessionKey, setSessionDraft]);
   useEffect(() => {
     window.localStorage.setItem(CHAT_MODEL_LEVEL_STORAGE_KEY, modelLevel);
   }, [modelLevel]);
@@ -3006,7 +2958,7 @@ export default function ChatPage() {
         <div ref={composerAreaRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
           <div className="h-8 bg-gradient-to-t from-white via-white/80 to-transparent" />
           <div className="border-t border-white/40 bg-white px-6 pb-8 pointer-events-auto">
-            <div className="mx-auto w-full max-w-3xl">
+            <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4 pt-4">
               {subscriptionExpired ? (
                 <div className="mb-3 rounded-2xl border border-[#ECECEC] bg-white p-4 shadow-[0_10px_24px_rgba(26,22,47,0.05)]">
                   <div className="flex items-center justify-between gap-4">
@@ -3031,6 +2983,32 @@ export default function ChatPage() {
                       {subscriptionActionText}
                     </button>
                   </div>
+                </div>
+              ) : null}
+
+              {timeline.length === 0 && currentUseCases.length > 0 ? (
+                <div className="grid grid-cols-3 gap-3">
+                    {currentUseCases.map((useCase) => (
+                      <button
+                        key={`${currentSessionKey}-${useCase.label}`}
+                        type="button"
+                        className={`group flex items-center justify-between gap-2 rounded-xl border border-[#EAEAEA] bg-white px-4 py-2.5 transition-all duration-200 hover:border-[#CFCFCF] hover:bg-[#FCFCFC] ${
+                          subscriptionExpired ? "pointer-events-none opacity-50" : ""
+                        }`}
+                        onClick={() => {
+                          handleUseCaseClick(useCase);
+                        }}
+                      >
+                        <span className="truncate text-left text-[13px] font-medium leading-snug text-text-main">
+                          {useCase.label}
+                        </span>
+                        <ArrowUpRight
+                          size={14}
+                          weight="bold"
+                          className="ml-1 shrink-0 text-text-sub/50 transition-colors group-hover:text-[#1A162F]"
+                        />
+                      </button>
+                    ))}
                 </div>
               ) : null}
 

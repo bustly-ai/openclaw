@@ -7,6 +7,7 @@ import ChatPage from "./components/ChatPage/index";
 import ClientAppShell from "./components/ClientAppShell";
 import SkillPage from "./components/SkillPage";
 import { AppStateProvider, useAppState } from "./providers/AppStateProvider";
+import { GlobalLoaderProvider, useGlobalLoader } from "./providers/GlobalLoaderProvider";
 import GlobalLoading from "./components/ui/GlobalLoading";
 
 function AppShell() {
@@ -158,11 +159,43 @@ function AppShell() {
   );
 }
 
+function GatewayLoaderBridge() {
+  const { gatewayPhase, loggedIn } = useAppState();
+  const { showLoader, hideLoader } = useGlobalLoader();
+  const hasCompletedInitialGatewayBootRef = useRef(false);
+
+  useEffect(() => {
+    if (!loggedIn) {
+      hasCompletedInitialGatewayBootRef.current = false;
+      hideLoader();
+      return;
+    }
+    if (gatewayPhase === "ready") {
+      hasCompletedInitialGatewayBootRef.current = true;
+      hideLoader();
+      return;
+    }
+    const shouldShow =
+      hasCompletedInitialGatewayBootRef.current &&
+      (gatewayPhase === "starting" || gatewayPhase === "checking");
+    if (shouldShow) {
+      showLoader("Loading...", 0);
+      return;
+    }
+    hideLoader();
+  }, [gatewayPhase, hideLoader, loggedIn, showLoader]);
+
+  return null;
+}
+
 export default function App() {
   return (
     <HashRouter>
       <AppStateProvider>
-        <AppShell />
+        <GlobalLoaderProvider>
+          <GatewayLoaderBridge />
+          <AppShell />
+        </GlobalLoaderProvider>
       </AppStateProvider>
     </HashRouter>
   );
