@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, type ReactElement } from "react";
+import { useEffect, useCallback, type ReactElement } from "react";
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 // Types are defined in electron.d.ts
@@ -21,7 +21,6 @@ function AppShell() {
   const navigate = useNavigate();
   const pathname = location.pathname || "/";
   const isBustlyLoginWindow = pathname === "/bustly-login";
-  const [hasResolvedInitialGateway, setHasResolvedInitialGateway] = useState(false);
 
   const handleDeepLink = useCallback(
     (data: { url: string; route: string | null } | null) => {
@@ -62,16 +61,6 @@ function AppShell() {
       unsubscribe();
     };
   }, [handleDeepLink]);
-
-  useEffect(() => {
-    if (!loggedIn) {
-      setHasResolvedInitialGateway(false);
-      return;
-    }
-    if (gatewayReady) {
-      setHasResolvedInitialGateway(true);
-    }
-  }, [gatewayReady, loggedIn]);
 
   const renderLoginRoute = () => {
     if (checking) {
@@ -115,7 +104,6 @@ function AppShell() {
   const showGatewayLoading =
     !isBustlyLoginWindow &&
     loggedIn &&
-    !hasResolvedInitialGateway &&
     (
       !gatewayReady ||
       gatewayPhase === "idle" ||
