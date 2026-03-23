@@ -16,6 +16,21 @@ export type ResolveSenderCommandAuthorizationParams = {
   }) => boolean;
 };
 
+export type CommandAuthorizationRuntime = {
+  shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
+  resolveCommandAuthorizedFromAuthorizers: (params: {
+    useAccessGroups: boolean;
+    authorizers: Array<{ configured: boolean; allowed: boolean }>;
+  }) => boolean;
+};
+
+export type ResolveSenderCommandAuthorizationWithRuntimeParams = Omit<
+  ResolveSenderCommandAuthorizationParams,
+  "shouldComputeCommandAuthorized" | "resolveCommandAuthorizedFromAuthorizers"
+> & {
+  runtime: CommandAuthorizationRuntime;
+};
+
 export async function resolveSenderCommandAuthorization(
   params: ResolveSenderCommandAuthorizationParams,
 ): Promise<{
@@ -49,4 +64,14 @@ export async function resolveSenderCommandAuthorization(
     senderAllowedForCommands,
     commandAuthorized,
   };
+}
+
+export async function resolveSenderCommandAuthorizationWithRuntime(
+  params: ResolveSenderCommandAuthorizationWithRuntimeParams,
+): ReturnType<typeof resolveSenderCommandAuthorization> {
+  return resolveSenderCommandAuthorization({
+    ...params,
+    shouldComputeCommandAuthorized: params.runtime.shouldComputeCommandAuthorized,
+    resolveCommandAuthorizedFromAuthorizers: params.runtime.resolveCommandAuthorizedFromAuthorizers,
+  });
 }

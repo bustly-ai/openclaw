@@ -157,6 +157,11 @@ function sortSidebarSessions(
         return 1;
       }
     }
+    const leftUpdatedAt = left.updatedAt ?? Number.NEGATIVE_INFINITY;
+    const rightUpdatedAt = right.updatedAt ?? Number.NEGATIVE_INFINITY;
+    if (leftUpdatedAt !== rightUpdatedAt) {
+      return rightUpdatedAt - leftUpdatedAt;
+    }
     return left.key.localeCompare(right.key);
   });
 }
@@ -1322,7 +1327,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
             }
             void client
               .request<SessionsListResult>("sessions.list", {
-                limit: 20,
+                limit: 500,
                 includeGlobal: false,
                 includeUnknown: false,
                 includeDerivedTitles: true,
@@ -1794,24 +1799,24 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       >
         {!props.collapsed ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex-1 overflow-y-auto px-0 pt-2 pb-4">
-              <div className="sticky top-0 z-10 px-4 pt-0.5 pb-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-[13px] font-medium text-[#8A93B2]">Agents</span>
-                  <PortalTooltip content="Create agent" side="right">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        openCreateModal();
-                      }}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8A93B2] transition-all duration-200 hover:bg-[#1A162F]/5 hover:text-[#1A162F] active:bg-[#1A162F]/8"
-                      aria-label="Create agent"
-                    >
-                      <Plus size={16} weight="bold" />
-                    </button>
-                  </PortalTooltip>
-                </div>
+            <div className="shrink-0 px-4 pt-2 pb-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-medium text-[#8A93B2]">Agents</span>
+                <PortalTooltip content="Create agent" side="right">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      openCreateModal();
+                    }}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8A93B2] transition-all duration-200 hover:bg-[#1A162F]/5 hover:text-[#1A162F] active:bg-[#1A162F]/8"
+                    aria-label="Create agent"
+                  >
+                    <Plus size={16} weight="bold" />
+                  </button>
+                </PortalTooltip>
               </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-0 pb-4">
               <div className="space-y-0.5">
               {tasksLoading ? (
                 <>

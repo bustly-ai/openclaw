@@ -966,6 +966,15 @@ export function collapseStreamingEvents(
     return nodes;
   }
 
+  let latestUserIndex = -1;
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const node = nodes[index];
+    if (node.kind === "text" && node.tone === "user") {
+      latestUserIndex = index;
+      break;
+    }
+  }
+
   let liveIndex = -1;
   for (let index = nodes.length - 1; index >= 0; index -= 1) {
     if (isLiveStreamNode(nodes[index])) {
@@ -977,7 +986,26 @@ export function collapseStreamingEvents(
     if (!keepCollapsedWithoutLive) {
       return nodes;
     }
+    let currentTurnStart = 0;
     for (let index = nodes.length - 1; index >= 0; index -= 1) {
+      const node = nodes[index];
+      if (node.kind === "divider") {
+        currentTurnStart = index + 1;
+        break;
+      }
+      if (node.kind === "text" && node.tone === "user") {
+        currentTurnStart = index + 1;
+        break;
+      }
+      if (node.kind === "processed") {
+        currentTurnStart = index + 1;
+        break;
+      }
+    }
+    for (let index = nodes.length - 1; index >= 0; index -= 1) {
+      if (index < currentTurnStart) {
+        break;
+      }
       if (isStreamEventNode(nodes[index])) {
         liveIndex = index;
         break;
@@ -1003,6 +1031,9 @@ export function collapseStreamingEvents(
       turnStart = index + 1;
       break;
     }
+  }
+  if (latestUserIndex >= 0) {
+    turnStart = Math.max(turnStart, latestUserIndex + 1);
   }
 
   const eventIndices: number[] = [];
