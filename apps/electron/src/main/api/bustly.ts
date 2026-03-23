@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import * as os from "node:os";
 import { resolve } from "node:path";
 import type { BustlyOAuthState } from "../bustly-types.js";
+import { resolveElectronIsolatedStateDir } from "../defaults.js";
 
 export type SupabaseUserResponse = {
   id?: string;
@@ -38,24 +38,8 @@ export type SupabaseFetchParams = {
   body?: BodyInit;
 };
 
-function resolveUserPath(input: string, homeDir: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("~")) {
-    return resolve(trimmed.replace(/^~(?=$|[\\/])/, homeDir));
-  }
-  return resolve(trimmed);
-}
-
 function resolveStateDir(): string {
-  const homeDir = os.homedir();
-  const override = process.env.OPENCLAW_STATE_DIR?.trim();
-  if (override) {
-    return resolveUserPath(override, homeDir);
-  }
-  return resolve(homeDir, ".bustly");
+  return resolveElectronIsolatedStateDir();
 }
 
 function resolveBustlyOauthFile(): string {

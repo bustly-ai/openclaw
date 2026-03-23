@@ -4,32 +4,17 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
+import { hostname } from "node:os";
 import { resolve } from "node:path";
-import * as os from "node:os";
 import type {
   BustlyOAuthState,
   BustlySupabaseConfig,
 } from "./bustly-types.js";
 import { refreshSupabaseAuth, verifySupabaseAuth } from "./api/bustly.js";
-
-function resolveUserPath(input: string, homeDir: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("~")) {
-    return resolve(trimmed.replace(/^~(?=$|[\\/])/, homeDir));
-  }
-  return resolve(trimmed);
-}
+import { resolveElectronIsolatedStateDir } from "./defaults.js";
 
 function resolveStateDir(): string {
-  const homeDir = os.homedir();
-  const override = process.env.OPENCLAW_STATE_DIR?.trim();
-  if (override) {
-    return resolveUserPath(override, homeDir);
-  }
-  return resolve(homeDir, ".bustly");
+  return resolveElectronIsolatedStateDir();
 }
 
 function resolveBustlyOauthFile(): string {
@@ -166,10 +151,10 @@ export async function refreshBustlyAccessToken(): Promise<boolean> {
  * Generate device ID for OAuth
  */
 function generateDeviceId(): string {
-  const hostname = os.hostname();
+  const deviceHostname = hostname();
   // Generate a persistent device ID based on hostname
-  const randomPart = Buffer.from(hostname).toString("base64").slice(0, 16);
-  return Buffer.from(`${hostname}-${randomPart}`).toString("base64");
+  const randomPart = Buffer.from(deviceHostname).toString("base64").slice(0, 16);
+  return Buffer.from(`${deviceHostname}-${randomPart}`).toString("base64");
 }
 
 /**

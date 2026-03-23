@@ -27,6 +27,8 @@ import {
   ELECTRON_DEFAULT_MODEL,
   ELECTRON_OPENCLAW_PROFILE,
   getElectronOpenrouterApiKey,
+  resolveElectronIsolatedConfigPath,
+  resolveElectronIsolatedStateDir,
 } from "./defaults.js";
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
@@ -104,21 +106,9 @@ function loadLoginShellEnvironment(): Record<string, string> {
 
 function resolveConfigPathSafe(): string {
   try {
-    return resolveConfigPathFromSrc();
+    return resolveElectronIsolatedConfigPath();
   } catch {
-    const homeDir = homedir();
-    const override = process.env.OPENCLAW_CONFIG_PATH?.trim();
-    if (override) {
-      return resolve(override.startsWith("~") ? override.replace(/^~(?=$|[\\/])/, homeDir) : override);
-    }
-    const stateOverride = process.env.OPENCLAW_STATE_DIR?.trim();
-    if (stateOverride) {
-      const resolved = resolve(
-        stateOverride.startsWith("~") ? stateOverride.replace(/^~(?=$|[\\/])/, homeDir) : stateOverride,
-      );
-      return join(resolved, "openclaw.json");
-    }
-    return join(homeDir, ".bustly", "openclaw.json");
+    return resolveElectronIsolatedConfigPath();
   }
 }
 
@@ -126,15 +116,7 @@ function resolveDefaultWorkspaceDir(explicit?: string): string {
   if (explicit?.trim()) {
     return explicit.trim();
   }
-  const homeDir = homedir();
-  const stateOverride = process.env.OPENCLAW_STATE_DIR?.trim();
-  if (stateOverride) {
-    const resolved = resolve(
-      stateOverride.startsWith("~") ? stateOverride.replace(/^~(?=$|[\\/])/, homeDir) : stateOverride,
-    );
-    return join(resolved, "workspace");
-  }
-  return join(homeDir, ".bustly", "workspace");
+  return join(resolveElectronIsolatedStateDir(), "workspace");
 }
 
 async function runCliOnboard(options: InitializationOptions): Promise<void> {
@@ -184,6 +166,8 @@ async function runCliOnboard(options: InitializationOptions): Promise<void> {
     ...loginShellEnv,
     OPENCLAW_LOAD_SHELL_ENV: "1",
     OPENCLAW_PROFILE: ELECTRON_OPENCLAW_PROFILE,
+    OPENCLAW_STATE_DIR: resolveElectronIsolatedStateDir(),
+    OPENCLAW_CONFIG_PATH: resolveElectronIsolatedConfigPath(),
   };
 
   await new Promise<void>((resolvePromise, rejectPromise) => {

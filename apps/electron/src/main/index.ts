@@ -51,7 +51,6 @@ import { loadConfig } from "../../../../src/config/config";
 import { loadSessionStore, updateSessionStore } from "../../../../src/config/sessions";
 import { resolveDefaultSessionStorePath } from "../../../../src/config/sessions/paths";
 import { applyAgentConfig, listAgentEntries, pruneAgentConfig } from "../../../../src/commands/agents.config";
-import { resolveGatewayLaunchAgentLabel } from "../../../../src/daemon/constants";
 import { GatewayClient } from "../../../../src/gateway/client";
 import type { SessionsPatchResult } from "../../../../src/gateway/protocol";
 import { applySessionsPatchToStore } from "../../../../src/gateway/sessions-patch";
@@ -68,6 +67,8 @@ import {
   ELECTRON_DEFAULT_MODEL,
   ELECTRON_OPENCLAW_PROFILE,
   getElectronOpenrouterApiKey,
+  resolveElectronIsolatedConfigPath,
+  resolveElectronIsolatedStateDir,
   resolveElectronBustlyWorkspaceTemplateBaseUrl,
 } from "./defaults.js";
 import {
@@ -648,21 +649,11 @@ function resolveUserPath(input: string, homeDir: string): string {
 }
 
 function resolveElectronStateDir(): string {
-  const homeDir = app.getPath("home");
-  const override = process.env.OPENCLAW_STATE_DIR?.trim();
-  if (override) {
-    return resolveUserPath(override, homeDir);
-  }
-  return resolve(homeDir, ".bustly");
+  return resolveElectronIsolatedStateDir();
 }
 
 function resolveElectronConfigPath(): string {
-  const homeDir = app.getPath("home");
-  const override = process.env.OPENCLAW_CONFIG_PATH?.trim();
-  if (override) {
-    return resolveUserPath(override, homeDir);
-  }
-  return resolve(resolveElectronStateDir(), "openclaw.json");
+  return resolveElectronIsolatedConfigPath();
 }
 
 function resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId: string): string {
@@ -933,69 +924,6 @@ function writeMainLog(message: string) {
   }
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("main-log", { message });
-  }
-}
-
-function stopGatewayLaunchAgentForElectron(): void {
-  const cliPath = resolveOpenClawCliPath({
-    info: () => {},
-    error: () => {},
-  });
-
-  if (cliPath) {
-    const invocation = resolveCliInvocation(cliPath, ["gateway", "stop"], {
-      includeBundledNode: true,
-    });
-    if (invocation) {
-      try {
-        const cliEnv = buildElectronCliEnv({ cliPath });
-        const result = spawnSync(invocation.command, invocation.args, {
-          encoding: "utf-8",
-          env: cliEnv,
-        });
-        const detail = (result.stderr || result.stdout || "").trim();
-        if (result.status === 0) {
-          writeMainLog("[Gateway Service] Stopped supervised gateway via `openclaw gateway stop`");
-          return;
-        }
-        writeMainLog(
-          `[Gateway Service] \`openclaw gateway stop\` failed: ${detail || `exit ${result.status ?? "unknown"}`}`,
-        );
-      } catch (error) {
-        writeMainLog(
-          `[Gateway Service] \`openclaw gateway stop\` error: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }
-  }
-
-  if (process.platform !== "darwin" || typeof process.getuid !== "function") {
-    return;
-  }
-  const label = resolveGatewayLaunchAgentLabel(ELECTRON_OPENCLAW_PROFILE);
-  const domain = `gui/${process.getuid()}`;
-  const target = `${domain}/${label}`;
-  try {
-    const result = spawnSync("launchctl", ["bootout", target], { encoding: "utf-8" });
-    const detail = (result.stderr || result.stdout || "").trim();
-    if (result.status === 0) {
-      writeMainLog(`[LaunchAgent] Stopped ${target} before Electron gateway startup`);
-      return;
-    }
-    const lowered = detail.toLowerCase();
-    if (
-      lowered.includes("no such process") ||
-      lowered.includes("service is not loaded") ||
-      lowered.includes("could not find service")
-    ) {
-      writeMainLog(`[LaunchAgent] ${target} not loaded`);
-      return;
-    }
-    writeMainLog(`[LaunchAgent] bootout ${target} failed: ${detail || `exit ${result.status ?? "unknown"}`}`);
-  } catch (error) {
-    writeMainLog(
-      `[LaunchAgent] bootout ${target} error: ${error instanceof Error ? error.message : String(error)}`,
-    );
   }
 }
 
@@ -2929,7 +2857,6 @@ void app.whenReady().then(async () => {
   if (initialDeepLinkArg) {
     dispatchDeepLink(initialDeepLinkArg);
   }
-  stopGatewayLaunchAgentForElectron();
   powerSaveBlocker.start("prevent-app-suspension");
   // Load .env file at startup (must be after app is ready to get correct paths)
   const loadDotEnv = () => {

@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+
 export const ELECTRON_OPENCLAW_PROFILE = "bustly";
 export const ELECTRON_DEFAULT_MODEL = "openrouter/minimax/minimax-m2.5";
 export const ELECTRON_BUSTLY_WORKSPACE_TEMPLATE_BASE_URL_PROD =
@@ -21,4 +24,12 @@ export function resolveElectronBustlyWorkspaceTemplateBaseUrl(version: string | 
 
 export function getElectronOpenrouterApiKey(): string {
   return process.env.BUSTLY_BETA_OPENROUTER_API_KEY?.trim() || "";
+}
+
+export function resolveElectronIsolatedStateDir(): string {
+  return resolve(homedir(), ".bustly");
+}
+
+export function resolveElectronIsolatedConfigPath(): string {
+  return resolve(resolveElectronIsolatedStateDir(), "openclaw.json");
 }
