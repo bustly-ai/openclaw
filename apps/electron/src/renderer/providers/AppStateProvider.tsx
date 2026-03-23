@@ -239,6 +239,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           return;
         }
         if (!status.running && gatewayPhase === "ready") {
+          try {
+            const connectConfig = await window.electronAPI.gatewayConnectConfig();
+            if (connectConfig.wsUrl) {
+              await openGatewayProbe(connectConfig.wsUrl);
+              setGatewayPhase("ready");
+              setGatewayMessage(null);
+              setError(null);
+              return;
+            }
+          } catch {
+            // Ignore probe failures and fall through to the reconnect path.
+          }
           setGatewayPhase("idle");
           void ensureGatewayReady();
         }
