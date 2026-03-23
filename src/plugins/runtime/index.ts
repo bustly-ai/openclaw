@@ -34,7 +34,6 @@ import {
   matchesMentionPatterns,
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
-import { withReplyDispatcher } from "../../auto-reply/dispatch.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
@@ -302,7 +301,6 @@ function createRuntimeChannel(): PluginRuntime["channel"] {
     reply: {
       dispatchReplyWithBufferedBlockDispatcher,
       createReplyDispatcherWithTyping,
-      withReplyDispatcher,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,
       dispatchReplyFromConfig,

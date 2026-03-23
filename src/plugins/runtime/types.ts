@@ -219,7 +219,6 @@ export type PluginRuntime = {
     reply: {
       dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
       createReplyDispatcherWithTyping: CreateReplyDispatcherWithTyping;
-      withReplyDispatcher: typeof import("../../auto-reply/dispatch.js").withReplyDispatcher;
       resolveEffectiveMessagesConfig: ResolveEffectiveMessagesConfig;
       resolveHumanDelayConfig: ResolveHumanDelayConfig;
       dispatchReplyFromConfig: DispatchReplyFromConfig;
