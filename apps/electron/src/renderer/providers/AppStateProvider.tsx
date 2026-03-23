@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { GatewayBrowserClient } from "../lib/gateway-client";
 
 type GatewayPhase = "idle" | "checking" | "starting" | "ready" | "error";
 
@@ -27,28 +28,42 @@ type AppStateContextValue = {
 
 const AppStateContext = createContext<AppStateContextValue | null>(null);
 
-async function openGatewayProbe(wsUrl: string): Promise<void> {
+async function openGatewayProbe(wsUrl: string, token?: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const socket = new WebSocket(wsUrl);
+    let settled = false;
+    const client = new GatewayBrowserClient({
+      url: wsUrl,
+      token,
+      clientName: "openclaw-probe",
+      mode: "probe",
+      instanceId: `bustly-electron-probe-${Date.now()}`,
+      onHello: () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        window.clearTimeout(timeout);
+        client.stop();
+        resolve();
+      },
+      onClose: ({ error }) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        window.clearTimeout(timeout);
+        reject(new Error(error?.message || "Gateway handshake failed"));
+      },
+    });
     const timeout = window.setTimeout(() => {
-      socket.close();
-      reject(new Error("Timed out while opening gateway WebSocket"));
+      if (settled) {
+        return;
+      }
+      settled = true;
+      client.stop();
+      reject(new Error("Timed out while connecting gateway session"));
     }, 3_000);
-
-    const cleanup = () => {
-      window.clearTimeout(timeout);
-    };
-
-    socket.addEventListener("open", () => {
-      cleanup();
-      socket.close();
-      resolve();
-    });
-
-    socket.addEventListener("error", () => {
-      cleanup();
-      reject(new Error("Gateway WebSocket connection failed"));
-    });
+    client.start();
   });
 }
 
@@ -132,7 +147,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
             try {
               const connectConfig = await window.electronAPI.gatewayConnectConfig();
               if (connectConfig.wsUrl) {
-                await openGatewayProbe(connectConfig.wsUrl);
+                await openGatewayProbe(connectConfig.wsUrl, connectConfig.token ?? undefined);
                 setGatewayPhase("ready");
                 setGatewayMessage(null);
                 return true;
@@ -196,10 +211,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (data.phase === "ready") {
-        setGatewayPhase("ready");
-        setGatewayMessage(null);
+        setGatewayPhase("checking");
+        setGatewayMessage("Waiting for gateway...");
         setError(null);
-        void refreshAppState();
+        void ensureGatewayReady().then(() => {
+          void refreshAppState();
+        });
         return;
       }
       setGatewayPhase("error");
@@ -211,7 +228,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return () => {
       unsubscribe();
     };
-  }, [refreshAppState]);
+  }, [ensureGatewayReady, refreshAppState]);
 
   useEffect(() => {
     if (checking || !loggedIn || !initialized) {

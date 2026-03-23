@@ -823,9 +823,7 @@ export default function ChatPage() {
   const shouldStickToBottomRef = useRef(true);
   const bootstrapWakeAttemptedSessionsRef = useRef<Set<string>>(new Set());
   const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
-  const lastAppliedPromptRef = useRef<string | null>(null);
   const lastAppliedContextRef = useRef<string | null>(null);
-  const pendingPromptFocusRef = useRef(false);
   const currentSessionKey = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
     return searchParams.get("session") ?? buildBustlyWorkspaceMainSessionKey(activeWorkspaceId);
@@ -2100,7 +2098,6 @@ export default function ChatPage() {
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search);
     const explicitSessionKey = searchParams.get("session")?.trim();
-    const prompt = searchParams.get("prompt")?.trim();
     const contextPath = searchParams.get("contextPath")?.trim();
     const contextName = searchParams.get("contextName")?.trim();
     const contextKind = searchParams.get("contextKind")?.trim();
@@ -2109,21 +2106,6 @@ export default function ChatPage() {
     }
 
     let applied = false;
-    if (prompt && lastAppliedPromptRef.current !== prompt) {
-      lastAppliedPromptRef.current = prompt;
-      pendingPromptFocusRef.current = true;
-      setSessionDraft(currentSessionKey, prompt);
-      window.requestAnimationFrame(() => {
-        composerRef.current?.focus();
-        composerRef.current?.setSelectionRange(prompt.length, prompt.length);
-      });
-      window.setTimeout(() => {
-        composerRef.current?.focus();
-        composerRef.current?.setSelectionRange(prompt.length, prompt.length);
-      }, 80);
-      applied = true;
-    }
-
     const contextSignature = contextPath ? `${contextPath}::${contextName || ""}::${contextKind || ""}` : null;
     if (contextPath && contextSignature !== lastAppliedContextRef.current) {
       lastAppliedContextRef.current = contextSignature;
@@ -2141,7 +2123,6 @@ export default function ChatPage() {
       return;
     }
 
-    searchParams.delete("prompt");
     searchParams.delete("contextPath");
     searchParams.delete("contextName");
     searchParams.delete("contextKind");
@@ -2152,22 +2133,7 @@ export default function ChatPage() {
       },
       { replace: true },
     );
-  }, [appendContextSelections, currentSessionKey, location.pathname, location.search, navigate, setSessionDraft]);
-
-  useEffect(() => {
-    if (!pendingPromptFocusRef.current || !connected || sending || subscriptionExpired || !draft.trim()) {
-      return;
-    }
-    pendingPromptFocusRef.current = false;
-    window.requestAnimationFrame(() => {
-      const textarea = composerRef.current;
-      if (!textarea) {
-        return;
-      }
-      textarea.focus();
-      textarea.setSelectionRange(draft.length, draft.length);
-    });
-  }, [connected, draft, sending, subscriptionExpired]);
+  }, [appendContextSelections, currentSessionKey, location.pathname, location.search, navigate]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -2426,7 +2392,7 @@ export default function ChatPage() {
       }
       return sendPreparedChatMessage({
         sessionKey: currentSessionKey,
-        draftText: "Wake up, bustly!",
+        draftText: "Review the current state of my store and give me the next operating recommendations.",
         attachments: [],
         contextPaths: [],
         clearComposer: false,

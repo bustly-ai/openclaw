@@ -182,7 +182,6 @@ function resolveWorkspacePlanState(subscription?: WorkspaceSubscriptionRow): Pic
 
 let cachedClient: SupabaseClient | null = null;
 let cachedConfigKey = "";
-
 async function getSupabaseConfig(): Promise<BustlySupabaseConfig> {
   const config = await window.electronAPI.bustlyGetSupabaseConfig();
   if (!config?.url || !config.anonKey || !config.accessToken || !config.userId) {

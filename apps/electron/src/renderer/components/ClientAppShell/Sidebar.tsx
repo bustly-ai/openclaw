@@ -1125,6 +1125,8 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [runningTasks, setRunningTasks] = useState<Record<string, boolean>>({});
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const userMenuTriggerRef = useRef<HTMLDivElement | null>(null);
+  const workspaceLoadingRef = useRef(false);
+  const hasLoadedWorkspacesRef = useRef(false);
   const [userMenuLayout, setUserMenuLayout] = useState({ top: 0, left: 0, width: 224 });
   const location = useLocation();
   const navigate = useNavigate();
@@ -1206,36 +1208,47 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     };
   }, []);
 
+  useEffect(() => {
+    workspaceLoadingRef.current = workspaceLoading;
+  }, [workspaceLoading]);
+
+  useEffect(() => {
+    hasLoadedWorkspacesRef.current = hasLoadedWorkspaces;
+  }, [hasLoadedWorkspaces]);
+
   const loadWorkspaces = useCallback(
     async (options?: { force?: boolean; silent?: boolean }) => {
       const force = options?.force === true;
       const silent = options?.silent === true;
-      if (workspaceLoading) {
+      if (workspaceLoadingRef.current) {
         return;
       }
-      if (hasLoadedWorkspaces && !force) {
+      if (hasLoadedWorkspacesRef.current && !force) {
         return;
       }
       if (!silent) {
+        workspaceLoadingRef.current = true;
         setWorkspaceLoading(true);
       }
       try {
         const result = await listWorkspaceSummaries();
         setWorkspaces(result.workspaces);
         setActiveWorkspaceId(result.activeWorkspaceId);
+        hasLoadedWorkspacesRef.current = true;
         setHasLoadedWorkspaces(true);
       } catch {
-        if (!hasLoadedWorkspaces) {
+        if (!hasLoadedWorkspacesRef.current) {
           setWorkspaces([]);
           setActiveWorkspaceId("");
         }
       } finally {
         if (!silent) {
+          workspaceLoadingRef.current = false;
           setWorkspaceLoading(false);
         }
       }
     },
-    [hasLoadedWorkspaces, workspaceLoading],
+    [],
   );
 
   useEffect(() => {

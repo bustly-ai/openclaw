@@ -67,7 +67,7 @@ function AppShell() {
     if (!loggedIn || hasCompletedInitialGatewayBootRef.current) {
       return;
     }
-    if (gatewayReady || gatewayPhase === "error") {
+    if (gatewayReady) {
       hasCompletedInitialGatewayBootRef.current = true;
     }
   }, [gatewayPhase, gatewayReady, loggedIn]);
@@ -115,10 +115,7 @@ function AppShell() {
     !isBustlyLoginWindow &&
     loggedIn &&
     !hasCompletedInitialGatewayBootRef.current &&
-    (
-      gatewayPhase === "checking" ||
-      gatewayPhase === "starting"
-    );
+    gatewayPhase !== "error";
   return (
     <>
       <Routes>
