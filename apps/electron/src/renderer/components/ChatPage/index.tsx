@@ -20,7 +20,6 @@ import {
 } from "../../lib/session-icons";
 import { buildBustlyWorkspaceMainSessionKey } from "../../../shared/bustly-agent";
 import { extractText, extractThinking } from "../../lib/chat-extract";
-import Skeleton from "../ui/Skeleton";
 import PortalTooltip from "../ui/PortalTooltip";
 import ChatModelPicker from "./ChatModelPicker";
 import { ChatTimeline } from "./ChatTimeline";
@@ -2919,7 +2918,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-white text-gray-900">
-      <div className="sticky top-0 z-20 h-8 flex-none bg-white/80 backdrop-blur-sm [-webkit-app-region:drag]" />
+      <div className="sticky top-0 z-20 h-8 flex-none bg-white [-webkit-app-region:drag]" />
 
       {error || connectionNotice ? (
         <div
@@ -2951,34 +2950,6 @@ export default function ChatPage() {
                 </p>
               </div>
             ) : null}
-            {loading ? (
-              <div className="rounded-2xl border border-gray-100 bg-white px-5 py-5">
-                <div className="space-y-4">
-                  <div className="flex justify-start">
-                    <div className="w-full max-w-[70%] space-y-2 rounded-3xl bg-[#F6F7F9] px-5 py-4">
-                      <Skeleton className="h-4 w-28 rounded-md" />
-                      <Skeleton className="h-4 w-full rounded-md" />
-                      <Skeleton className="h-4 w-3/4 rounded-md" />
-                    </div>
-                  </div>
-                  <div className="flex justify-end">
-                    <div className="w-full max-w-[62%] space-y-2 rounded-3xl bg-[#F6F7F9] px-5 py-4">
-                      <Skeleton className="h-4 w-20 rounded-md" />
-                      <Skeleton className="h-4 w-full rounded-md" />
-                    </div>
-                  </div>
-                    <div className="flex justify-start">
-                    <div className="w-full max-w-[76%] space-y-2 rounded-3xl bg-[#F6F7F9] px-5 py-4">
-                      <Skeleton className="h-4 w-24 rounded-md" />
-                      <Skeleton className="h-4 w-full rounded-md" />
-                      <Skeleton className="h-4 w-5/6 rounded-md" />
-                      <Skeleton className="h-4 w-2/3 rounded-md" />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
             <ChatTimeline
               timeline={processedTimeline}
               activeRunningToolKey={activeRunningToolKey}
