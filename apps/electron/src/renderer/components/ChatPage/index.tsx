@@ -150,6 +150,7 @@ type SessionRuntimeState = {
   seqCounter: number;
   toolTimers: Map<string, number>;
   runSeqBase: Map<string, number>;
+  pendingClientRunIds: Set<string>;
   settledRunIds: Set<string>;
   discardedRunIds: Set<string>;
   retryPayloads: Map<string, RetryPayload>;
@@ -303,6 +304,7 @@ function createSessionRuntimeState(): SessionRuntimeState {
     seqCounter: 1_000_000_000,
     toolTimers: new Map(),
     runSeqBase: new Map(),
+    pendingClientRunIds: new Set(),
     settledRunIds: new Set(),
     discardedRunIds: new Set(),
     retryPayloads: new Map(),
@@ -1216,14 +1218,47 @@ export default function ChatPage() {
     const runtime = getSessionRuntime(sessionKey);
     markRunFinished(sessionKey, runId);
     settleToolsForRun(sessionKey, runId, toolStatus);
-    setSessionActiveRunId(sessionKey, (prev) => (prev === runId ? null : prev));
-    setSessionCompactingRunId(sessionKey, (prev) => (prev === runId ? null : prev));
+    setSessionActiveRunId(sessionKey, (prev) => {
+      if (prev === runId) {
+        return null;
+      }
+      if (prev && runtime.pendingClientRunIds.has(prev)) {
+        return null;
+      }
+      return prev;
+    });
+    setSessionCompactingRunId(sessionKey, (prev) => {
+      if (prev === runId) {
+        return null;
+      }
+      if (prev && runtime.pendingClientRunIds.has(prev)) {
+        return null;
+      }
+      return prev;
+    });
     if (runId) {
       runtime.settledRunIds.add(runId);
       runtime.runSeqBase.delete(runId);
     }
+    runtime.pendingClientRunIds.delete(runId ?? "");
     runtime.streamSegments.delete(runId ?? "__unknown__");
   }, [getSessionRuntime, markRunFinished, setSessionActiveRunId, setSessionCompactingRunId, settleToolsForRun]);
+
+  const syncActiveRunId = useCallback((sessionKey: string, runtime: SessionRuntimeState, runId: string | null) => {
+    if (!runId) {
+      return;
+    }
+    setSessionActiveRunId(sessionKey, (prev) => {
+      if (!prev || prev === runId) {
+        return runId;
+      }
+      if (runtime.pendingClientRunIds.has(prev)) {
+        runtime.pendingClientRunIds.delete(prev);
+        return runId;
+      }
+      return prev;
+    });
+  }, [setSessionActiveRunId]);
 
   const upsertRunError = useCallback((params: {
     sessionKey: string;
@@ -1623,6 +1658,7 @@ export default function ChatPage() {
             }
             const runtime = getSessionRuntime(sessionKey);
             const runId = typeof payload.runId === "string" ? payload.runId : null;
+            syncActiveRunId(sessionKey, runtime, runId);
             if (runId && runtime.discardedRunIds.has(runId)) {
               return;
             }
@@ -1722,6 +1758,7 @@ export default function ChatPage() {
             }
             const runtime = getSessionRuntime(sessionKey);
             const runId = typeof payload.runId === "string" ? payload.runId : null;
+            syncActiveRunId(sessionKey, runtime, runId);
             if (runId && runtime.discardedRunIds.has(runId)) {
               return;
             }
@@ -1856,6 +1893,17 @@ export default function ChatPage() {
             }
 
             if (stream === "error") {
+              finalizeRunState(sessionKey, runId, "error");
+              clearReconnectStatus(sessionKey, runId);
+              upsertRunError({
+                sessionKey,
+                runId: runId ?? undefined,
+                seq: runtime.seqCounter++,
+                timestamp: ts,
+                reason: extractAgentErrorReason({ stream, data }),
+              });
+              refreshSessionUsage(client, sessionKey);
+              notifySidebarTasksRefresh();
               return;
             }
 
@@ -1874,6 +1922,17 @@ export default function ChatPage() {
             }
 
             if (stream === "lifecycle" && data.phase === "error") {
+              finalizeRunState(sessionKey, runId, "error");
+              clearReconnectStatus(sessionKey, runId);
+              upsertRunError({
+                sessionKey,
+                runId: runId ?? undefined,
+                seq: runtime.seqCounter++,
+                timestamp: ts,
+                reason: extractAgentErrorReason({ stream, data }),
+              });
+              refreshSessionUsage(client, sessionKey);
+              notifySidebarTasksRefresh();
               return;
             }
             return;
@@ -2266,6 +2325,7 @@ export default function ChatPage() {
       attachments: params.attachments.map((attachment) => ({ ...attachment })),
       contextPaths: params.contextPaths.map((entry) => ({ ...entry })),
     });
+    getSessionRuntime(params.sessionKey).pendingClientRunIds.add(idempotencyKey);
     getSessionRuntime(params.sessionKey).settledRunIds.delete(idempotencyKey);
     setSessionActiveRunId(params.sessionKey, idempotencyKey);
     setSessionCompactingRunId(params.sessionKey, null);
@@ -2297,6 +2357,7 @@ export default function ChatPage() {
       return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      getSessionRuntime(params.sessionKey).pendingClientRunIds.delete(idempotencyKey);
       setSessionActiveRunId(params.sessionKey, null);
       setSessionCompactingRunId(params.sessionKey, null);
       return false;
@@ -2443,6 +2504,7 @@ export default function ChatPage() {
     removeRunError(currentSessionKey, retryRunId);
     getSessionRuntime(currentSessionKey).discardedRunIds.delete(retryRunId);
     getSessionRuntime(currentSessionKey).settledRunIds.delete(retryRunId);
+    getSessionRuntime(currentSessionKey).pendingClientRunIds.add(retryRunId);
     setSessionActiveRunId(currentSessionKey, retryRunId);
     setSessionCompactingRunId(currentSessionKey, null);
     setSessionSending(currentSessionKey, true);
@@ -2466,6 +2528,7 @@ export default function ChatPage() {
           attachments: retryPayload.attachments.map((attachment) => ({ ...attachment })),
           contextPaths: retryPayload.contextPaths.map((entry) => ({ ...entry })),
         });
+        getSessionRuntime(currentSessionKey).pendingClientRunIds.add(fallbackRunId);
         getSessionRuntime(currentSessionKey).settledRunIds.delete(fallbackRunId);
         setSessionActiveRunId(currentSessionKey, fallbackRunId);
         await clientRef.current.request("chat.send", {
@@ -2479,6 +2542,7 @@ export default function ChatPage() {
         void loadSessionUsage(clientRef.current, currentSessionKey).catch(() => {});
         return;
       }
+      getSessionRuntime(currentSessionKey).pendingClientRunIds.delete(retryRunId);
       setError(message);
       setSessionActiveRunId(currentSessionKey, null);
       setSessionCompactingRunId(currentSessionKey, null);
