@@ -44,6 +44,45 @@ function resolveResourcesDir(appOutDir, platform) {
   return path.join(appOutDir, "resources");
 }
 
+function resolveExpectedKoffiTargets(platform, archName) {
+  if (platform === "darwin" || platform === "mac") {
+    if (archName === "arm64") {return ["darwin_arm64"];}
+    if (archName === "x64") {return ["darwin_x64"];}
+    if (archName === "universal") {return ["darwin_arm64", "darwin_x64"];}
+  }
+  if (platform === "win32" || platform === "windows") {
+    if (archName === "arm64") {return ["win32_arm64"];}
+    if (archName === "x64") {return ["win32_x64"];}
+    if (archName === "ia32") {return ["win32_ia32"];}
+  }
+  if (platform === "linux") {
+    if (archName === "arm64") {return ["linux_arm64"];}
+    if (archName === "x64") {return ["linux_x64", "musl_x64"];}
+    if (archName === "armv7l") {return ["linux_armhf"];}
+  }
+  return [];
+}
+
+function prunePackageSubdirs(packageRoot, expectedDirs, label) {
+  if (!existsSync(packageRoot) || expectedDirs.length === 0) {
+    return;
+  }
+
+  const expectedSet = new Set(expectedDirs);
+  const entries = readdirSync(packageRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    if (expectedSet.has(entry.name)) {
+      continue;
+    }
+    const fullPath = path.join(packageRoot, entry.name);
+    rmSync(fullPath, { recursive: true, force: true });
+    console.log(`[afterPack:prune-node] removed ${label} target ${fullPath}`);
+  }
+}
+
 export default async function afterPack(context) {
   const platform = String(context?.electronPlatformName ?? "").toLowerCase();
   const archName = normalizeArchName(context?.arch);
@@ -87,4 +126,9 @@ export default async function afterPack(context) {
   console.log(
     `[afterPack:prune-node] done; kept targets=${Array.from(expectedSet).join(",")} under ${nodeRoot}`,
   );
+
+  const openclawNodeModules = path.join(resourcesDir, "node_modules");
+  const koffiBuildRoot = path.join(openclawNodeModules, "koffi", "build", "koffi");
+  const expectedKoffiTargets = resolveExpectedKoffiTargets(platform, archName);
+  prunePackageSubdirs(koffiBuildRoot, expectedKoffiTargets, "koffi");
 }

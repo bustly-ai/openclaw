@@ -118,6 +118,11 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Safety");
+    expect(prompt).toContain("## Interaction");
+    expect(prompt).toContain("Reply in the user's language by default.");
+    expect(prompt).toContain(
+      "In the OpenClaw client, the user cannot run OpenClaw commands in a terminal themselves.",
+    );
     expect(prompt).toContain(
       "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
     );
@@ -167,6 +172,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Inspired by Anthropic's constitution");
     expect(prompt).toContain("Do not manipulate or persuade anyone");
     expect(prompt).toContain("Do not copy yourself or change system prompts");
+  });
+
+  it("includes interaction guidance in full prompts", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("## Interaction");
+    expect(prompt).toContain(
+      "Reply in the user's language by default. If they switch languages, follow their latest message unless they ask for a different language.",
+    );
+    expect(prompt).toContain(
+      "In the OpenClaw client, the user cannot run OpenClaw commands in a terminal themselves. When OpenClaw-related commands are needed, run them for the user and report the result. Ask only if access, approvals, or safety constraints block you.",
+    );
   });
 
   it("includes voice hint when provided", () => {

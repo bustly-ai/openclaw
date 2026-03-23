@@ -13,7 +13,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, extname, relative, resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..", "..", "..");
 const targetDir = resolve(repoRoot, "apps/electron/resources/openclaw");
@@ -124,6 +124,48 @@ const pruneDevDependencies = () => {
 };
 
 pruneDevDependencies();
+
+const pruneNodeModules = () => {
+  const nodeModulesRoot = resolve(stagingDir, "node_modules");
+  const removableDirNames = new Set([
+    ".ignored",
+  ]);
+  const removableFileNames = new Set([
+    ".DS_Store",
+  ]);
+  const removableExtensions = new Set([
+    ".map",
+    ".md",
+    ".markdown",
+  ]);
+
+  const visit = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = resolve(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (removableDirNames.has(entry.name)) {
+          rmSync(fullPath, { recursive: true, force: true });
+          continue;
+        }
+        visit(fullPath);
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const lowerName = entry.name.toLowerCase();
+      if (removableFileNames.has(entry.name) || removableExtensions.has(extname(lowerName))) {
+        rmSync(fullPath, { force: true });
+      }
+    }
+  };
+
+  visit(nodeModulesRoot);
+};
+
+pruneNodeModules();
 
 // Ensure any symlinks are copied as real files.
 // Otherwise they can point at the temp staging dir after it is removed.
