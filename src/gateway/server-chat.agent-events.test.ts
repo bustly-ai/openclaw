@@ -175,6 +175,17 @@ describe("agent event handler", () => {
     return payload;
   }
 
+  function expectSingleErrorChatPayload(broadcast: ReturnType<typeof vi.fn>) {
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      state?: string;
+      errorMessage?: string;
+    };
+    expect(payload.state).toBe("error");
+    return payload;
+  }
+
   it("emits chat delta for assistant text-only events", () => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),
@@ -275,6 +286,57 @@ describe("agent event handler", () => {
 
     expect(agentRunSeq.has("run-cleanup")).toBe(false);
     expect(agentRunSeq.has("client-cleanup")).toBe(false);
+    nowSpy?.mockRestore();
+  });
+
+  it("emits chat error immediately for lifecycle error events", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 2_750,
+    });
+    chatRunState.registry.add("run-error", {
+      sessionKey: "session-error",
+      clientRunId: "client-error",
+    });
+
+    handler({
+      runId: "run-error",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "error", error: "Network connection lost." },
+    });
+
+    const agentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
+    expect(agentCalls).toHaveLength(1);
+    const agentPayload = agentCalls[0]?.[1] as { data?: { phase?: string } };
+    expect(agentPayload.data?.phase).toBe("error");
+
+    const chatPayload = expectSingleErrorChatPayload(broadcast);
+    expect(chatPayload.errorMessage).toBe("Network connection lost.");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("does not synthesize chat errors for reconnecting lifecycle events", () => {
+    const { broadcast, nodeSendToSession, handler, nowSpy } = createHarness({
+      now: 3_250,
+      resolveSessionKeyForRun: () => "session-reconnecting",
+    });
+
+    handler({
+      runId: "run-reconnecting",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "reconnecting", error: "temporary upstream error" },
+    });
+
+    const agentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
+    expect(agentCalls).toHaveLength(1);
+    const payload = agentCalls[0]?.[1] as { data?: { phase?: string } };
+    expect(payload.data?.phase).toBe("reconnecting");
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy?.mockRestore();
   });
 

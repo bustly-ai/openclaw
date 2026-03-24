@@ -30,16 +30,16 @@ Things like:
 - Prefer `get:product` when you already have an AliExpress URL or product ID
 - Treat sourcing results as candidate supply, not final merchandising decisions
 
-### ads_core_ops
+### ads-core-ops
 
-- Use `ads_core_ops` for campaign reads, account inspection, and performance diagnosis
+- Use `ads-core-ops` for campaign reads, account inspection, and performance diagnosis
 - Google Ads queries require the correct `customer-id`; do not guess
 - Klaviyo is usually CRM / lifecycle marketing, not paid media
 - Meta Ads credentials are local to this machine; if they are missing, report a setup gap directly
 
-### commerce_core_ops
+### commerce-core-ops
 
-- Use `commerce_core_ops` for unified store reads and operational actions across Shopify / BigCommerce / WooCommerce / Magento
+- Use `commerce-core-ops` for unified store reads and operational actions across Shopify / BigCommerce / WooCommerce / Magento
 - Before claiming "no store connected", consider auth, membership, and billing blockers first
 - Prefer read operations first; ask before live writes
 - For product updates, switch to platform-native payloads when schema mismatch appears
