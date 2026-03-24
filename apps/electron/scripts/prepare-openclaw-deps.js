@@ -19,7 +19,7 @@ const repoRoot = resolve(import.meta.dirname, "..", "..", "..");
 const targetDir = resolve(repoRoot, "apps/electron/resources/openclaw");
 const bustlySkillsTargetDir = resolve(repoRoot, "apps/electron/resources/bustly-skills");
 const stagingDir = mkdtempSync(resolve(tmpdir(), "openclaw-deps-"));
-const bustlySkillsRoot = resolve(repoRoot, "..", "bustly-skills");
+const bustlySkillsRoot = resolve(repoRoot, "bustly-skills");
 
 rmSync(targetDir, { recursive: true, force: true });
 rmSync(bustlySkillsTargetDir, { recursive: true, force: true });
@@ -225,7 +225,7 @@ rewriteStagingSymlinks();
 assertNoStagingSymlinksRemain();
 
 if (existsSync(bustlySkillsRoot)) {
-  console.log("[prepare-openclaw-deps] Copying bustly-skills bundle.");
+  console.log(`[prepare-openclaw-deps] Copying bustly-skills bundle from ${bustlySkillsRoot}.`);
   cpSync(bustlySkillsRoot, bustlySkillsTargetDir, {
     recursive: true,
     dereference: true,
@@ -239,7 +239,8 @@ if (existsSync(bustlySkillsRoot)) {
     },
   });
 } else {
-  console.warn("[prepare-openclaw-deps] bustly-skills repo not found, skip bundled bustly-skills copy.");
+  console.error(`[prepare-openclaw-deps] Missing bustly-skills submodule: ${bustlySkillsRoot}`);
+  process.exit(1);
 }
 
 rmSync(stagingDir, { recursive: true, force: true });
