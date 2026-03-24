@@ -555,7 +555,7 @@ function buildBustlyProviderModels(headers: Record<string, string>) {
       cacheRead: 0,
       cacheWrite: 0,
     },
-    contextWindow: entry.routeKey === "chat.standard" ? 200_000 : 1_000_000,
+    contextWindow: 258_000,
     maxTokens: 128_000,
     headers: { ...headers },
   }));

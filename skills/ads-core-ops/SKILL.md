@@ -1,5 +1,5 @@
 ---
-name: ads_core_ops
+name: ads-core-ops
 description: Use the Bustly ads CLI to inspect auth, check connectivity, read entities, write supported entities, and invoke native provider APIs for Klaviyo and Google Ads.
 metadata:
   {

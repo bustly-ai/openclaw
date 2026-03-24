@@ -341,7 +341,7 @@ function resolveAgentTerminalState(payload: {
 function describeExecutionError(reason: string): string {
   const normalized = reason.trim().toLowerCase();
   if (normalized.includes("connection")) {
-    return "The gateway connection was interrupted before execution could complete. Retry the request after the connection recovers.";
+    return "Retry the request after the connection recovers.";
   }
   if (normalized.includes("rate limit") || normalized.includes("429")) {
     return "The upstream model temporarily rejected the request due to rate limiting. Retry in a moment or switch to a different model tier.";
@@ -506,6 +506,59 @@ function compareTimeline(a: TimelineItem, b: TimelineItem): number {
     return a.timestamp - b.timestamp;
   }
   return a.id.localeCompare(b.id);
+}
+
+function addLiveRunId(target: Set<string>, value: string | null | undefined) {
+  if (typeof value !== "string") {
+    return;
+  }
+  const trimmed = value.trim();
+  if (trimmed) {
+    target.add(trimmed);
+  }
+}
+
+function hasMatchingHistoryTextItem(items: TimelineItem[], role: ChatRole, text: string): boolean {
+  const comparable = normalizeComparableMessageText(text);
+  if (!comparable) {
+    return false;
+  }
+  return items.some((item) => {
+    if (item.kind !== "text" || item.role !== role) {
+      return false;
+    }
+    return normalizeComparableMessageText(item.text) === comparable;
+  });
+}
+
+function shouldPreserveLocalTimelineItem(params: {
+  item: TimelineItem;
+  liveRunIds: Set<string>;
+  historyItems: TimelineItem[];
+  preservePendingUserMessage: boolean;
+}): boolean {
+  const { item, liveRunIds, historyItems, preservePendingUserMessage } = params;
+  if (item.kind === "error") {
+    return true;
+  }
+  if (item.kind === "tool") {
+    return item.status === "running" || (item.runId ? liveRunIds.has(item.runId) : false);
+  }
+  if (item.role === "user") {
+    return (
+      preservePendingUserMessage &&
+      !item.runId &&
+      !item.id.startsWith("history:") &&
+      !hasMatchingHistoryTextItem(historyItems, "user", item.text)
+    );
+  }
+  if (!item.runId || !liveRunIds.has(item.runId)) {
+    return false;
+  }
+  if (item.role === "thinking" || item.role === "system") {
+    return true;
+  }
+  return item.role === "assistant" && (item.streaming === true || item.final !== true);
 }
 
 function readContentText(message: unknown): string | null {
@@ -1593,8 +1646,28 @@ export default function ChatPage() {
     const runtime = getSessionRuntime(sessionKey);
     runtime.historyLoaded = true;
     setSessionTimeline(sessionKey, (prev) => {
-      const localErrors = prev.filter((item): item is ErrorItem => item.kind === "error");
-      const merged = [...items, ...localErrors];
+      const liveRunIds = new Set<string>();
+      addLiveRunId(liveRunIds, runtime.view.activeRunId);
+      addLiveRunId(liveRunIds, runtime.view.compactingRunId);
+      addLiveRunId(liveRunIds, runtime.view.reconnectStatus?.runId);
+      for (const runId of runtime.pendingClientRunIds) {
+        addLiveRunId(liveRunIds, runId);
+      }
+
+      // History can refresh while a run is still streaming. Keep local live items
+      // so reconnect/history reloads do not blank the timeline until persistence catches up.
+      const merged = [...items];
+      for (const item of prev) {
+        if (!shouldPreserveLocalTimelineItem({
+          item,
+          liveRunIds,
+          historyItems: items,
+          preservePendingUserMessage: runtime.view.sending || liveRunIds.size > 0,
+        })) {
+          continue;
+        }
+        merged.push(item);
+      }
       return merged.toSorted(compareTimeline);
     });
     setSessionLoading(sessionKey, false);

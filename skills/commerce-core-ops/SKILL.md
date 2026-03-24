@@ -1,5 +1,5 @@
 ---
-name: commerce_core_ops
+name: commerce-core-ops
 description: Use the Bustly commerce CLI to inspect auth, check connectivity, read entities, write supported commerce entities, and invoke native provider APIs for Shopify, BigCommerce, WooCommerce, and Magento.
 metadata:
   {
