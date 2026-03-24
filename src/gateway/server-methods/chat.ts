@@ -9,7 +9,7 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import { clearAgentRunContext, emitAgentEvent } from "../../infra/agent-events.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
@@ -676,6 +676,7 @@ async function executeChatRun(params: {
     params.context.chatDeltaSentAt.delete(clientRunId);
     params.context.chatAbortedRuns.delete(clientRunId);
     params.context.chatPendingAbortedPartials.delete(clientRunId);
+    clearAgentRunContext(clientRunId);
   } else {
     const cached = params.context.dedupe.get(`chat:${clientRunId}`);
     if (cached) {
