@@ -1050,8 +1050,8 @@ function buildElectronCliEnv(params?: {
     appPath,
   });
   const effectivePath = prependPathEntries(fixedPath, [
-    bundledBustlyBinDir,
     bundledCliShim?.shimDir,
+    bundledBustlyBinDir,
   ]);
   const bunInstall = process.env.BUN_INSTALL?.trim() || resolve(homeDir, ".bun");
   const homebrewPrefix = process.env.HOMEBREW_PREFIX?.trim() || "/opt/homebrew";
@@ -1562,8 +1562,8 @@ async function startGateway(): Promise<boolean> {
       appPath,
     });
     const effectivePath = prependPathEntries(fixedPath, [
-      bundledBustlyBinDir,
       bundledCliShim?.shimDir,
+      bundledBustlyBinDir,
     ]);
     const appNodeModules = resolve(appPath, "node_modules");
     const resourcesNodeModules = resolve(resourcesPath, "node_modules");
