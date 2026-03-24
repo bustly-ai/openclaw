@@ -2414,6 +2414,7 @@ function setupIpcHandlers(): void {
             directPath?: string;
             entryPath?: string;
             entryName?: string;
+            transferPaths?: string[];
             fallbackKind?: "file" | "directory";
           })
         : {};
@@ -2421,6 +2422,7 @@ function setupIpcHandlers(): void {
       directPath: payload.directPath,
       entryPath: payload.entryPath,
       entryName: payload.entryName,
+      transferPaths: payload.transferPaths,
       fallbackKind: payload.fallbackKind === "directory" ? "directory" : "file",
     });
   });

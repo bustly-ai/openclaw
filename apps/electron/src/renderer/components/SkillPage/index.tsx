@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { GatewayBrowserClient } from "../../lib/gateway-client";
 import { buildBustlyWorkspaceAgentId } from "../../../shared/bustly-agent";
@@ -277,9 +277,6 @@ function SkillCardSkeleton() {
 
 const BUILD_WITH_BUSTLY_PROMPT =
   "/skill-creator Help me create a skill together. First ask me what the skill should do.";
-function buildUploadSkillPrompt(fileName: string): string {
-  return `Help me install a local skill together. I just selected a skill package named "${fileName}". First help me verify it and then guide me through installation.`;
-}
 
 function buildImportGithubSkillPrompt(url: string): string {
   return `Help me install a skill from GitHub together. I want to use this repository: ${url}`;
@@ -291,13 +288,94 @@ type PendingChatContext = {
   kind: "file" | "directory";
 };
 
+function basenameFromPath(pathValue: string): string {
+  return pathValue.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || pathValue;
+}
+
+function buildUploadSkillPrompt(selection: PendingChatContext): string {
+  const sourceType = selection.kind === "directory" ? "folder" : "file";
+  return `Help me install a local skill together. I just selected a ${sourceType} named "${selection.name}". First help me inspect whether it is a valid skill, then guide me through installation.`;
+}
+
+function parseTransferredFilePaths(raw: string | undefined): string[] {
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split("\0")
+    .join("\n")
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      if (entry.startsWith("file://")) {
+        try {
+          return decodeURIComponent(new URL(entry).pathname);
+        } catch {
+          return entry;
+        }
+      }
+      return entry;
+    })
+    .filter((entry) => entry.startsWith("/"));
+}
+
+function extractNativeTransferPaths(dataTransfer?: DataTransfer | null): string[] {
+  if (!dataTransfer) {
+    return [];
+  }
+  const candidates = [
+    dataTransfer.getData("text/uri-list"),
+    dataTransfer.getData("text/plain"),
+  ];
+  const paths = new Set<string>();
+  for (const candidate of candidates) {
+    for (const path of parseTransferredFilePaths(candidate)) {
+      paths.add(path);
+    }
+  }
+  return [...paths];
+}
+
+async function resolveDroppedSkillSelection(dataTransfer: DataTransfer): Promise<PendingChatContext | null> {
+  const transferPaths = extractNativeTransferPaths(dataTransfer);
+  const firstFile = dataTransfer.files?.[0];
+  const firstItem = dataTransfer.items?.[0];
+  const entryHandle =
+    firstItem &&
+    typeof firstItem === "object" &&
+    "webkitGetAsEntry" in firstItem &&
+    typeof (firstItem as DataTransferItem & {
+      webkitGetAsEntry?: () => { fullPath?: string; name?: string } | null;
+    }).webkitGetAsEntry === "function"
+      ? (firstItem as DataTransferItem & {
+          webkitGetAsEntry: () => { fullPath?: string; name?: string } | null;
+        }).webkitGetAsEntry()
+      : null;
+  const resolved = await window.electronAPI.resolvePastedPath({
+    file: firstFile ?? undefined,
+    entryPath: transferPaths[0] ?? entryHandle?.fullPath,
+    entryName: firstFile?.name ?? entryHandle?.name,
+    transferPaths,
+    fallbackKind: "file",
+  });
+  const path = resolved.path?.trim();
+  if (!path) {
+    return null;
+  }
+  return {
+    path,
+    name: basenameFromPath(path),
+    kind: resolved.kind === "directory" ? "directory" : "file",
+  };
+}
+
 function UploadSkillModal(props: {
   isOpen: boolean;
   onClose: () => void;
-  onUpload: (file: File) => void;
+  onSelect: (selection: PendingChatContext) => void;
 }) {
   const [isDragging, setIsDragging] = useState(false);
-  const inputRef = useRef<HTMLInputElement | null>(null);
 
   if (!props.isOpen) {
     return null;
@@ -326,12 +404,25 @@ function UploadSkillModal(props: {
             onDrop={(event) => {
               event.preventDefault();
               setIsDragging(false);
-              const file = event.dataTransfer.files?.[0];
-              if (file) {
-                props.onUpload(file);
-              }
+              void resolveDroppedSkillSelection(event.dataTransfer).then((selection) => {
+                if (selection) {
+                  props.onSelect(selection);
+                }
+              });
             }}
-            onClick={() => inputRef.current?.click()}
+            onClick={() => {
+              void window.electronAPI.selectChatContextPaths().then((selected) => {
+                const first = Array.isArray(selected) ? selected[0] : null;
+                if (!first?.path) {
+                  return;
+                }
+                props.onSelect({
+                  path: first.path,
+                  name: first.name?.trim() || basenameFromPath(first.path),
+                  kind: first.kind === "directory" ? "directory" : "file",
+                });
+              });
+            }}
           >
             <div className="mb-4 flex gap-[-8px]">
               <FileZipIcon className="h-8 w-8 translate-x-2 rotate-[-6deg] text-gray-400" />
@@ -339,30 +430,18 @@ function UploadSkillModal(props: {
               <FolderIcon className="h-8 w-8 -translate-x-2 rotate-[6deg] text-gray-400" />
             </div>
             <p className="text-sm font-medium text-[#1A162F]">Drag and drop or click to upload</p>
-            <input
-              ref={inputRef}
-              type="file"
-              accept=".zip,.skill"
-              className="hidden"
-              onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                const file = event.target.files?.[0];
-                if (file) {
-                  props.onUpload(file);
-                }
-              }}
-            />
           </div>
 
           <div className="mt-6 space-y-3">
-            <h3 className="text-sm font-bold text-[#1A162F]">File requirements</h3>
+            <h3 className="text-sm font-bold text-[#1A162F]">What happens next</h3>
             <ul className="space-y-2 text-sm text-[#6B7280]">
               <li className="flex items-center gap-2">
                 <span className="h-1 w-1 shrink-0 rounded-full bg-gray-400" />
-                <span>.zip or .skill file that includes a SKILL.md file at the root level</span>
+                <span>You can choose any local file or folder as the skill source.</span>
               </li>
               <li className="flex items-center gap-2">
                 <span className="h-1 w-1 shrink-0 rounded-full bg-gray-400" />
-                <span>SKILL.md contains a skill name and description formatted in YAML</span>
+                <span>Bustly will inspect it with you, but a valid installable skill still needs a root-level `SKILL.md`.</span>
               </li>
             </ul>
           </div>
@@ -621,7 +700,7 @@ export default function SkillPage() {
                     <div>
                       <span className="block text-sm font-semibold text-[#1A162F]">Upload a skill</span>
                       <span className="mt-0.5 block text-xs text-[#6B7280] transition-colors group-hover:text-[#1A162F]">
-                        Upload .zip, .skill, or folder
+                        Choose any local file or folder
                       </span>
                     </div>
                   </button>
@@ -704,22 +783,9 @@ export default function SkillPage() {
       <UploadSkillModal
         isOpen={showUploadModal}
         onClose={() => setShowUploadModal(false)}
-        onUpload={async (file) => {
-          if (!file.name.endsWith(".zip") && !file.name.endsWith(".skill")) {
-            return;
-          }
-          const resolved = await window.electronAPI.resolvePastedPath({
-            file,
-            fallbackKind: "file",
-          });
+        onSelect={(selection) => {
           setShowUploadModal(false);
-          navigateToChatWithPrompt(buildUploadSkillPrompt(file.name), resolved.path
-            ? {
-                path: resolved.path,
-                name: file.name,
-                kind: resolved.kind === "directory" ? "directory" : "file",
-              }
-            : undefined);
+          navigateToChatWithPrompt(buildUploadSkillPrompt(selection), selection);
         }}
       />
 

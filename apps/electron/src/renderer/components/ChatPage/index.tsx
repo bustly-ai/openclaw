@@ -824,6 +824,7 @@ export default function ChatPage() {
   const composerIsComposingRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
   const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
+  const lastAppliedPromptRef = useRef<string | null>(null);
   const lastAppliedContextRef = useRef<string | null>(null);
   const currentSessionKey = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
@@ -841,6 +842,17 @@ export default function ChatPage() {
     connected && !subscriptionExpired && !sending && (draft.trim() || attachments.length > 0 || contextPaths.length > 0);
   const showPlaceholderTicker =
     connected && !subscriptionExpired && !draft && attachments.length === 0 && contextPaths.length === 0;
+  const updateScrollBottomState = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) {
+      return;
+    }
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    const isNotAtBottom = distanceFromBottom > 100;
+    const isOverOnePage = element.scrollHeight > element.clientHeight;
+    shouldStickToBottomRef.current = !isNotAtBottom;
+    setShowScrollBottom(isNotAtBottom && isOverOnePage);
+  }, []);
 
   const getSessionRuntime = useCallback((sessionKey: string) => {
     const normalized = sessionKey.trim();
@@ -940,7 +952,19 @@ export default function ChatPage() {
     const runtime = getSessionRuntime(currentSessionKey);
     setCurrentScenarioIconId(null);
     applyVisibleSessionView(runtime.view);
-  }, [applyVisibleSessionView, currentSessionKey, getSessionRuntime]);
+    shouldStickToBottomRef.current = true;
+    setShowScrollBottom(false);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const element = scrollRef.current;
+        if (!element) {
+          return;
+        }
+        element.scrollTo({ top: element.scrollHeight, behavior: "auto" });
+        updateScrollBottomState();
+      });
+    });
+  }, [applyVisibleSessionView, currentSessionKey, getSessionRuntime, updateScrollBottomState]);
 
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search);
@@ -2103,6 +2127,7 @@ export default function ChatPage() {
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search);
     const explicitSessionKey = searchParams.get("session")?.trim();
+    const prompt = searchParams.get("prompt")?.trim();
     const contextPath = searchParams.get("contextPath")?.trim();
     const contextName = searchParams.get("contextName")?.trim();
     const contextKind = searchParams.get("contextKind")?.trim();
@@ -2111,6 +2136,22 @@ export default function ChatPage() {
     }
 
     let applied = false;
+    const promptSignature = prompt ? `${explicitSessionKey}::${prompt}` : null;
+    if (prompt && promptSignature !== lastAppliedPromptRef.current) {
+      lastAppliedPromptRef.current = promptSignature;
+      setSessionDraft(explicitSessionKey, prompt);
+      applied = true;
+      window.requestAnimationFrame(() => {
+        const textarea = composerRef.current;
+        if (!textarea) {
+          return;
+        }
+        textarea.focus();
+        const cursor = prompt.length;
+        textarea.setSelectionRange(cursor, cursor);
+      });
+    }
+
     const contextSignature = contextPath ? `${contextPath}::${contextName || ""}::${contextKind || ""}` : null;
     if (contextPath && contextSignature !== lastAppliedContextRef.current) {
       lastAppliedContextRef.current = contextSignature;
@@ -2128,6 +2169,7 @@ export default function ChatPage() {
       return;
     }
 
+    searchParams.delete("prompt");
     searchParams.delete("contextPath");
     searchParams.delete("contextName");
     searchParams.delete("contextKind");
@@ -2138,7 +2180,7 @@ export default function ChatPage() {
       },
       { replace: true },
     );
-  }, [appendContextSelections, currentSessionKey, location.pathname, location.search, navigate]);
+  }, [appendContextSelections, location.pathname, location.search, navigate, setSessionDraft]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -2146,18 +2188,14 @@ export default function ChatPage() {
       return;
     }
     const handleScroll = () => {
-      const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-      const isNotAtBottom = distanceFromBottom > 100;
-      const isOverOnePage = element.scrollHeight > element.clientHeight;
-      shouldStickToBottomRef.current = !isNotAtBottom;
-      setShowScrollBottom(isNotAtBottom && isOverOnePage);
+      updateScrollBottomState();
     };
-    handleScroll();
+    updateScrollBottomState();
     element.addEventListener("scroll", handleScroll);
     return () => {
       element.removeEventListener("scroll", handleScroll);
     };
-  }, []);
+  }, [currentSessionKey, updateScrollBottomState]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const element = scrollRef.current;
@@ -2170,7 +2208,12 @@ export default function ChatPage() {
     });
     shouldStickToBottomRef.current = true;
     setShowScrollBottom(false);
-  }, []);
+    if (behavior === "auto") {
+      window.requestAnimationFrame(() => {
+        updateScrollBottomState();
+      });
+    }
+  }, [updateScrollBottomState]);
 
   useEffect(() => {
     if (!shouldStickToBottomRef.current) {
