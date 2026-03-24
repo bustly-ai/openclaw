@@ -8,7 +8,9 @@ import {
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import { isRetryableAssistantError } from "./pi-embedded-subscribe.retry.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
+import { isOutputLimitStopReason, OUTPUT_LIMIT_ERROR } from "./pi-embedded-openrouter.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
@@ -260,7 +262,12 @@ export function handleMessageEnd(
 
   const stopReason = (assistantMessage as { stopReason?: string }).stopReason;
   const errorMessage = (assistantMessage as { errorMessage?: string }).errorMessage?.trim();
-  if (stopReason === "error" && !ctx.state.lifecycleErrorEmitted) {
+  const hitOutputLimit = isOutputLimitStopReason(assistantMessage);
+  if (
+    stopReason === "error" &&
+    !ctx.state.lifecycleErrorEmitted &&
+    !isRetryableAssistantError(assistantMessage)
+  ) {
     ctx.state.lifecycleErrorEmitted = true;
     const errorText = errorMessage || "LLM request failed with an unknown error.";
     emitAgentEvent({
@@ -442,6 +449,24 @@ export function handleMessageEnd(
         });
       }
     }
+  }
+
+  if (hitOutputLimit && !ctx.state.lifecycleErrorEmitted) {
+    ctx.state.lifecycleErrorEmitted = true;
+    emitAgentEvent({
+      runId: ctx.params.runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        endedAt: Date.now(),
+        error: OUTPUT_LIMIT_ERROR,
+      },
+    });
+    void ctx.params.onAgentEvent?.({
+      stream: "lifecycle",
+      data: { phase: "error", error: OUTPUT_LIMIT_ERROR },
+    });
+    ctx.params.abort?.(new Error("model output limit reached"));
   }
 
   ctx.state.deltaBuffer = "";

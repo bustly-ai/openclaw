@@ -56,6 +56,11 @@ import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
+import {
+  isOutputLimitStopReason,
+  isOutputLimitWithoutReply,
+  OUTPUT_LIMIT_ERROR,
+} from "../pi-embedded-openrouter.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
@@ -1112,6 +1117,40 @@ export async function runEmbeddedPiAgent(
             };
           }
 
+          const outputLimitWithoutReply =
+            !attempt.didSendViaMessagingTool &&
+            isOutputLimitWithoutReply({
+              assistantTexts: attempt.assistantTexts,
+              lastAssistant: attempt.lastAssistant,
+            });
+          const outputLimitReached = isOutputLimitStopReason(attempt.lastAssistant);
+          if (outputLimitWithoutReply && payloads.length === 0) {
+            return {
+              payloads: [
+                {
+                  text: OUTPUT_LIMIT_ERROR,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                hasAssistantMessage: Boolean(lastAssistant),
+                systemPromptReport: attempt.systemPromptReport,
+                error: {
+                  kind: "output_limit",
+                  message: OUTPUT_LIMIT_ERROR,
+                },
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
+          }
+
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
@@ -1136,8 +1175,18 @@ export async function runEmbeddedPiAgent(
               aborted,
               hasAssistantMessage: Boolean(lastAssistant),
               systemPromptReport: attempt.systemPromptReport,
+              error: outputLimitReached
+                ? {
+                    kind: "output_limit",
+                    message: OUTPUT_LIMIT_ERROR,
+                  }
+                : undefined,
               // Handle client tool calls (OpenResponses hosted tools)
-              stopReason: attempt.clientToolCall ? "tool_calls" : undefined,
+              stopReason: attempt.clientToolCall
+                ? "tool_calls"
+                : outputLimitReached
+                  ? "length"
+                  : undefined,
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {

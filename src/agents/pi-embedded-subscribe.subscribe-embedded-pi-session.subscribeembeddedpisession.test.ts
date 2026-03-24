@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   THINKING_TAG_CASES,
+  createSubscribedSessionHarness,
   createStubSessionHarness,
   emitAssistantLifecycleErrorAndEnd,
   emitMessageStartAndEndForAssistantText,
@@ -10,6 +11,7 @@ import {
   findLifecycleErrorAgentEvent,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
+import { OUTPUT_LIMIT_ERROR } from "./pi-embedded-openrouter.js";
 
 type StubSession = {
   subscribe: (fn: (evt: unknown) => void) => () => void;
@@ -149,6 +151,39 @@ describe("subscribeEmbeddedPiSession", () => {
       ]);
     },
   );
+
+  it("emits lifecycle error and aborts when an assistant message ends with stopReason length", () => {
+    const onAgentEvent = vi.fn();
+    const abort = vi.fn();
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run",
+      onAgentEvent,
+      abort,
+      provider: "bustly",
+    });
+
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "length",
+        provider: "bustly",
+        model: "chat.advanced",
+        content: [{ type: "text", text: "partial reply" }],
+      } satisfies AssistantMessage,
+    });
+
+    expect(findLifecycleErrorAgentEvent(onAgentEvent.mock.calls)).toEqual({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: OUTPUT_LIMIT_ERROR,
+      },
+    });
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(abort.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+  });
+
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
     ({ open, close }) => {
@@ -263,6 +298,52 @@ describe("subscribeEmbeddedPiSession", () => {
       .filter((value): value is string => typeof value === "string");
     expect(streamTexts.at(-1)).toBe("_Checking files done_");
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits reconnecting instead of lifecycle error while a retryable assistant error is being retried", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "429 too many requests",
+        content: [{ type: "text", text: "" }],
+      },
+    });
+    emit({ type: "agent_end" });
+    emit({
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2000,
+      errorMessage: "429 too many requests",
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual({
+      phase: "reconnecting",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2000,
+      error: "429 too many requests",
+    });
+    expect(findLifecycleErrorAgentEvent(onAgentEvent.mock.calls)).toBeUndefined();
+  });
+
+  it("emits lifecycle error when auto-retry ends unsuccessfully", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({
+      type: "auto_retry_end",
+      success: false,
+      finalError: "Retry delay exceeded",
+    });
+
+    const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
+    expect(lifecycleError).toBeDefined();
+    expect(lifecycleError?.data.error).toBe("Retry delay exceeded");
   });
 
   it("emits reasoning end once when native and tagged reasoning end overlap", () => {
@@ -500,13 +581,13 @@ describe("subscribeEmbeddedPiSession", () => {
 
     emitAssistantLifecycleErrorAndEnd({
       emit,
-      errorMessage: "429 Rate limit exceeded",
+      errorMessage: "bad request",
     });
 
     // Look for lifecycle:error event
     const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
 
     expect(lifecycleError).toBeDefined();
-    expect(lifecycleError?.data?.error).toContain("API rate limit reached");
+    expect(lifecycleError?.data?.error).toContain("bad request");
   });
 });

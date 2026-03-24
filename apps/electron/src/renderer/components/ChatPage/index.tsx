@@ -1805,6 +1805,7 @@ export default function ChatPage() {
             }
 
             if (stream === "lifecycle" && data.phase === "reconnecting" && runId) {
+              removeRunError(sessionKey, runId);
               setSessionReconnectStatus(sessionKey, {
                 runId,
               });
@@ -1912,6 +1913,7 @@ export default function ChatPage() {
 
             const terminalState = resolveAgentTerminalState({ stream, data });
             if (terminalState) {
+              clearReconnectStatus(sessionKey, runId);
               finalizeRunState(sessionKey, runId, terminalState === "final" ? "completed" : "error");
               if (terminalState === "aborted" && runId) {
                 runtime.discardedRunIds.add(runId);
@@ -1954,6 +1956,7 @@ export default function ChatPage() {
       loadHistory,
       loadSessionUsage,
       markLastAssistantAsFinal,
+      removeRunError,
       refreshSessionUsage,
       setSessionActiveRunId,
       setSessionCompactingRunId,

@@ -5,6 +5,7 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
+import { OUTPUT_LIMIT_ERROR } from "./pi-embedded-openrouter.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
@@ -104,6 +105,33 @@ const makeConfig = (opts?: { fallbacks?: string[]; apiKey?: string }): OpenClawC
               maxTokens: 2048,
             },
           ],
+        },
+      },
+    },
+  }) satisfies OpenClawConfig;
+
+const makeOpenRouterConfig = (): OpenClawConfig =>
+  ({
+    agents: {
+      defaults: {
+        model: {
+          fallbacks: [],
+        },
+      },
+    },
+    models: {
+      providers: {
+        bustly: {
+          api: "openai-completions",
+          apiKey: "sk-bustly-test",
+          baseUrl: "https://test-gw.bustly.ai/api/v1",
+          models: [],
+        },
+        openrouter: {
+          api: "openai-completions",
+          apiKey: "sk-or-test",
+          baseUrl: "https://openrouter.ai/api/v1",
+          models: [],
         },
       },
     },
@@ -392,6 +420,48 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       expect(result.meta.aborted).toBe(true);
 
       await expectProfileP2UsageUnchanged(agentDir);
+    });
+  });
+
+  it("returns a synthetic error payload for output-limit replies with no text", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          assistantTexts: [],
+          lastAssistant: buildAssistant({
+            provider: "amazon-bedrock",
+            model: "anthropic/claude-4.6-sonnet-20260217",
+            stopReason: "length",
+            content: [],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:openrouter-output-limit",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeOpenRouterConfig(),
+        prompt: "hello",
+        provider: "openrouter",
+        model: "anthropic/claude-4.6-sonnet-20260217",
+        timeoutMs: 5_000,
+        runId: "run:openrouter-output-limit",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(result.payloads).toEqual([
+        {
+          text: OUTPUT_LIMIT_ERROR,
+          isError: true,
+        },
+      ]);
+      expect(result.meta.error).toEqual({
+        kind: "output_limit",
+        message: OUTPUT_LIMIT_ERROR,
+      });
     });
   });
 
