@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+import wave
 
 DEFAULT_ROUTE_MODEL = os.environ.get("BUSTLY_MODEL_GATEWAY_AUDIO_ROUTE", "audio.advanced").strip() or "audio.advanced"
 DEFAULT_USER_AGENT = os.environ.get("BUSTLY_MODEL_GATEWAY_USER_AGENT", "OpenClaw/CLI").strip() or "OpenClaw/CLI"
@@ -104,6 +105,40 @@ def decode_audio_payload(raw_audio: str) -> bytes:
             raise RuntimeError(f"Unsupported audio encoding in response: {exc}") from exc
 
 
+def _looks_like_audio_container(audio_bytes: bytes) -> bool:
+    if not audio_bytes:
+        return False
+    return (
+        audio_bytes.startswith(b"ID3")
+        or audio_bytes[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")
+        or audio_bytes.startswith(b"RIFF")
+        or audio_bytes.startswith(b"OggS")
+        or audio_bytes.startswith(b"fLaC")
+    )
+
+
+def _wrap_pcm16le_as_wav(audio_bytes: bytes, sample_rate: int, channels: int) -> bytes:
+    # MiniMax fallback: some gateway versions may return raw PCM bytes.
+    # Wrap raw PCM16LE into a valid WAV container so users get audible output.
+    if channels <= 0:
+        channels = 1
+    if sample_rate <= 0:
+        sample_rate = 32000
+
+    if len(audio_bytes) % 2 != 0:
+        audio_bytes = audio_bytes[:-1]
+
+    import io
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(audio_bytes)
+    return buffer.getvalue()
+
+
 def build_payload(args: argparse.Namespace) -> dict:
     if not args.text.strip():
         raise RuntimeError("Empty text provided")
@@ -131,7 +166,7 @@ def build_payload(args: argparse.Namespace) -> dict:
     }
 
 
-def call_gateway(gateway_base_url: str, jwt: str, workspace_id: str, payload: dict) -> tuple[dict | None, bytes]:
+def call_gateway(gateway_base_url: str, jwt: str, workspace_id: str, payload: dict) -> tuple[dict | None, bytes, str]:
     target = audio_speech_url(gateway_base_url)
     req = Request(
         target,
@@ -154,11 +189,11 @@ def call_gateway(gateway_base_url: str, jwt: str, workspace_id: str, payload: di
                     text = raw_body.decode("utf-8", errors="strict")
                     parsed = json.loads(text)
                     if isinstance(parsed, dict):
-                        return parsed, raw_body
+                        return parsed, raw_body, content_type
                 except Exception:
                     # Some upstreams may return audio bytes with JSON content-type.
                     pass
-            return None, raw_body
+            return None, raw_body, content_type
     except HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
         message = raw
@@ -219,7 +254,7 @@ def main():
         jwt, workspace_id = resolve_auth(args)
         gateway_base_url = resolve_gateway_base_url()
         payload = build_payload(args)
-        data, raw_body = call_gateway(gateway_base_url, jwt, workspace_id, payload)
+        data, raw_body, content_type = call_gateway(gateway_base_url, jwt, workspace_id, payload)
 
         extra: dict[str, Any] = {}
         if isinstance(data, dict):
@@ -239,8 +274,28 @@ def main():
             if not raw_body:
                 raise RuntimeError("TTS response did not include audio payload.")
             audio_bytes = raw_body
+
         output_path = Path(args.output).expanduser().resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not _looks_like_audio_container(audio_bytes):
+            if isinstance(content_type, str) and "application/json" in content_type.lower():
+                # Compat path for legacy gateway behavior returning raw PCM bytes.
+                audio_setting = payload.get("audio_setting") if isinstance(payload, dict) else {}
+                sample_rate = int(audio_setting.get("sample_rate", 32000)) if isinstance(audio_setting, dict) else 32000
+                channels = int(audio_setting.get("channel", 1)) if isinstance(audio_setting, dict) else 1
+                wav_bytes = _wrap_pcm16le_as_wav(audio_bytes, sample_rate, channels)
+                wav_output = output_path.with_suffix(".wav")
+                wav_output.write_bytes(wav_bytes)
+                print(f"SUCCESS: Audio saved to {wav_output}")
+                print("NOTE: Gateway returned raw PCM bytes; saved as WAV compatibility fallback.")
+                print(f"Duration: {extra.get('audio_length', 0)} ms")
+                print(f"Size: {len(wav_bytes)} bytes")
+                print(f"Characters: {extra.get('usage_characters', 0)}")
+                return
+            raise RuntimeError(
+                "Gateway returned unrecognized audio bytes. Please upgrade model-gateway audio route."
+            )
         output_path.write_bytes(audio_bytes)
 
         print(f"SUCCESS: Audio saved to {output_path}")
