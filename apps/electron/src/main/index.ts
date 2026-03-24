@@ -2061,17 +2061,32 @@ function setupAutoUpdater(): void {
     updateVersion = info.version ?? null;
   });
 
-  void autoUpdater.checkForUpdates()
-    .then((result) => {
+  const runStartupUpdateCheck = async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
       if (result?.updateInfo?.version) {
         writeMainLog(`[Updater] checkForUpdates result: ${result.updateInfo.version}`);
       } else {
         writeMainLog("[Updater] checkForUpdates result: no update info");
       }
-    })
-    .catch((error) => {
+
+      const downloadPromise = result?.downloadPromise;
+      if (downloadPromise && typeof downloadPromise.catch === "function") {
+        void downloadPromise.catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          writeMainLog(`[Updater] background download failed: ${message}`);
+          sendUpdateStatus("error", { error: message });
+        });
+      }
+    } catch (error) {
       writeMainLog(`[Updater] checkForUpdates failed: ${error instanceof Error ? error.message : String(error)}`);
-    });
+    }
+  };
+
+  // Never let update probing block the app startup path.
+  setTimeout(() => {
+    void runStartupUpdateCheck();
+  }, 3000);
 }
 
 function ensureWindow(): void {
@@ -2482,7 +2497,15 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle("updater-check", async () => {
     try {
-      await autoUpdater.checkForUpdates();
+      const result = await autoUpdater.checkForUpdates();
+      const downloadPromise = result?.downloadPromise;
+      if (downloadPromise && typeof downloadPromise.catch === "function") {
+        void downloadPromise.catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          writeMainLog(`[Updater] manual download failed: ${message}`);
+          sendUpdateStatus("error", { error: message });
+        });
+      }
       return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };

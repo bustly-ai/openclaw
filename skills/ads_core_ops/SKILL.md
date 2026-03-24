@@ -125,6 +125,8 @@ Google Ads notes
 
 - Most entity reads require `--customer-id <customer-id>`
 - `search` additionally requires a GAQL query
+- `customers` read uses `GET /customers:listAccessibleCustomers` to enumerate accessible accounts
+- Native Google Ads requests sent through `write` still go through provider path restrictions; allowed paths include `GET /customers/{id}` plus supported `search` and `mutate` endpoints
 
 Examples
 
@@ -132,6 +134,7 @@ Examples
 bustly ops google-ads help
 bustly ops google-ads read --entity customers
 bustly ops google-ads read --entity campaigns --customer-id 8922277297
+bustly ops google-ads write --entity customers --action update --payload '{"request":{"method":"GET","path":"/customers/8922277297"}}'
 bustly ops google-ads read --entity search --customer-id 8922277297 --query "SELECT campaign.id, campaign.name FROM campaign LIMIT 10"
 bustly ops google-ads write --entity search --action update --payload '{"request":{"method":"POST","path":"/customers/8922277297/googleAds:search","body":{"query":"SELECT campaign.id FROM campaign LIMIT 1"}}}'
 bustly ops google-ads invoke --method POST --path /customers/8922277297/googleAds:search --body '{"query":"SELECT campaign.id FROM campaign LIMIT 10"}'
@@ -140,6 +143,7 @@ bustly ops google-ads invoke --method POST --path /customers/8922277297/googleAd
 Platform notes
 
 - Klaviyo aliases: `klaviyo`
+- Klaviyo `campaigns` read defaults to `channel=email` when no `filter` or `channel` is provided
 - Google Ads aliases: `google-ads`, `googleads`
 - Both platforms route through `ads-core-ops`
 - `invoke` is the escape hatch for native provider-relative requests
