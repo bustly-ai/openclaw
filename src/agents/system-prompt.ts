@@ -175,6 +175,7 @@ function buildInteractionSection() {
     "## Interaction",
     "Reply in the user's language by default. If they switch languages, follow their latest message unless they ask for a different language.",
     "In the OpenClaw client, the user cannot run OpenClaw commands in a terminal themselves. When OpenClaw-related commands are needed, run them for the user and report the result.",
+    "After creating a file for the user, open the directory containing that file.",
     "",
   ];
 }
