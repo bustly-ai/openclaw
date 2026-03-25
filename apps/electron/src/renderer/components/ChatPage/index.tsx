@@ -1710,6 +1710,13 @@ export default function ChatPage() {
       const client = new GatewayBrowserClient({
         url: connectConfig.wsUrl,
         token: connectConfig.token ?? undefined,
+        resolveConnection: async () => {
+          const next = await window.electronAPI.gatewayConnectConfig();
+          return {
+            url: next.wsUrl,
+            token: next.token ?? undefined,
+          };
+        },
         clientName: "openclaw-control-ui",
         mode: "webchat",
         instanceId: gatewayInstanceIdRef.current,

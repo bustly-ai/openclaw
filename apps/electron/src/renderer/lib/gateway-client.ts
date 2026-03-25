@@ -26,6 +26,11 @@ export type GatewayBrowserClientOptions = {
   url: string;
   token?: string;
   password?: string;
+  resolveConnection?: () => Promise<{
+    url?: string;
+    token?: string;
+    password?: string;
+  } | null | undefined>;
   clientName?: string;
   clientVersion?: string;
   platform?: string;
@@ -65,13 +70,21 @@ export class GatewayBrowserClient {
   private lastSeq: number | null = null;
   private reconnectBackoffMs = 800;
   private connectTimer: number | null = null;
+  private reconnectTimer: number | null = null;
   private pendingConnectError: { code: string; message: string; details?: unknown } | undefined;
+  private currentUrl: string;
+  private currentToken: string | undefined;
+  private currentPassword: string | undefined;
 
-  constructor(private readonly options: GatewayBrowserClientOptions) {}
+  constructor(private readonly options: GatewayBrowserClientOptions) {
+    this.currentUrl = options.url;
+    this.currentToken = options.token;
+    this.currentPassword = options.password;
+  }
 
   start() {
     this.closed = false;
-    this.connect();
+    void this.connect();
   }
 
   stop() {
@@ -79,6 +92,10 @@ export class GatewayBrowserClient {
     if (this.connectTimer != null) {
       window.clearTimeout(this.connectTimer);
       this.connectTimer = null;
+    }
+    if (this.reconnectTimer != null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
     this.ws?.close();
     this.ws = null;
@@ -98,11 +115,38 @@ export class GatewayBrowserClient {
     });
   }
 
-  private connect() {
+  private async connect() {
     if (this.closed) {
       return;
     }
-    this.ws = new WebSocket(this.options.url);
+    if (this.reconnectTimer != null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (typeof this.options.resolveConnection === "function") {
+      try {
+        const next = await this.options.resolveConnection();
+        if (this.closed) {
+          return;
+        }
+        if (next && typeof next === "object") {
+          if (typeof next.url === "string" && next.url.trim()) {
+            this.currentUrl = next.url.trim();
+          }
+          if ("token" in next) {
+            this.currentToken = next.token?.trim() || undefined;
+          }
+          if ("password" in next) {
+            this.currentPassword = next.password?.trim() || undefined;
+          }
+        }
+      } catch (error) {
+        console.warn("[gateway-client] resolveConnection failed:", error);
+      }
+    }
+    this.pendingConnectError = undefined;
+    this.lastSeq = null;
+    this.ws = new WebSocket(this.currentUrl);
     this.connectSent = false;
     this.connectNonce = null;
 
@@ -111,6 +155,10 @@ export class GatewayBrowserClient {
     this.ws.addEventListener("close", (event) => {
       const reason = String(event.reason ?? "");
       const wasClosed = this.closed;
+      if (this.connectTimer != null) {
+        window.clearTimeout(this.connectTimer);
+        this.connectTimer = null;
+      }
       this.ws = null;
       this.flushPending(new Error(`gateway closed (${event.code}): ${reason}`));
       if (!wasClosed) {
@@ -140,9 +188,15 @@ export class GatewayBrowserClient {
     if (this.closed) {
       return;
     }
+    if (this.reconnectTimer != null) {
+      return;
+    }
     const delay = this.reconnectBackoffMs;
     this.reconnectBackoffMs = Math.min(this.reconnectBackoffMs * 1.7, 15_000);
-    window.setTimeout(() => this.connect(), delay);
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect();
+    }, delay);
   }
 
   private flushPending(error: Error) {
@@ -164,7 +218,7 @@ export class GatewayBrowserClient {
     try {
       const role = "operator";
       const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
-      let authToken = this.options.token;
+      let authToken = this.currentToken;
       // let canFallbackToShared = false;
 
       const hasWebCrypto = typeof crypto !== "undefined" && !!crypto.subtle;
@@ -228,10 +282,10 @@ export class GatewayBrowserClient {
         device,
         caps: ["tool-events"],
         auth:
-          authToken || this.options.password
+          authToken || this.currentPassword
             ? {
                 token: authToken,
-                password: this.options.password,
+                password: this.currentPassword,
               }
             : undefined,
         userAgent: navigator.userAgent,
