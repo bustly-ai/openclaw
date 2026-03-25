@@ -15,6 +15,7 @@ import {
 } from "@phosphor-icons/react";
 import { listWorkspaceSummaries } from "../../lib/bustly-supabase";
 import { GatewayBrowserClient, type GatewayEventFrame } from "../../lib/gateway-client";
+import { createGatewayInstanceId } from "../../lib/gateway-instance-id";
 import {
   deriveScenarioLabel,
   resolveSessionIconComponent,
@@ -31,6 +32,8 @@ import {
   type ChatInputArtifact,
   type InputArtifactKind,
 } from "./input-artifacts";
+import { shouldPreserveLocalTimelineItem } from "./history-merge";
+import { recoverSessionViewState } from "./runtime-recovery";
 import { collapseProcessedTurn, collapseStreamingEvents, resolveToolDisplay, formatToolDetail } from "./utils";
 import type { TimelineArtifact, TimelineNode } from "./types";
 import { useAppState } from "../../providers/AppStateProvider";
@@ -518,49 +521,6 @@ function addLiveRunId(target: Set<string>, value: string | null | undefined) {
   }
 }
 
-function hasMatchingHistoryTextItem(items: TimelineItem[], role: ChatRole, text: string): boolean {
-  const comparable = normalizeComparableMessageText(text);
-  if (!comparable) {
-    return false;
-  }
-  return items.some((item) => {
-    if (item.kind !== "text" || item.role !== role) {
-      return false;
-    }
-    return normalizeComparableMessageText(item.text) === comparable;
-  });
-}
-
-function shouldPreserveLocalTimelineItem(params: {
-  item: TimelineItem;
-  liveRunIds: Set<string>;
-  historyItems: TimelineItem[];
-  preservePendingUserMessage: boolean;
-}): boolean {
-  const { item, liveRunIds, historyItems, preservePendingUserMessage } = params;
-  if (item.kind === "error") {
-    return true;
-  }
-  if (item.kind === "tool") {
-    return item.status === "running" || (item.runId ? liveRunIds.has(item.runId) : false);
-  }
-  if (item.role === "user") {
-    return (
-      preservePendingUserMessage &&
-      !item.runId &&
-      !item.id.startsWith("history:") &&
-      !hasMatchingHistoryTextItem(historyItems, "user", item.text)
-    );
-  }
-  if (!item.runId || !liveRunIds.has(item.runId)) {
-    return false;
-  }
-  if (item.role === "thinking" || item.role === "system") {
-    return true;
-  }
-  return item.role === "assistant" && (item.streaming === true || item.final !== true);
-}
-
 function readContentText(message: unknown): string | null {
   const text = extractText(message);
   if (typeof text !== "string") {
@@ -865,6 +825,7 @@ export default function ChatPage() {
   });
 
   const clientRef = useRef<GatewayBrowserClient | null>(null);
+  const gatewayInstanceIdRef = useRef(createGatewayInstanceId("chat"));
   const sessionRuntimesRef = useRef<Map<string, SessionRuntimeState>>(new Map());
   const currentSessionKeyRef = useRef("");
   const previewViewportRef = useRef<HTMLDivElement | null>(null);
@@ -1000,6 +961,16 @@ export default function ChatPage() {
       sessionUsage: resolveStateUpdate(action, view.sessionUsage),
     }));
   }, [updateSessionView]);
+
+  const resetSessionStreamCaches = useCallback((sessionKey: string) => {
+    const runtime = getSessionRuntime(sessionKey);
+    for (const timer of runtime.toolTimers.values()) {
+      window.clearTimeout(timer);
+    }
+    runtime.toolTimers.clear();
+    runtime.streamSegments.clear();
+    runtime.runSeqBase.clear();
+  }, [getSessionRuntime]);
   useEffect(() => {
     currentSessionKeyRef.current = currentSessionKey;
     const runtime = getSessionRuntime(currentSessionKey);
@@ -1520,7 +1491,11 @@ export default function ChatPage() {
     }
   }, [getSessionRuntime, setSessionTimeline]);
 
-  const loadHistory = useCallback(async (client: GatewayBrowserClient, sessionKey: string) => {
+  const loadHistory = useCallback(async (
+    client: GatewayBrowserClient,
+    sessionKey: string,
+    options?: { recoverTransientState?: boolean },
+  ) => {
     const res = await client.request<{ messages?: unknown[] }>("chat.history", {
       sessionKey,
       limit: 200,
@@ -1582,14 +1557,6 @@ export default function ChatPage() {
         if (textRole === "assistant" && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
           continue;
         }
-        if (textRole === "user") {
-          console.log("[electron-chat] history user message", {
-            sessionKey,
-            timestamp,
-            message,
-            text,
-          });
-        }
         items.push({
           kind: "text",
           id: `history:${sessionKey}:text:${textRole}:${baseSeq}:${timestamp}`,
@@ -1645,33 +1612,75 @@ export default function ChatPage() {
     items.push(...toolsByCallId.values());
     const runtime = getSessionRuntime(sessionKey);
     runtime.historyLoaded = true;
-    setSessionTimeline(sessionKey, (prev) => {
-      const liveRunIds = new Set<string>();
+    const previousTimeline = runtime.view.timeline;
+
+    let liveRunIds = new Set<string>();
+    if (options?.recoverTransientState) {
+      const recovered = recoverSessionViewState({
+        view: runtime.view,
+        timeline: previousTimeline,
+        pendingClientRunIds: runtime.pendingClientRunIds,
+      });
+      liveRunIds = recovered.liveRunIds;
+    } else {
       addLiveRunId(liveRunIds, runtime.view.activeRunId);
       addLiveRunId(liveRunIds, runtime.view.compactingRunId);
       addLiveRunId(liveRunIds, runtime.view.reconnectStatus?.runId);
       for (const runId of runtime.pendingClientRunIds) {
         addLiveRunId(liveRunIds, runId);
       }
+    }
 
-      // History can refresh while a run is still streaming. Keep local live items
-      // so reconnect/history reloads do not blank the timeline until persistence catches up.
-      const merged = [...items];
-      for (const item of prev) {
-        if (!shouldPreserveLocalTimelineItem({
-          item,
-          liveRunIds,
-          historyItems: items,
-          preservePendingUserMessage: runtime.view.sending || liveRunIds.size > 0,
-        })) {
-          continue;
-        }
-        merged.push(item);
+    const merged = [...items];
+    for (const item of previousTimeline) {
+      if (!shouldPreserveLocalTimelineItem({
+        item,
+        liveRunIds,
+        historyItems: items,
+        preservePendingUserMessage: runtime.view.sending || liveRunIds.size > 0,
+      })) {
+        continue;
       }
-      return merged.toSorted(compareTimeline);
-    });
+      merged.push(item);
+    }
+    const mergedTimeline = merged.toSorted(compareTimeline);
+
+    if (options?.recoverTransientState) {
+      const recovered = recoverSessionViewState({
+        view: runtime.view,
+        timeline: mergedTimeline,
+        pendingClientRunIds: runtime.pendingClientRunIds,
+      });
+      runtime.pendingClientRunIds = recovered.pendingClientRunIds;
+      runtime.settledRunIds = recovered.terminalRunIds;
+      runtime.discardedRunIds = new Set(
+        [...runtime.discardedRunIds].filter((runId) => recovered.terminalRunIds.has(runId)),
+      );
+      replaceSessionView(sessionKey, {
+        ...recovered.view,
+        timeline: mergedTimeline,
+        loading: false,
+      });
+      return;
+    }
+
+    setSessionTimeline(sessionKey, mergedTimeline);
     setSessionLoading(sessionKey, false);
-  }, [getSessionRuntime, setSessionLoading, setSessionTimeline]);
+  }, [getSessionRuntime, replaceSessionView, setSessionLoading, setSessionTimeline]);
+
+  const reloadSessionHistory = useCallback((
+    client: GatewayBrowserClient,
+    sessionKey: string,
+    options?: { recoverTransientState?: boolean },
+  ) => {
+    if (options?.recoverTransientState) {
+      resetSessionStreamCaches(sessionKey);
+    }
+    setSessionLoading(sessionKey, true);
+    void loadHistory(client, sessionKey, options).catch((err) => {
+      setError(err instanceof Error ? err.message : String(err));
+    });
+  }, [loadHistory, resetSessionStreamCaches, setSessionLoading]);
 
   const connectGateway = useCallback(
     async (status: GatewayStatus) => {
@@ -1703,23 +1712,25 @@ export default function ChatPage() {
         token: connectConfig.token ?? undefined,
         clientName: "openclaw-control-ui",
         mode: "webchat",
-        instanceId: `bustly-electron-chat-${Date.now()}`,
+        instanceId: gatewayInstanceIdRef.current,
         onHello: () => {
           setConnected(true);
           setError(null);
           setConnectionNotice(null);
           const sessionKey = currentSessionKeyRef.current;
-          const runtime = getSessionRuntime(sessionKey);
-          if (!runtime.historyLoaded) {
-            void loadHistory(client, sessionKey).catch((err) => {
-              setError(err instanceof Error ? err.message : String(err));
-            });
-          } else {
-            setSessionLoading(sessionKey, false);
-          }
+          reloadSessionHistory(client, sessionKey, { recoverTransientState: true });
           void loadSessionUsage(client, sessionKey).catch((err) => {
             setError(err instanceof Error ? err.message : String(err));
           });
+        },
+        onGap: ({ expected, received }) => {
+          const sessionKey = currentSessionKeyRef.current;
+          const currentClient = clientRef.current;
+          console.warn("[electron-chat] gateway event gap", { expected, received, sessionKey });
+          if (!currentClient) {
+            return;
+          }
+          reloadSessionHistory(currentClient, sessionKey);
         },
         onClose: ({ code, reason, error: closeError }) => {
           setConnected(false);
@@ -1743,7 +1754,9 @@ export default function ChatPage() {
           if (evt.event === "health") {
             return;
           }
-          console.log("[electron-chat] received event", evt.event, evt.payload);
+          if(!['presence', 'tick'].includes(evt.event)){
+            console.log("[electron-chat] received event", evt.event, evt.payload);
+          }
           if (evt.event === "chat") {
             const payload = evt.payload as {
               runId?: string;
@@ -2054,10 +2067,10 @@ export default function ChatPage() {
       loadSessionUsage,
       markLastAssistantAsFinal,
       removeRunError,
+      reloadSessionHistory,
       refreshSessionUsage,
       setSessionActiveRunId,
       setSessionCompactingRunId,
-      setSessionLoading,
       setSessionReconnectStatus,
       upsertRunError,
       upsertTool,

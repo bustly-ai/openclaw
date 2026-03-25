@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import {
   createAgentEventHandler,
   createChatRunState,
@@ -47,6 +48,7 @@ describe("agent event handler", () => {
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
     const toolEventRecipients = createToolEventRecipientRegistry();
+    const clients = new Set<GatewayWsClient>();
 
     const handler = createAgentEventHandler({
       broadcast,
@@ -55,6 +57,7 @@ describe("agent event handler", () => {
       agentRunSeq,
       chatRunState,
       resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
+      resolveToolEventConnIds: (runId) => toolEventRecipients.resolveConnIds(runId, clients),
       clearAgentRunContext: vi.fn(),
       toolEventRecipients,
     });
@@ -66,6 +69,7 @@ describe("agent event handler", () => {
       nodeSendToSession,
       agentRunSeq,
       chatRunState,
+      clients,
       toolEventRecipients,
       handler,
     };
@@ -87,6 +91,28 @@ describe("agent event handler", () => {
       data: { text },
     });
     return harness;
+  }
+
+  function addToolEventsClient(
+    harness: ReturnType<typeof createHarness>,
+    params: { connId: string; instanceId?: string; caps?: string[] },
+  ) {
+    harness.clients.add({
+      connId: params.connId,
+      socket: { bufferedAmount: 0, send: vi.fn(), close: vi.fn() } as never,
+      connect: {
+        role: "operator",
+        scopes: ["operator.admin"],
+        caps: params.caps ?? ["tool-events"],
+        client: {
+          id: "openclaw-control-ui",
+          version: "dev",
+          platform: "macOS",
+          mode: "webchat",
+          instanceId: params.instanceId,
+        },
+      } as never,
+    });
   }
 
   function emitRun1ThinkingText(
@@ -341,9 +367,11 @@ describe("agent event handler", () => {
   });
 
   it("routes tool events only to registered recipients when verbose is enabled", () => {
-    const { broadcast, broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+    const harness = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
+    const { broadcast, broadcastToConnIds, toolEventRecipients, handler } = harness;
+    addToolEventsClient(harness, { connId: "conn-1" });
 
     registerAgentRunContext("run-tool", { sessionKey: "session-1", verboseLevel: "on" });
     toolEventRecipients.add("run-tool", "conn-1");
@@ -361,10 +389,46 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
-  it("broadcasts tool events to WS recipients even when verbose is off, but skips node send", () => {
-    const { broadcastToConnIds, nodeSendToSession, toolEventRecipients, handler } = createHarness({
+  it("resolves tool recipients across reconnects by instanceId", () => {
+    const harness = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
+    const { broadcast, broadcastToConnIds, toolEventRecipients, handler } = harness;
+    toolEventRecipients.add("run-tool-reconnect", "conn-old", "bustly-electron-chat-1");
+    addToolEventsClient(harness, {
+      connId: "conn-new",
+      instanceId: "bustly-electron-chat-1",
+    });
+
+    registerAgentRunContext("run-tool-reconnect", {
+      sessionKey: "session-1",
+      verboseLevel: "on",
+    });
+
+    handler({
+      runId: "run-tool-reconnect",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: { phase: "result", name: "exec", toolCallId: "t1b" },
+    });
+
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "agent",
+      expect.any(Object),
+      new Set(["conn-new"]),
+    );
+    resetAgentRunContextForTest();
+  });
+
+  it("broadcasts tool events to WS recipients even when verbose is off, but skips node send", () => {
+    const harness = createHarness({
+      resolveSessionKeyForRun: () => "session-1",
+    });
+    const { broadcastToConnIds, nodeSendToSession, toolEventRecipients, handler } = harness;
+    addToolEventsClient(harness, { connId: "conn-1" });
 
     registerAgentRunContext("run-tool-off", { sessionKey: "session-1", verboseLevel: "off" });
     toolEventRecipients.add("run-tool-off", "conn-1");
@@ -386,9 +450,11 @@ describe("agent event handler", () => {
   });
 
   it("strips structured tool output when verbose is on but keeps text output", () => {
-    const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+    const harness = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
+    const { broadcastToConnIds, toolEventRecipients, handler } = harness;
+    addToolEventsClient(harness, { connId: "conn-1" });
 
     registerAgentRunContext("run-tool-on", { sessionKey: "session-1", verboseLevel: "on" });
     toolEventRecipients.add("run-tool-on", "conn-1");
@@ -416,9 +482,11 @@ describe("agent event handler", () => {
   });
 
   it("keeps tool output and exposes text output when verbose is full", () => {
-    const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+    const harness = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
+    const { broadcastToConnIds, toolEventRecipients, handler } = harness;
+    addToolEventsClient(harness, { connId: "conn-1" });
 
     registerAgentRunContext("run-tool-full", { sessionKey: "session-1", verboseLevel: "full" });
     toolEventRecipients.add("run-tool-full", "conn-1");
@@ -445,9 +513,11 @@ describe("agent event handler", () => {
   });
 
   it("maps partial tool output to output when only partialResult exists", () => {
-    const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+    const harness = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
+    const { broadcastToConnIds, toolEventRecipients, handler } = harness;
+    addToolEventsClient(harness, { connId: "conn-1" });
 
     registerAgentRunContext("run-tool-partial", { sessionKey: "session-1", verboseLevel: "on" });
     toolEventRecipients.add("run-tool-partial", "conn-1");
@@ -528,9 +598,11 @@ describe("agent event handler", () => {
   });
 
   it("remaps chat-linked tool runId for non-full verbose payloads", () => {
-    const { broadcastToConnIds, chatRunState, toolEventRecipients, handler } = createHarness({
+    const harness = createHarness({
       resolveSessionKeyForRun: () => "session-tool-remap",
     });
+    const { broadcastToConnIds, chatRunState, toolEventRecipients, handler } = harness;
+    addToolEventsClient(harness, { connId: "conn-1" });
 
     chatRunState.registry.add("run-tool-internal", {
       sessionKey: "session-tool-remap",

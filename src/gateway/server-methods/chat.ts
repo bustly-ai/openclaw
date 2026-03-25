@@ -824,15 +824,19 @@ async function executeChatRun(params: {
             }
           }
           const connId = typeof params.client?.connId === "string" ? params.client.connId : undefined;
+          const instanceId =
+            typeof params.client?.connect?.client?.instanceId === "string"
+              ? params.client.connect.client.instanceId
+              : undefined;
           const wantsToolEvents = hasGatewayClientCap(
             params.client?.connect?.caps,
             GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
           );
           if (connId && wantsToolEvents) {
-            params.context.registerToolEventRecipient(runId, connId);
+            params.context.registerToolEventRecipient(runId, connId, instanceId);
             for (const [activeRunId, active] of params.context.chatAbortControllers) {
               if (activeRunId !== runId && active.sessionKey === params.sessionKey) {
-                params.context.registerToolEventRecipient(activeRunId, connId);
+                params.context.registerToolEventRecipient(activeRunId, connId, instanceId);
               }
             }
           }

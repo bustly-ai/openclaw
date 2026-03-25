@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { GatewayBrowserClient } from "../lib/gateway-client";
+import { createGatewayInstanceId } from "../lib/gateway-instance-id";
 
 type GatewayPhase = "idle" | "checking" | "starting" | "ready" | "error";
 
@@ -36,7 +37,7 @@ async function openGatewayProbe(wsUrl: string, token?: string): Promise<void> {
       token,
       clientName: "openclaw-probe",
       mode: "probe",
-      instanceId: `bustly-electron-probe-${Date.now()}`,
+      instanceId: createGatewayInstanceId("probe"),
       onHello: () => {
         if (settled) {
           return;

@@ -111,6 +111,8 @@ function createChatContext(): Pick<
   | "chatRunBuffers"
   | "chatDeltaSentAt"
   | "chatAbortedRuns"
+  | "chatPendingAbortedPartials"
+  | "addChatRun"
   | "removeChatRun"
   | "dedupe"
   | "registerToolEventRecipient"
@@ -124,6 +126,8 @@ function createChatContext(): Pick<
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
     chatAbortedRuns: new Map(),
+    chatPendingAbortedPartials: new Map(),
+    addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     dedupe: new Map(),
     registerToolEventRecipient: vi.fn(),
@@ -215,15 +219,28 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-tool-events-on",
       client: {
         connId: "conn-1",
-        connect: { caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS] },
+        connect: {
+          caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+          client: { instanceId: "bustly-electron-chat-1" },
+        },
       },
       expectBroadcast: false,
     });
 
     const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
-    expect(register).toHaveBeenCalledWith("run-current", "conn-1");
-    expect(register).toHaveBeenCalledWith("run-same-session", "conn-1");
-    expect(register).not.toHaveBeenCalledWith("run-other-session", "conn-1");
+    await vi.waitFor(() => {
+      expect(register).toHaveBeenCalledWith("run-current", "conn-1", "bustly-electron-chat-1");
+      expect(register).toHaveBeenCalledWith(
+        "run-same-session",
+        "conn-1",
+        "bustly-electron-chat-1",
+      );
+      expect(register).not.toHaveBeenCalledWith(
+        "run-other-session",
+        "conn-1",
+        "bustly-electron-chat-1",
+      );
+    }, FAST_WAIT_OPTS);
   });
 
   it("does not register tool-event recipients without tool-events capability", async () => {

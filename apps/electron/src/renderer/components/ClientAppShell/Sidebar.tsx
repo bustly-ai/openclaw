@@ -30,6 +30,7 @@ import {
 } from "../../lib/session-icons";
 import { listWorkspaceSummaries, type WorkspaceSummary } from "../../lib/bustly-supabase";
 import { GatewayBrowserClient } from "../../lib/gateway-client";
+import { createGatewayInstanceId } from "../../lib/gateway-instance-id";
 import { useAppState } from "../../providers/AppStateProvider";
 import {
   buildBustlyWorkspaceAgentId,
@@ -1125,6 +1126,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [runningTasks, setRunningTasks] = useState<Record<string, boolean>>({});
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const userMenuTriggerRef = useRef<HTMLDivElement | null>(null);
+  const gatewayInstanceIdRef = useRef(createGatewayInstanceId("sidebar"));
   const workspaceLoadingRef = useRef(false);
   const hasLoadedWorkspacesRef = useRef(false);
   const [userMenuLayout, setUserMenuLayout] = useState({ top: 0, left: 0, width: 224 });
@@ -1333,7 +1335,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
           token: connectConfig.token ?? undefined,
           clientName: "openclaw-control-ui",
           mode: "webchat",
-          instanceId: `bustly-electron-sidebar-${Date.now()}`,
+          instanceId: gatewayInstanceIdRef.current,
           onHello: () => {
             if (disposed) {
               return;

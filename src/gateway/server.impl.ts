@@ -513,6 +513,7 @@ export async function startGatewayServer(
           agentRunSeq,
           chatRunState,
           resolveSessionKeyForRun,
+          resolveToolEventConnIds: (runId) => toolEventRecipients.resolveConnIds(runId, clients),
           clearAgentRunContext,
           toolEventRecipients,
         }),

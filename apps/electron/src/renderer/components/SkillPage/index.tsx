@@ -2,6 +2,7 @@ import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { GatewayBrowserClient } from "../../lib/gateway-client";
+import { createGatewayInstanceId } from "../../lib/gateway-instance-id";
 import { buildBustlyWorkspaceAgentId } from "../../../shared/bustly-agent";
 import Skeleton from "../ui/Skeleton";
 import collapsedLogo from "../../assets/imgs/collapsed_logo_clean.svg";
@@ -531,6 +532,7 @@ export default function SkillPage() {
   const navigate = useNavigate();
   const dropdownRef = useRef<HTMLDivElement | null>(null);
   const clientRef = useRef<GatewayBrowserClient | null>(null);
+  const gatewayInstanceIdRef = useRef(createGatewayInstanceId("skill"));
   const [skills, setSkills] = useState<SkillItemData[]>([]);
   const [loadingSkills, setLoadingSkills] = useState(true);
   const [skillsError, setSkillsError] = useState<string | null>(null);
@@ -595,7 +597,7 @@ export default function SkillPage() {
           token: connectConfig.token ?? undefined,
           clientName: "openclaw-control-ui",
           mode: "webchat",
-          instanceId: `bustly-electron-skill-${Date.now()}`,
+          instanceId: gatewayInstanceIdRef.current,
           onHello: () => {
             if (disposed) {
               return;

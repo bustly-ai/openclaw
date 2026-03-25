@@ -6,6 +6,8 @@ import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "./protocol/client-info.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -172,13 +174,14 @@ export function createChatRunState(): ChatRunState {
 }
 
 export type ToolEventRecipientRegistry = {
-  add: (runId: string, connId: string) => void;
-  get: (runId: string) => ReadonlySet<string> | undefined;
+  add: (runId: string, connId: string, instanceId?: string) => void;
+  resolveConnIds: (runId: string, clients: ReadonlySet<GatewayWsClient>) => ReadonlySet<string>;
   markFinal: (runId: string) => void;
 };
 
 type ToolRecipientEntry = {
   connIds: Set<string>;
+  instanceIds: Set<string>;
   updatedAt: number;
   finalizedAt?: number;
 };
@@ -204,32 +207,51 @@ export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
     }
   };
 
-  const add = (runId: string, connId: string) => {
+  const add = (runId: string, connId: string, instanceId?: string) => {
     if (!runId || !connId) {
       return;
     }
+    const normalizedInstanceId = instanceId?.trim();
     const now = Date.now();
     const existing = recipients.get(runId);
     if (existing) {
       existing.connIds.add(connId);
+      if (normalizedInstanceId) {
+        existing.instanceIds.add(normalizedInstanceId);
+      }
       existing.updatedAt = now;
     } else {
       recipients.set(runId, {
         connIds: new Set([connId]),
+        instanceIds: normalizedInstanceId ? new Set([normalizedInstanceId]) : new Set(),
         updatedAt: now,
       });
     }
     prune();
   };
 
-  const get = (runId: string) => {
+  const resolveConnIds = (runId: string, clients: ReadonlySet<GatewayWsClient>) => {
     const entry = recipients.get(runId);
     if (!entry) {
-      return undefined;
+      return new Set<string>();
     }
     entry.updatedAt = Date.now();
     prune();
-    return entry.connIds;
+    const resolved = new Set<string>();
+    for (const client of clients) {
+      if (!hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.TOOL_EVENTS)) {
+        continue;
+      }
+      const clientInstanceId = client.connect.client.instanceId?.trim();
+      if (entry.connIds.has(client.connId)) {
+        resolved.add(client.connId);
+        continue;
+      }
+      if (clientInstanceId && entry.instanceIds.has(clientInstanceId)) {
+        resolved.add(client.connId);
+      }
+    }
+    return resolved;
   };
 
   const markFinal = (runId: string) => {
@@ -241,7 +263,7 @@ export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
     prune();
   };
 
-  return { add, get, markFinal };
+  return { add, resolveConnIds, markFinal };
 }
 
 export type ChatEventBroadcast = (
@@ -264,6 +286,7 @@ export type AgentEventHandlerOptions = {
   agentRunSeq: Map<string, number>;
   chatRunState: ChatRunState;
   resolveSessionKeyForRun: (runId: string) => string | undefined;
+  resolveToolEventConnIds: (runId: string) => ReadonlySet<string>;
   clearAgentRunContext: (runId: string) => void;
   toolEventRecipients: ToolEventRecipientRegistry;
 };
@@ -275,6 +298,7 @@ export function createAgentEventHandler({
   agentRunSeq,
   chatRunState,
   resolveSessionKeyForRun,
+  resolveToolEventConnIds,
   clearAgentRunContext,
   toolEventRecipients,
 }: AgentEventHandlerOptions) {
@@ -456,8 +480,8 @@ export function createAgentEventHandler({
       // tool-events capability, regardless of verboseLevel. The verbose
       // setting only controls whether tool details are sent as channel
       // messages to messaging surfaces (Telegram, Discord, etc.).
-      const recipients = toolEventRecipients.get(evt.runId);
-      if (recipients && recipients.size > 0) {
+      const recipients = resolveToolEventConnIds(evt.runId);
+      if (recipients.size > 0) {
         broadcastToConnIds("agent", toolPayload, recipients);
       }
     } else {
