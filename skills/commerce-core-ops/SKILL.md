@@ -25,12 +25,27 @@ CLI shape
 
 ```bash
 bustly ops <platform> <command> [args...]
+bustly auth <platform> [--no-open] [--dry-run]
 ```
 
 Auth context
 
 - Local auth state is loaded from `~/.bustly/bustlyOauth.json`
 - Required values include `supabase.url`, `supabase.anonKey`, `user.userAccessToken`, `user.workspaceId`, and `user.userId`
+- For supported providers, start missing OAuth connections yourself with `bustly auth <platform>` before asking the user to navigate the Integrations UI manually
+
+Browser auth
+
+```bash
+bustly auth shopify --shop-domain <store.myshopify.com>
+bustly auth bigcommerce --store-domain <https://store-abc.mybigcommerce.com/> --store-hash <hash> --account-uuid <uuid>
+bustly auth woocommerce
+bustly auth magento
+```
+
+- `bustly auth` opens the browser-based provider flow directly from the local desktop environment
+- If a required input is missing, ask only for that specific value, then run the auth command yourself
+- Only send the user to Settings / Integrations when the platform is unsupported by CLI auth or the local auth command fails
 
 Common commands
 

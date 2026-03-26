@@ -23,12 +23,25 @@ CLI shape
 
 ```bash
 bustly ops <platform> <command> [args...]
+bustly auth <platform> [--no-open] [--dry-run]
 ```
 
 Auth context
 
 - Local auth state is loaded from `~/.bustly/bustlyOauth.json`
 - Required values include `supabase.url`, `supabase.anonKey`, `user.userAccessToken`, `user.workspaceId`, and `user.userId`
+- For supported providers, start missing OAuth connections yourself with `bustly auth <platform>` before telling the user to open Integrations manually
+
+Browser auth
+
+```bash
+bustly auth klaviyo
+bustly auth google-ads
+```
+
+- `bustly auth` opens the desktop browser flow for supported providers
+- If the command succeeds, tell the user to finish the OAuth confirmation in the browser that just opened
+- Only fall back to "go to Integrations and connect it" if `bustly auth` is unavailable or fails
 
 Available commands on every ads platform
 
@@ -152,7 +165,8 @@ Platform notes
 Recommended workflow
 
 1. Run `help` to inspect entities and writable actions.
-2. Run `status` to confirm the workspace is connected.
-3. Use `read` to verify the target object or discover IDs.
-4. Use `write` for supported entity actions.
-5. Use `invoke` for provider-native calls that are not covered by the high-level entity command.
+2. If the user asks to connect a supported platform, run `bustly auth <platform>` first.
+3. Run `status` to confirm the workspace is connected.
+4. Use `read` to verify the target object or discover IDs.
+5. Use `write` for supported entity actions.
+6. Use `invoke` for provider-native calls that are not covered by the high-level entity command.

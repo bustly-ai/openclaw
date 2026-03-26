@@ -17,12 +17,9 @@ import { dirname, extname, relative, resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..", "..", "..");
 const targetDir = resolve(repoRoot, "apps/electron/resources/openclaw");
-const bustlySkillsTargetDir = resolve(repoRoot, "apps/electron/resources/bustly-skills");
 const stagingDir = mkdtempSync(resolve(tmpdir(), "openclaw-deps-"));
-const bustlySkillsRoot = resolve(repoRoot, "bustly-skills");
 
 rmSync(targetDir, { recursive: true, force: true });
-rmSync(bustlySkillsTargetDir, { recursive: true, force: true });
 
 console.log("[prepare-openclaw-deps] Building root OpenClaw package artifacts.");
 const buildResult = spawnSync(
@@ -223,24 +220,5 @@ const assertNoStagingSymlinksRemain = () => {
 
 rewriteStagingSymlinks();
 assertNoStagingSymlinksRemain();
-
-if (existsSync(bustlySkillsRoot)) {
-  console.log(`[prepare-openclaw-deps] Copying bustly-skills bundle from ${bustlySkillsRoot}.`);
-  cpSync(bustlySkillsRoot, bustlySkillsTargetDir, {
-    recursive: true,
-    dereference: true,
-    filter: (source) => {
-      const relative = source.slice(bustlySkillsRoot.length).replace(/^[/\\]/, "");
-      if (!relative) {
-        return true;
-      }
-      const firstSegment = relative.split(/[/\\]/)[0];
-      return ["README.md", "package.json", "bin", "scripts", "skills", "platforms"].includes(firstSegment);
-    },
-  });
-} else {
-  console.error(`[prepare-openclaw-deps] Missing bustly-skills submodule: ${bustlySkillsRoot}`);
-  process.exit(1);
-}
 
 rmSync(stagingDir, { recursive: true, force: true });
