@@ -233,6 +233,7 @@ export async function listWorkspaceSummaries(): Promise<{
     .select("workspace_id, role, status, created_at, workspaces!inner(id, name, logo_url, status)")
     .eq("user_id", config.userId)
     .eq("status", "ACTIVE")
+    .eq("workspaces.status", "ACTIVE")
     .order("created_at", { ascending: false });
 
   if (membershipRes.error) {
@@ -242,7 +243,7 @@ export async function listWorkspaceSummaries(): Promise<{
   const memberships = (membershipRes.data ?? []) as unknown as WorkspaceMembershipRow[];
   const workspaceIds = memberships.map((item) => item.workspace_id).filter(Boolean);
   if (workspaceIds.length === 0) {
-    return { workspaces: [], activeWorkspaceId: config.workspaceId };
+    return { workspaces: [], activeWorkspaceId: "" };
   }
 
   const memberCountsRes = await client
@@ -288,7 +289,7 @@ export async function listWorkspaceSummaries(): Promise<{
   const workspaces = memberships
     .map((item) => {
       const workspace = Array.isArray(item.workspaces) ? item.workspaces[0] : item.workspaces;
-      if (!workspace?.id || !workspace.name) {
+      if (!workspace?.id || !workspace.name || workspace.status.trim().toUpperCase() !== "ACTIVE") {
         return null;
       }
       const subscription = latestSubscriptionByWorkspace.get(item.workspace_id);
@@ -305,8 +306,12 @@ export async function listWorkspaceSummaries(): Promise<{
     })
     .filter((item): item is WorkspaceSummary => Boolean(item));
 
+  const activeWorkspaceId = workspaces.some((workspace) => workspace.id === config.workspaceId)
+    ? config.workspaceId
+    : (workspaces[0]?.id ?? "");
+
   return {
     workspaces,
-    activeWorkspaceId: config.workspaceId || workspaces[0]?.id || "",
+    activeWorkspaceId,
   };
 }
