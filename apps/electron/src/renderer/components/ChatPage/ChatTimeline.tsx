@@ -435,7 +435,7 @@ const StreamFoldNode = memo(function StreamFoldNode({
   onRetryRun?: (runId?: string) => void;
   onPreviewImage?: (url: string) => void;
 }) {
-  const stepLabel = `${node.hiddenCount} step${node.hiddenCount === 1 ? "" : "s"} hidden`;
+  const stepLabel = "Hidden activity";
 
   return (
     <div className={expanded ? "" : "py-2"}>
@@ -736,9 +736,7 @@ const ProcessedNode = memo(function ProcessedNode({
   onRetryRun?: (runId?: string) => void;
 }) {
   const duration = formatProcessedDuration(node.durationMs);
-  const summary = duration
-    ? `${node.items.length} steps processed in ${duration}`
-    : `${node.items.length} steps processed`;
+  const summary = duration ? `Processed in ${duration}` : "Processed";
 
   return (
     <div className="mb-2">

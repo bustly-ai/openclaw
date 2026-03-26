@@ -460,18 +460,22 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const runId = idem;
     const connId = typeof client?.connId === "string" ? client.connId : undefined;
+    const instanceId =
+      typeof client?.connect?.client?.instanceId === "string"
+        ? client.connect.client.instanceId
+        : undefined;
     const wantsToolEvents = hasGatewayClientCap(
       client?.connect?.caps,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
     );
     if (connId && wantsToolEvents) {
-      context.registerToolEventRecipient(runId, connId);
+      context.registerToolEventRecipient(runId, connId, instanceId);
       // Register for any other active runs *in the same session* so
       // late-joining clients (e.g. page refresh mid-response) receive
       // in-progress tool events without leaking cross-session data.
       for (const [activeRunId, active] of context.chatAbortControllers) {
         if (activeRunId !== runId && active.sessionKey === requestedSessionKey) {
-          context.registerToolEventRecipient(activeRunId, connId);
+          context.registerToolEventRecipient(activeRunId, connId, instanceId);
         }
       }
     }

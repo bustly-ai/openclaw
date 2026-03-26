@@ -155,14 +155,14 @@ describe("loadWorkspaceSkillEntries command metadata", () => {
     const workspaceDir = await makeWorkspace();
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "ads-core-ops"),
-      name: "ads_core_ops",
+      name: "ads-core-ops",
       description: "Unified ads operations",
       metadata:
-        '{"openclaw":{"skillKey":"ads_core_ops","aliases":["ads"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops ads help","defaultCommand":"bustly ops ads platforms","runtimePackage":"@bustly/skill-runtime-ads-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-ads-core-ops@^0.1.0","runtimeExecutable":"bustly-skill-ads"}}',
+        '{"openclaw":{"skillKey":"ads-core-ops","aliases":["ads"],"commandNamespace":"bustly ops","discoveryCommand":"bustly ops ads help","defaultCommand":"bustly ops ads platforms","runtimePackage":"@bustly/skill-runtime-ads-core-ops","runtimeVersion":"^0.1.0","runtimeInstallSpec":"npm:@bustly/skill-runtime-ads-core-ops@^0.1.0","runtimeExecutable":"bustly-skill-ads"}}',
     });
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
-    const entry = entries.find((candidate) => candidate.skill.name === "ads_core_ops");
+    const entry = entries.find((candidate) => candidate.skill.name === "ads-core-ops");
 
     expect(entry?.metadata?.commandHints?.aliases).toEqual(["ads"]);
     expect(entry?.metadata?.commandHints?.commandNamespace).toBe("bustly ops");

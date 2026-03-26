@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowDown,
+  ArrowUpRight,
   ArrowUp,
   File,
   Folder,
@@ -14,13 +15,14 @@ import {
 } from "@phosphor-icons/react";
 import { listWorkspaceSummaries } from "../../lib/bustly-supabase";
 import { GatewayBrowserClient, type GatewayEventFrame } from "../../lib/gateway-client";
+import { createGatewayInstanceId } from "../../lib/gateway-instance-id";
 import {
   deriveScenarioLabel,
   resolveSessionIconComponent,
 } from "../../lib/session-icons";
 import { buildBustlyWorkspaceMainSessionKey } from "../../../shared/bustly-agent";
+import { resolveBustlyPresetUseCases, type BustlyPresetUseCase } from "../../../shared/bustly-preset-channels";
 import { extractText, extractThinking } from "../../lib/chat-extract";
-import Skeleton from "../ui/Skeleton";
 import PortalTooltip from "../ui/PortalTooltip";
 import ChatModelPicker from "./ChatModelPicker";
 import { ChatTimeline } from "./ChatTimeline";
@@ -30,6 +32,8 @@ import {
   type ChatInputArtifact,
   type InputArtifactKind,
 } from "./input-artifacts";
+import { shouldPreserveLocalTimelineItem } from "./history-merge";
+import { recoverSessionViewState } from "./runtime-recovery";
 import { collapseProcessedTurn, collapseStreamingEvents, resolveToolDisplay, formatToolDetail } from "./utils";
 import type { TimelineArtifact, TimelineNode } from "./types";
 import { useAppState } from "../../providers/AppStateProvider";
@@ -151,6 +155,7 @@ type SessionRuntimeState = {
   seqCounter: number;
   toolTimers: Map<string, number>;
   runSeqBase: Map<string, number>;
+  pendingClientRunIds: Set<string>;
   settledRunIds: Set<string>;
   discardedRunIds: Set<string>;
   retryPayloads: Map<string, RetryPayload>;
@@ -304,6 +309,7 @@ function createSessionRuntimeState(): SessionRuntimeState {
     seqCounter: 1_000_000_000,
     toolTimers: new Map(),
     runSeqBase: new Map(),
+    pendingClientRunIds: new Set(),
     settledRunIds: new Set(),
     discardedRunIds: new Set(),
     retryPayloads: new Map(),
@@ -338,7 +344,7 @@ function resolveAgentTerminalState(payload: {
 function describeExecutionError(reason: string): string {
   const normalized = reason.trim().toLowerCase();
   if (normalized.includes("connection")) {
-    return "The gateway connection was interrupted before execution could complete. Retry the request after the connection recovers.";
+    return "Retry the request after the connection recovers.";
   }
   if (normalized.includes("rate limit") || normalized.includes("429")) {
     return "The upstream model temporarily rejected the request due to rate limiting. Retry in a moment or switch to a different model tier.";
@@ -503,6 +509,16 @@ function compareTimeline(a: TimelineItem, b: TimelineItem): number {
     return a.timestamp - b.timestamp;
   }
   return a.id.localeCompare(b.id);
+}
+
+function addLiveRunId(target: Set<string>, value: string | null | undefined) {
+  if (typeof value !== "string") {
+    return;
+  }
+  const trimmed = value.trim();
+  if (trimmed) {
+    target.add(trimmed);
+  }
 }
 
 function readContentText(message: unknown): string | null {
@@ -809,6 +825,7 @@ export default function ChatPage() {
   });
 
   const clientRef = useRef<GatewayBrowserClient | null>(null);
+  const gatewayInstanceIdRef = useRef(createGatewayInstanceId("chat"));
   const sessionRuntimesRef = useRef<Map<string, SessionRuntimeState>>(new Map());
   const currentSessionKeyRef = useRef("");
   const previewViewportRef = useRef<HTMLDivElement | null>(null);
@@ -820,11 +837,9 @@ export default function ChatPage() {
   const composerAreaRef = useRef<HTMLDivElement | null>(null);
   const composerIsComposingRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
-  const bootstrapWakeAttemptedSessionsRef = useRef<Set<string>>(new Set());
   const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
   const lastAppliedPromptRef = useRef<string | null>(null);
   const lastAppliedContextRef = useRef<string | null>(null);
-  const pendingPromptFocusRef = useRef(false);
   const currentSessionKey = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
     return searchParams.get("session") ?? buildBustlyWorkspaceMainSessionKey(activeWorkspaceId);
@@ -833,10 +848,25 @@ export default function ChatPage() {
     const searchParams = new URLSearchParams(location.search);
     return deriveScenarioLabel(currentSessionKey, searchParams.get("label"));
   }, [currentSessionKey, location.search]);
+  const currentUseCases = useMemo(
+    () => resolveBustlyPresetUseCases({ sessionKey: currentSessionKey, workspaceId: activeWorkspaceId }),
+    [activeWorkspaceId, currentSessionKey],
+  );
   const canSendMessage =
     connected && !subscriptionExpired && !sending && (draft.trim() || attachments.length > 0 || contextPaths.length > 0);
   const showPlaceholderTicker =
     connected && !subscriptionExpired && !draft && attachments.length === 0 && contextPaths.length === 0;
+  const updateScrollBottomState = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) {
+      return;
+    }
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    const isNotAtBottom = distanceFromBottom > 100;
+    const isOverOnePage = element.scrollHeight > element.clientHeight;
+    shouldStickToBottomRef.current = !isNotAtBottom;
+    setShowScrollBottom(isNotAtBottom && isOverOnePage);
+  }, []);
 
   const getSessionRuntime = useCallback((sessionKey: string) => {
     const normalized = sessionKey.trim();
@@ -931,12 +961,34 @@ export default function ChatPage() {
       sessionUsage: resolveStateUpdate(action, view.sessionUsage),
     }));
   }, [updateSessionView]);
+
+  const resetSessionStreamCaches = useCallback((sessionKey: string) => {
+    const runtime = getSessionRuntime(sessionKey);
+    for (const timer of runtime.toolTimers.values()) {
+      window.clearTimeout(timer);
+    }
+    runtime.toolTimers.clear();
+    runtime.streamSegments.clear();
+    runtime.runSeqBase.clear();
+  }, [getSessionRuntime]);
   useEffect(() => {
     currentSessionKeyRef.current = currentSessionKey;
     const runtime = getSessionRuntime(currentSessionKey);
     setCurrentScenarioIconId(null);
     applyVisibleSessionView(runtime.view);
-  }, [applyVisibleSessionView, currentSessionKey, getSessionRuntime]);
+    shouldStickToBottomRef.current = true;
+    setShowScrollBottom(false);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const element = scrollRef.current;
+        if (!element) {
+          return;
+        }
+        element.scrollTo({ top: element.scrollHeight, behavior: "auto" });
+        updateScrollBottomState();
+      });
+    });
+  }, [applyVisibleSessionView, currentSessionKey, getSessionRuntime, updateScrollBottomState]);
 
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search);
@@ -1217,14 +1269,47 @@ export default function ChatPage() {
     const runtime = getSessionRuntime(sessionKey);
     markRunFinished(sessionKey, runId);
     settleToolsForRun(sessionKey, runId, toolStatus);
-    setSessionActiveRunId(sessionKey, (prev) => (prev === runId ? null : prev));
-    setSessionCompactingRunId(sessionKey, (prev) => (prev === runId ? null : prev));
+    setSessionActiveRunId(sessionKey, (prev) => {
+      if (prev === runId) {
+        return null;
+      }
+      if (prev && runtime.pendingClientRunIds.has(prev)) {
+        return null;
+      }
+      return prev;
+    });
+    setSessionCompactingRunId(sessionKey, (prev) => {
+      if (prev === runId) {
+        return null;
+      }
+      if (prev && runtime.pendingClientRunIds.has(prev)) {
+        return null;
+      }
+      return prev;
+    });
     if (runId) {
       runtime.settledRunIds.add(runId);
       runtime.runSeqBase.delete(runId);
     }
+    runtime.pendingClientRunIds.delete(runId ?? "");
     runtime.streamSegments.delete(runId ?? "__unknown__");
   }, [getSessionRuntime, markRunFinished, setSessionActiveRunId, setSessionCompactingRunId, settleToolsForRun]);
+
+  const syncActiveRunId = useCallback((sessionKey: string, runtime: SessionRuntimeState, runId: string | null) => {
+    if (!runId) {
+      return;
+    }
+    setSessionActiveRunId(sessionKey, (prev) => {
+      if (!prev || prev === runId) {
+        return runId;
+      }
+      if (runtime.pendingClientRunIds.has(prev)) {
+        runtime.pendingClientRunIds.delete(prev);
+        return runId;
+      }
+      return prev;
+    });
+  }, [setSessionActiveRunId]);
 
   const upsertRunError = useCallback((params: {
     sessionKey: string;
@@ -1406,7 +1491,11 @@ export default function ChatPage() {
     }
   }, [getSessionRuntime, setSessionTimeline]);
 
-  const loadHistory = useCallback(async (client: GatewayBrowserClient, sessionKey: string) => {
+  const loadHistory = useCallback(async (
+    client: GatewayBrowserClient,
+    sessionKey: string,
+    options?: { recoverTransientState?: boolean },
+  ) => {
     const res = await client.request<{ messages?: unknown[] }>("chat.history", {
       sessionKey,
       limit: 200,
@@ -1468,14 +1557,6 @@ export default function ChatPage() {
         if (textRole === "assistant" && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
           continue;
         }
-        if (textRole === "user") {
-          console.log("[electron-chat] history user message", {
-            sessionKey,
-            timestamp,
-            message,
-            text,
-          });
-        }
         items.push({
           kind: "text",
           id: `history:${sessionKey}:text:${textRole}:${baseSeq}:${timestamp}`,
@@ -1531,13 +1612,75 @@ export default function ChatPage() {
     items.push(...toolsByCallId.values());
     const runtime = getSessionRuntime(sessionKey);
     runtime.historyLoaded = true;
-    setSessionTimeline(sessionKey, (prev) => {
-      const localErrors = prev.filter((item): item is ErrorItem => item.kind === "error");
-      const merged = [...items, ...localErrors];
-      return merged.toSorted(compareTimeline);
-    });
+    const previousTimeline = runtime.view.timeline;
+
+    let liveRunIds = new Set<string>();
+    if (options?.recoverTransientState) {
+      const recovered = recoverSessionViewState({
+        view: runtime.view,
+        timeline: previousTimeline,
+        pendingClientRunIds: runtime.pendingClientRunIds,
+      });
+      liveRunIds = recovered.liveRunIds;
+    } else {
+      addLiveRunId(liveRunIds, runtime.view.activeRunId);
+      addLiveRunId(liveRunIds, runtime.view.compactingRunId);
+      addLiveRunId(liveRunIds, runtime.view.reconnectStatus?.runId);
+      for (const runId of runtime.pendingClientRunIds) {
+        addLiveRunId(liveRunIds, runId);
+      }
+    }
+
+    const merged = [...items];
+    for (const item of previousTimeline) {
+      if (!shouldPreserveLocalTimelineItem({
+        item,
+        liveRunIds,
+        historyItems: items,
+        preservePendingUserMessage: runtime.view.sending || liveRunIds.size > 0,
+      })) {
+        continue;
+      }
+      merged.push(item);
+    }
+    const mergedTimeline = merged.toSorted(compareTimeline);
+
+    if (options?.recoverTransientState) {
+      const recovered = recoverSessionViewState({
+        view: runtime.view,
+        timeline: mergedTimeline,
+        pendingClientRunIds: runtime.pendingClientRunIds,
+      });
+      runtime.pendingClientRunIds = recovered.pendingClientRunIds;
+      runtime.settledRunIds = recovered.terminalRunIds;
+      runtime.discardedRunIds = new Set(
+        [...runtime.discardedRunIds].filter((runId) => recovered.terminalRunIds.has(runId)),
+      );
+      replaceSessionView(sessionKey, {
+        ...recovered.view,
+        timeline: mergedTimeline,
+        loading: false,
+      });
+      return;
+    }
+
+    setSessionTimeline(sessionKey, mergedTimeline);
     setSessionLoading(sessionKey, false);
-  }, [getSessionRuntime, setSessionLoading, setSessionTimeline]);
+  }, [getSessionRuntime, replaceSessionView, setSessionLoading, setSessionTimeline]);
+
+  const reloadSessionHistory = useCallback((
+    client: GatewayBrowserClient,
+    sessionKey: string,
+    options?: { recoverTransientState?: boolean },
+  ) => {
+    if (options?.recoverTransientState) {
+      resetSessionStreamCaches(sessionKey);
+    }
+    setSessionLoading(sessionKey, true);
+    void loadHistory(client, sessionKey, options).catch((err) => {
+      setError(err instanceof Error ? err.message : String(err));
+    });
+  }, [loadHistory, resetSessionStreamCaches, setSessionLoading]);
 
   const connectGateway = useCallback(
     async (status: GatewayStatus) => {
@@ -1569,23 +1712,25 @@ export default function ChatPage() {
         token: connectConfig.token ?? undefined,
         clientName: "openclaw-control-ui",
         mode: "webchat",
-        instanceId: `bustly-electron-chat-${Date.now()}`,
+        instanceId: gatewayInstanceIdRef.current,
         onHello: () => {
           setConnected(true);
           setError(null);
           setConnectionNotice(null);
           const sessionKey = currentSessionKeyRef.current;
-          const runtime = getSessionRuntime(sessionKey);
-          if (!runtime.historyLoaded) {
-            void loadHistory(client, sessionKey).catch((err) => {
-              setError(err instanceof Error ? err.message : String(err));
-            });
-          } else {
-            setSessionLoading(sessionKey, false);
-          }
+          reloadSessionHistory(client, sessionKey, { recoverTransientState: true });
           void loadSessionUsage(client, sessionKey).catch((err) => {
             setError(err instanceof Error ? err.message : String(err));
           });
+        },
+        onGap: ({ expected, received }) => {
+          const sessionKey = currentSessionKeyRef.current;
+          const currentClient = clientRef.current;
+          console.warn("[electron-chat] gateway event gap", { expected, received, sessionKey });
+          if (!currentClient) {
+            return;
+          }
+          reloadSessionHistory(currentClient, sessionKey);
         },
         onClose: ({ code, reason, error: closeError }) => {
           setConnected(false);
@@ -1609,7 +1754,9 @@ export default function ChatPage() {
           if (evt.event === "health") {
             return;
           }
-          console.log("[electron-chat] received event", evt.event, evt.payload);
+          if(!['presence', 'tick'].includes(evt.event)){
+            console.log("[electron-chat] received event", evt.event, evt.payload);
+          }
           if (evt.event === "chat") {
             const payload = evt.payload as {
               runId?: string;
@@ -1624,6 +1771,7 @@ export default function ChatPage() {
             }
             const runtime = getSessionRuntime(sessionKey);
             const runId = typeof payload.runId === "string" ? payload.runId : null;
+            syncActiveRunId(sessionKey, runtime, runId);
             if (runId && runtime.discardedRunIds.has(runId)) {
               return;
             }
@@ -1723,6 +1871,7 @@ export default function ChatPage() {
             }
             const runtime = getSessionRuntime(sessionKey);
             const runId = typeof payload.runId === "string" ? payload.runId : null;
+            syncActiveRunId(sessionKey, runtime, runId);
             if (runId && runtime.discardedRunIds.has(runId)) {
               return;
             }
@@ -1766,6 +1915,7 @@ export default function ChatPage() {
             }
 
             if (stream === "lifecycle" && data.phase === "reconnecting" && runId) {
+              removeRunError(sessionKey, runId);
               setSessionReconnectStatus(sessionKey, {
                 runId,
               });
@@ -1857,11 +2007,23 @@ export default function ChatPage() {
             }
 
             if (stream === "error") {
+              finalizeRunState(sessionKey, runId, "error");
+              clearReconnectStatus(sessionKey, runId);
+              upsertRunError({
+                sessionKey,
+                runId: runId ?? undefined,
+                seq: runtime.seqCounter++,
+                timestamp: ts,
+                reason: extractAgentErrorReason({ stream, data }),
+              });
+              refreshSessionUsage(client, sessionKey);
+              notifySidebarTasksRefresh();
               return;
             }
 
             const terminalState = resolveAgentTerminalState({ stream, data });
             if (terminalState) {
+              clearReconnectStatus(sessionKey, runId);
               finalizeRunState(sessionKey, runId, terminalState === "final" ? "completed" : "error");
               if (terminalState === "aborted" && runId) {
                 runtime.discardedRunIds.add(runId);
@@ -1875,6 +2037,17 @@ export default function ChatPage() {
             }
 
             if (stream === "lifecycle" && data.phase === "error") {
+              finalizeRunState(sessionKey, runId, "error");
+              clearReconnectStatus(sessionKey, runId);
+              upsertRunError({
+                sessionKey,
+                runId: runId ?? undefined,
+                seq: runtime.seqCounter++,
+                timestamp: ts,
+                reason: extractAgentErrorReason({ stream, data }),
+              });
+              refreshSessionUsage(client, sessionKey);
+              notifySidebarTasksRefresh();
               return;
             }
             return;
@@ -1893,10 +2066,11 @@ export default function ChatPage() {
       loadHistory,
       loadSessionUsage,
       markLastAssistantAsFinal,
+      removeRunError,
+      reloadSessionHistory,
       refreshSessionUsage,
       setSessionActiveRunId,
       setSessionCompactingRunId,
-      setSessionLoading,
       setSessionReconnectStatus,
       upsertRunError,
       upsertTool,
@@ -1941,10 +2115,7 @@ export default function ChatPage() {
     if (!gatewayReady) {
       setConnected(false);
       setSessionLoading(currentSessionKeyRef.current, true);
-      setConnectionNotice({
-        message: "Waiting for gateway...",
-        tone: "warning",
-      });
+      setConnectionNotice(null);
       return;
     }
 
@@ -2051,19 +2222,20 @@ export default function ChatPage() {
     }
 
     let applied = false;
-    if (prompt && lastAppliedPromptRef.current !== prompt) {
-      lastAppliedPromptRef.current = prompt;
-      pendingPromptFocusRef.current = true;
-      setSessionDraft(currentSessionKey, prompt);
-      window.requestAnimationFrame(() => {
-        composerRef.current?.focus();
-        composerRef.current?.setSelectionRange(prompt.length, prompt.length);
-      });
-      window.setTimeout(() => {
-        composerRef.current?.focus();
-        composerRef.current?.setSelectionRange(prompt.length, prompt.length);
-      }, 80);
+    const promptSignature = prompt ? `${explicitSessionKey}::${prompt}` : null;
+    if (prompt && promptSignature !== lastAppliedPromptRef.current) {
+      lastAppliedPromptRef.current = promptSignature;
+      setSessionDraft(explicitSessionKey, prompt);
       applied = true;
+      window.requestAnimationFrame(() => {
+        const textarea = composerRef.current;
+        if (!textarea) {
+          return;
+        }
+        textarea.focus();
+        const cursor = prompt.length;
+        textarea.setSelectionRange(cursor, cursor);
+      });
     }
 
     const contextSignature = contextPath ? `${contextPath}::${contextName || ""}::${contextKind || ""}` : null;
@@ -2094,22 +2266,7 @@ export default function ChatPage() {
       },
       { replace: true },
     );
-  }, [appendContextSelections, currentSessionKey, location.pathname, location.search, navigate, setSessionDraft]);
-
-  useEffect(() => {
-    if (!pendingPromptFocusRef.current || !connected || sending || subscriptionExpired || !draft.trim()) {
-      return;
-    }
-    pendingPromptFocusRef.current = false;
-    window.requestAnimationFrame(() => {
-      const textarea = composerRef.current;
-      if (!textarea) {
-        return;
-      }
-      textarea.focus();
-      textarea.setSelectionRange(draft.length, draft.length);
-    });
-  }, [connected, draft, sending, subscriptionExpired]);
+  }, [appendContextSelections, location.pathname, location.search, navigate, setSessionDraft]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -2117,18 +2274,14 @@ export default function ChatPage() {
       return;
     }
     const handleScroll = () => {
-      const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-      const isNotAtBottom = distanceFromBottom > 100;
-      const isOverOnePage = element.scrollHeight > element.clientHeight;
-      shouldStickToBottomRef.current = !isNotAtBottom;
-      setShowScrollBottom(isNotAtBottom && isOverOnePage);
+      updateScrollBottomState();
     };
-    handleScroll();
+    updateScrollBottomState();
     element.addEventListener("scroll", handleScroll);
     return () => {
       element.removeEventListener("scroll", handleScroll);
     };
-  }, []);
+  }, [currentSessionKey, updateScrollBottomState]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const element = scrollRef.current;
@@ -2141,7 +2294,12 @@ export default function ChatPage() {
     });
     shouldStickToBottomRef.current = true;
     setShowScrollBottom(false);
-  }, []);
+    if (behavior === "auto") {
+      window.requestAnimationFrame(() => {
+        updateScrollBottomState();
+      });
+    }
+  }, [updateScrollBottomState]);
 
   useEffect(() => {
     if (!shouldStickToBottomRef.current) {
@@ -2248,7 +2406,11 @@ export default function ChatPage() {
       timelineArtifacts,
       outgoingArtifacts,
     });
+    shouldStickToBottomRef.current = true;
     setSessionTimeline(params.sessionKey, (prev) => [...prev, userItem].sort(compareTimeline));
+    window.requestAnimationFrame(() => {
+      scrollToBottom("auto");
+    });
     if (params.clearComposer) {
       setSessionDraft(params.sessionKey, "");
       setSessionAttachments(params.sessionKey, []);
@@ -2263,6 +2425,7 @@ export default function ChatPage() {
       attachments: params.attachments.map((attachment) => ({ ...attachment })),
       contextPaths: params.contextPaths.map((entry) => ({ ...entry })),
     });
+    getSessionRuntime(params.sessionKey).pendingClientRunIds.add(idempotencyKey);
     getSessionRuntime(params.sessionKey).settledRunIds.delete(idempotencyKey);
     setSessionActiveRunId(params.sessionKey, idempotencyKey);
     setSessionCompactingRunId(params.sessionKey, null);
@@ -2294,6 +2457,7 @@ export default function ChatPage() {
       return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      getSessionRuntime(params.sessionKey).pendingClientRunIds.delete(idempotencyKey);
       setSessionActiveRunId(params.sessionKey, null);
       setSessionCompactingRunId(params.sessionKey, null);
       return false;
@@ -2305,6 +2469,7 @@ export default function ChatPage() {
     getSessionRuntime,
     loadSessionUsage,
     modelLevel,
+    scrollToBottom,
     sending,
     setSessionActiveRunId,
     setSessionAttachments,
@@ -2325,68 +2490,6 @@ export default function ChatPage() {
       clearComposer: true,
     });
   }, [attachments, contextPaths, currentSessionKey, draft, sendPreparedChatMessage]);
-
-  useEffect(() => {
-    if (!activeWorkspaceId || !connected || !clientRef.current || sending) {
-      return;
-    }
-    const expectedBootstrapSessionKey = buildBustlyWorkspaceMainSessionKey(activeWorkspaceId);
-    if (currentSessionKey !== expectedBootstrapSessionKey) {
-      return;
-    }
-    if (!/^agent:bustly-[a-z0-9_-]+:main$/i.test(currentSessionKey)) {
-      return;
-    }
-    const runtime = getSessionRuntime(currentSessionKey);
-    if (!runtime.historyLoaded) {
-      return;
-    }
-    if (bootstrapWakeAttemptedSessionsRef.current.has(currentSessionKey)) {
-      return;
-    }
-    const client = clientRef.current;
-    let cancelled = false;
-    bootstrapWakeAttemptedSessionsRef.current.add(currentSessionKey);
-
-    void client.request<{ messages?: unknown[] }>("chat.history", {
-      sessionKey: currentSessionKey,
-      limit: 1,
-    }).then((res) => {
-      if (cancelled) {
-        return;
-      }
-      const hasHistory = Array.isArray(res.messages) && res.messages.length > 0;
-      if (hasHistory) {
-        return;
-      }
-      return sendPreparedChatMessage({
-        sessionKey: currentSessionKey,
-        draftText: "Wake up, bustly!",
-        attachments: [],
-        contextPaths: [],
-        clearComposer: false,
-      }).then((ok) => {
-        if (!ok && !cancelled) {
-          bootstrapWakeAttemptedSessionsRef.current.delete(currentSessionKey);
-        }
-      });
-    }).catch(() => {
-      if (!cancelled) {
-        bootstrapWakeAttemptedSessionsRef.current.delete(currentSessionKey);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activeWorkspaceId,
-    connected,
-    currentSessionKey,
-    getSessionRuntime,
-    sendPreparedChatMessage,
-    sending,
-  ]);
 
   const handleSend = useCallback(async () => {
     await sendChatMessage();
@@ -2439,6 +2542,7 @@ export default function ChatPage() {
     removeRunError(currentSessionKey, retryRunId);
     getSessionRuntime(currentSessionKey).discardedRunIds.delete(retryRunId);
     getSessionRuntime(currentSessionKey).settledRunIds.delete(retryRunId);
+    getSessionRuntime(currentSessionKey).pendingClientRunIds.add(retryRunId);
     setSessionActiveRunId(currentSessionKey, retryRunId);
     setSessionCompactingRunId(currentSessionKey, null);
     setSessionSending(currentSessionKey, true);
@@ -2462,6 +2566,7 @@ export default function ChatPage() {
           attachments: retryPayload.attachments.map((attachment) => ({ ...attachment })),
           contextPaths: retryPayload.contextPaths.map((entry) => ({ ...entry })),
         });
+        getSessionRuntime(currentSessionKey).pendingClientRunIds.add(fallbackRunId);
         getSessionRuntime(currentSessionKey).settledRunIds.delete(fallbackRunId);
         setSessionActiveRunId(currentSessionKey, fallbackRunId);
         await clientRef.current.request("chat.send", {
@@ -2475,6 +2580,7 @@ export default function ChatPage() {
         void loadSessionUsage(clientRef.current, currentSessionKey).catch(() => {});
         return;
       }
+      getSessionRuntime(currentSessionKey).pendingClientRunIds.delete(retryRunId);
       setError(message);
       setSessionActiveRunId(currentSessionKey, null);
       setSessionCompactingRunId(currentSessionKey, null);
@@ -2908,13 +3014,25 @@ export default function ChatPage() {
     }
     return `Context left: ${formatTokenCount(sessionUsage.remainingTokens)} / ${formatTokenCount(sessionUsage.contextTokens)}`;
   }, [sessionUsage.contextTokens, sessionUsage.remainingTokens]);
+  const handleUseCaseClick = useCallback((useCase: BustlyPresetUseCase) => {
+    setSessionDraft(currentSessionKey, useCase.prompt);
+    requestAnimationFrame(() => {
+      const textarea = composerRef.current;
+      if (!textarea) {
+        return;
+      }
+      textarea.focus();
+      const cursor = useCase.prompt.length;
+      textarea.setSelectionRange(cursor, cursor);
+    });
+  }, [currentSessionKey, setSessionDraft]);
   useEffect(() => {
     window.localStorage.setItem(CHAT_MODEL_LEVEL_STORAGE_KEY, modelLevel);
   }, [modelLevel]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-white text-gray-900">
-      <div className="sticky top-0 z-20 h-8 flex-none bg-white/80 backdrop-blur-sm [-webkit-app-region:drag]" />
+      <div className="sticky top-0 z-20 h-8 flex-none bg-white [-webkit-app-region:drag]" />
 
       {error || connectionNotice ? (
         <div
@@ -2946,34 +3064,6 @@ export default function ChatPage() {
                 </p>
               </div>
             ) : null}
-            {loading ? (
-              <div className="rounded-2xl border border-gray-100 bg-white px-5 py-5">
-                <div className="space-y-4">
-                  <div className="flex justify-start">
-                    <div className="w-full max-w-[70%] space-y-2 rounded-3xl bg-[#F6F7F9] px-5 py-4">
-                      <Skeleton className="h-4 w-28 rounded-md" />
-                      <Skeleton className="h-4 w-full rounded-md" />
-                      <Skeleton className="h-4 w-3/4 rounded-md" />
-                    </div>
-                  </div>
-                  <div className="flex justify-end">
-                    <div className="w-full max-w-[62%] space-y-2 rounded-3xl bg-[#F6F7F9] px-5 py-4">
-                      <Skeleton className="h-4 w-20 rounded-md" />
-                      <Skeleton className="h-4 w-full rounded-md" />
-                    </div>
-                  </div>
-                    <div className="flex justify-start">
-                    <div className="w-full max-w-[76%] space-y-2 rounded-3xl bg-[#F6F7F9] px-5 py-4">
-                      <Skeleton className="h-4 w-24 rounded-md" />
-                      <Skeleton className="h-4 w-full rounded-md" />
-                      <Skeleton className="h-4 w-5/6 rounded-md" />
-                      <Skeleton className="h-4 w-2/3 rounded-md" />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
             <ChatTimeline
               timeline={processedTimeline}
               activeRunningToolKey={activeRunningToolKey}
@@ -3000,7 +3090,7 @@ export default function ChatPage() {
         <div ref={composerAreaRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
           <div className="h-8 bg-gradient-to-t from-white via-white/80 to-transparent" />
           <div className="border-t border-white/40 bg-white px-6 pb-8 pointer-events-auto">
-            <div className="mx-auto w-full max-w-3xl">
+            <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4 pt-4">
               {subscriptionExpired ? (
                 <div className="mb-3 rounded-2xl border border-[#ECECEC] bg-white p-4 shadow-[0_10px_24px_rgba(26,22,47,0.05)]">
                   <div className="flex items-center justify-between gap-4">
@@ -3025,6 +3115,32 @@ export default function ChatPage() {
                       {subscriptionActionText}
                     </button>
                   </div>
+                </div>
+              ) : null}
+
+              {timeline.length === 0 && currentUseCases.length > 0 ? (
+                <div className="grid grid-cols-3 gap-3">
+                    {currentUseCases.map((useCase) => (
+                      <button
+                        key={`${currentSessionKey}-${useCase.label}`}
+                        type="button"
+                        className={`group flex items-center justify-between gap-2 rounded-xl border border-[#EAEAEA] bg-white px-4 py-2.5 transition-all duration-200 hover:border-[#CFCFCF] hover:bg-[#FCFCFC] ${
+                          subscriptionExpired ? "pointer-events-none opacity-50" : ""
+                        }`}
+                        onClick={() => {
+                          handleUseCaseClick(useCase);
+                        }}
+                      >
+                        <span className="truncate text-left text-[13px] font-medium leading-snug text-text-main">
+                          {useCase.label}
+                        </span>
+                        <ArrowUpRight
+                          size={14}
+                          weight="bold"
+                          className="ml-1 shrink-0 text-text-sub/50 transition-colors group-hover:text-[#1A162F]"
+                        />
+                      </button>
+                    ))}
                 </div>
               ) : null}
 

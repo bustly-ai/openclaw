@@ -51,7 +51,6 @@ import { loadConfig } from "../../../../src/config/config";
 import { loadSessionStore, updateSessionStore } from "../../../../src/config/sessions";
 import { resolveDefaultSessionStorePath } from "../../../../src/config/sessions/paths";
 import { applyAgentConfig, listAgentEntries, pruneAgentConfig } from "../../../../src/commands/agents.config";
-import { resolveGatewayLaunchAgentLabel } from "../../../../src/daemon/constants";
 import { GatewayClient } from "../../../../src/gateway/client";
 import type { SessionsPatchResult } from "../../../../src/gateway/protocol";
 import { applySessionsPatchToStore } from "../../../../src/gateway/sessions-patch";
@@ -68,13 +67,19 @@ import {
   ELECTRON_DEFAULT_MODEL,
   ELECTRON_OPENCLAW_PROFILE,
   getElectronOpenrouterApiKey,
+  resolveElectronBackendLogPath,
+  resolveElectronIsolatedConfigPath,
+  resolveElectronIsolatedStateDir,
   resolveElectronBustlyWorkspaceTemplateBaseUrl,
 } from "./defaults.js";
 import {
   buildBustlyAgentPresetChannelSessionKey,
   buildBustlyWorkspaceAgentId,
 } from "../shared/bustly-agent.js";
-import { BUSTLY_PRESET_CHANNELS } from "../shared/bustly-preset-channels.js";
+import {
+  BUSTLY_MAIN_AGENT_PRESET,
+  BUSTLY_PRESET_CHANNELS,
+} from "../shared/bustly-preset-channels.js";
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 
@@ -551,8 +556,8 @@ function buildBustlyProviderModels(headers: Record<string, string>) {
       cacheRead: 0,
       cacheWrite: 0,
     },
-    contextWindow: 200_000,
-    maxTokens: 8_192,
+    contextWindow: 258_000,
+    maxTokens: 128_000,
     headers: { ...headers },
   }));
 }
@@ -648,21 +653,11 @@ function resolveUserPath(input: string, homeDir: string): string {
 }
 
 function resolveElectronStateDir(): string {
-  const homeDir = app.getPath("home");
-  const override = process.env.OPENCLAW_STATE_DIR?.trim();
-  if (override) {
-    return resolveUserPath(override, homeDir);
-  }
-  return resolve(homeDir, ".bustly");
+  return resolveElectronIsolatedStateDir();
 }
 
 function resolveElectronConfigPath(): string {
-  const homeDir = app.getPath("home");
-  const override = process.env.OPENCLAW_CONFIG_PATH?.trim();
-  if (override) {
-    return resolveUserPath(override, homeDir);
-  }
-  return resolve(resolveElectronStateDir(), "openclaw.json");
+  return resolveElectronIsolatedConfigPath();
 }
 
 function resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId: string): string {
@@ -703,20 +698,36 @@ async function ensureBustlyMainSession(params: { agentId: string }): Promise<voi
   const storePath = resolveDefaultSessionStorePath(params.agentId);
   const mainSessionKey = buildAgentMainSessionKey({ agentId: params.agentId });
   await updateSessionStore(storePath, (store) => {
-    if (store[mainSessionKey]) {
+    const existing = store[mainSessionKey];
+    if (!existing) {
+      store[mainSessionKey] = {
+        sessionId: randomUUID(),
+        updatedAt: Date.now(),
+        label: BUSTLY_MAIN_AGENT_PRESET.label,
+        icon: BUSTLY_MAIN_AGENT_PRESET.icon,
+      };
       return store;
     }
-    store[mainSessionKey] = {
-      sessionId: randomUUID(),
-      updatedAt: Date.now(),
-      label: "Overview",
-    };
+    const label = existing.label?.trim();
+    if (!label) {
+      existing.label = BUSTLY_MAIN_AGENT_PRESET.label;
+    }
+    const icon = existing.icon?.trim();
+    if (!icon) {
+      existing.icon = BUSTLY_MAIN_AGENT_PRESET.icon;
+    }
     return store;
   });
 }
 
 async function ensureBustlyPresetChannels(params: { agentId: string }): Promise<void> {
-  const legacyPresetIcons = new Set(["ChartBar", "TrendUp", "ChatCircleText"]);
+  const legacyPresetLabels = new Map<string, string>([
+    ["daily-ops", "Daily Ops"],
+    ["campaigns", "Campaigns"],
+    ["inventory", "Inventory"],
+    ["support", "Support"],
+  ]);
+  const legacyPresetIcons = new Set(["ChartBar", "TrendUp", "ChatCircleText", "Package", "Storefront", "User", "Tag"]);
   const presets = listEnabledBustlyPresetChannels();
   if (presets.length === 0) {
     return;
@@ -736,10 +747,15 @@ async function ensureBustlyPresetChannels(params: { agentId: string }): Promise<
         model?: string;
       } = { key: storeKey };
 
-      if (!existing?.label?.trim()) {
+      const existingLabel = existing?.label?.trim();
+      const shouldReplaceLegacyLabel =
+        existingLabel != null &&
+        existingLabel.length > 0 &&
+        existingLabel === legacyPresetLabels.get(preset.slug);
+      if (!existingLabel || shouldReplaceLegacyLabel) {
         nextPatch.label = preset.label;
       }
-      if (!existing?.icon?.trim() || legacyPresetIcons.has(existing.icon.trim())) {
+      if (shouldReplaceLegacyLabel || !existing?.icon?.trim() || legacyPresetIcons.has(existing.icon.trim())) {
         nextPatch.icon = preset.icon;
       }
       if (!existing?.modelOverride?.trim() && preset.model?.trim()) {
@@ -936,69 +952,6 @@ function writeMainLog(message: string) {
   }
 }
 
-function stopGatewayLaunchAgentForElectron(): void {
-  const cliPath = resolveOpenClawCliPath({
-    info: () => {},
-    error: () => {},
-  });
-
-  if (cliPath) {
-    const invocation = resolveCliInvocation(cliPath, ["gateway", "stop"], {
-      includeBundledNode: true,
-    });
-    if (invocation) {
-      try {
-        const cliEnv = buildElectronCliEnv({ cliPath });
-        const result = spawnSync(invocation.command, invocation.args, {
-          encoding: "utf-8",
-          env: cliEnv,
-        });
-        const detail = (result.stderr || result.stdout || "").trim();
-        if (result.status === 0) {
-          writeMainLog("[Gateway Service] Stopped supervised gateway via `openclaw gateway stop`");
-          return;
-        }
-        writeMainLog(
-          `[Gateway Service] \`openclaw gateway stop\` failed: ${detail || `exit ${result.status ?? "unknown"}`}`,
-        );
-      } catch (error) {
-        writeMainLog(
-          `[Gateway Service] \`openclaw gateway stop\` error: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }
-  }
-
-  if (process.platform !== "darwin" || typeof process.getuid !== "function") {
-    return;
-  }
-  const label = resolveGatewayLaunchAgentLabel(ELECTRON_OPENCLAW_PROFILE);
-  const domain = `gui/${process.getuid()}`;
-  const target = `${domain}/${label}`;
-  try {
-    const result = spawnSync("launchctl", ["bootout", target], { encoding: "utf-8" });
-    const detail = (result.stderr || result.stdout || "").trim();
-    if (result.status === 0) {
-      writeMainLog(`[LaunchAgent] Stopped ${target} before Electron gateway startup`);
-      return;
-    }
-    const lowered = detail.toLowerCase();
-    if (
-      lowered.includes("no such process") ||
-      lowered.includes("service is not loaded") ||
-      lowered.includes("could not find service")
-    ) {
-      writeMainLog(`[LaunchAgent] ${target} not loaded`);
-      return;
-    }
-    writeMainLog(`[LaunchAgent] bootout ${target} failed: ${detail || `exit ${result.status ?? "unknown"}`}`);
-  } catch (error) {
-    writeMainLog(
-      `[LaunchAgent] bootout ${target} error: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-}
-
 function loadLoginShellEnvironment(shellPath: string, homeDir: string): Record<string, string> {
   try {
     const result = spawnSync(shellPath, ["-lc", "env -0"], {
@@ -1098,8 +1051,8 @@ function buildElectronCliEnv(params?: {
     appPath,
   });
   const effectivePath = prependPathEntries(fixedPath, [
-    bundledBustlyBinDir,
     bundledCliShim?.shimDir,
+    bundledBustlyBinDir,
   ]);
   const bunInstall = process.env.BUN_INSTALL?.trim() || resolve(homeDir, ".bun");
   const homebrewPrefix = process.env.HOMEBREW_PREFIX?.trim() || "/opt/homebrew";
@@ -1133,6 +1086,7 @@ function buildElectronCliEnv(params?: {
     ...(existsSync(bundledSkillsDir) ? { OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir } : {}),
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: resolveElectronConfigPath(),
+    OPENCLAW_LOG_FILE: resolveElectronBackendLogPath(),
     HOME: homeDir,
     USERPROFILE: homeDir,
     OPENCLAW_LOAD_SHELL_ENV: "1",
@@ -1610,8 +1564,8 @@ async function startGateway(): Promise<boolean> {
       appPath,
     });
     const effectivePath = prependPathEntries(fixedPath, [
-      bundledBustlyBinDir,
       bundledCliShim?.shimDir,
+      bundledBustlyBinDir,
     ]);
     const appNodeModules = resolve(appPath, "node_modules");
     const resourcesNodeModules = resolve(resourcesPath, "node_modules");
@@ -2109,17 +2063,32 @@ function setupAutoUpdater(): void {
     updateVersion = info.version ?? null;
   });
 
-  void autoUpdater.checkForUpdates()
-    .then((result) => {
+  const runStartupUpdateCheck = async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
       if (result?.updateInfo?.version) {
         writeMainLog(`[Updater] checkForUpdates result: ${result.updateInfo.version}`);
       } else {
         writeMainLog("[Updater] checkForUpdates result: no update info");
       }
-    })
-    .catch((error) => {
+
+      const downloadPromise = result?.downloadPromise;
+      if (downloadPromise && typeof downloadPromise.catch === "function") {
+        void downloadPromise.catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          writeMainLog(`[Updater] background download failed: ${message}`);
+          sendUpdateStatus("error", { error: message });
+        });
+      }
+    } catch (error) {
       writeMainLog(`[Updater] checkForUpdates failed: ${error instanceof Error ? error.message : String(error)}`);
-    });
+    }
+  };
+
+  // Never let update probing block the app startup path.
+  setTimeout(() => {
+    void runStartupUpdateCheck();
+  }, 3000);
 }
 
 function ensureWindow(): void {
@@ -2447,6 +2416,7 @@ function setupIpcHandlers(): void {
             directPath?: string;
             entryPath?: string;
             entryName?: string;
+            transferPaths?: string[];
             fallbackKind?: "file" | "directory";
           })
         : {};
@@ -2454,6 +2424,7 @@ function setupIpcHandlers(): void {
       directPath: payload.directPath,
       entryPath: payload.entryPath,
       entryName: payload.entryName,
+      transferPaths: payload.transferPaths,
       fallbackKind: payload.fallbackKind === "directory" ? "directory" : "file",
     });
   });
@@ -2530,7 +2501,15 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle("updater-check", async () => {
     try {
-      await autoUpdater.checkForUpdates();
+      const result = await autoUpdater.checkForUpdates();
+      const downloadPromise = result?.downloadPromise;
+      if (downloadPromise && typeof downloadPromise.catch === "function") {
+        void downloadPromise.catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          writeMainLog(`[Updater] manual download failed: ${message}`);
+          sendUpdateStatus("error", { error: message });
+        });
+      }
       return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -2929,7 +2908,6 @@ void app.whenReady().then(async () => {
   if (initialDeepLinkArg) {
     dispatchDeepLink(initialDeepLinkArg);
   }
-  stopGatewayLaunchAgentForElectron();
   powerSaveBlocker.start("prevent-app-suspension");
   // Load .env file at startup (must be after app is ready to get correct paths)
   const loadDotEnv = () => {

@@ -7,7 +7,7 @@ private struct KeychainEntry: Hashable {
     let account: String
 }
 
-private let gatewayService = "ai.openclaw.gateway"
+private let gatewayService = "ai.openclaw.bustly"
 private let nodeService = "ai.openclaw.node"
 private let talkService = "ai.openclaw.talk"
 private let instanceIdEntry = KeychainEntry(service: nodeService, account: "instanceId")

@@ -42,9 +42,9 @@ Your first job is not to ask a long questionnaire. Your first job is to form an 
 
 Start from the current business reality. Do not assume `MEMORY.md` contains a fresh store snapshot.
 
-1. Read `TOOLS.md` and follow the workspace-specific notes for `commerce_core_ops` and `ads_core_ops`.
-2. Use `commerce_core_ops` to inspect live commerce connections and current store state.
-3. Use `ads_core_ops` to inspect live marketing / advertising systems and current performance surfaces.
+1. Read `TOOLS.md` and follow the workspace-specific notes for `commerce-core-ops` and `ads-core-ops`.
+2. Use `commerce-core-ops` to inspect live commerce connections and current store state.
+3. Use `ads-core-ops` to inspect live marketing / advertising systems and current performance surfaces.
 4. Review `MEMORY.md` only as optional durable notes, not as the source of truth for current metrics.
 5. Identify the highest-leverage next step from an ecommerce operator's perspective.
 6. Decide what you can check yourself and what truly requires user input.
@@ -59,7 +59,7 @@ Before forming an opinion, do a live read with the local skills.
 
 ### Commerce
 
-- Use `commerce_core_ops` first for store discovery and current commercial state.
+- Use `commerce-core-ops` first for store discovery and current commercial state.
 - Minimum first-pass checks:
   - `bustly ops commerce connections`
   - `bustly ops commerce providers`
@@ -68,7 +68,7 @@ Before forming an opinion, do a live read with the local skills.
 
 ### Ads / Marketing
 
-- Use `ads_core_ops` to inspect marketing systems that may explain current performance.
+- Use `ads-core-ops` to inspect marketing systems that may explain current performance.
 - Minimum first-pass checks:
   - `bustly ops ads status`
   - If credentials exist, inspect the relevant connected platform such as Klaviyo, Google Ads, or Meta Ads.

@@ -182,7 +182,6 @@ function resolveWorkspacePlanState(subscription?: WorkspaceSubscriptionRow): Pic
 
 let cachedClient: SupabaseClient | null = null;
 let cachedConfigKey = "";
-
 async function getSupabaseConfig(): Promise<BustlySupabaseConfig> {
   const config = await window.electronAPI.bustlyGetSupabaseConfig();
   if (!config?.url || !config.anonKey || !config.accessToken || !config.userId) {
@@ -262,14 +261,22 @@ export async function listWorkspaceSummaries(): Promise<{
   }
 
   const subscriptionRes = await client
-    .from("workspace_subscriptions")
-    .select("workspace_id, status, current_period_end, end_at, updated_at, benefit_plan(code, name, tier)")
-    .in("workspace_id", workspaceIds)
-    .order("updated_at", { ascending: false });
+  .from("workspace_subscriptions")
+  .select(`
+    workspace_id,
+    status,
+    current_period_end,
+    end_at,
+    updated_at,
+    benefit_plan:benefit_plan!workspace_subscriptions_plan_id_fkey(code, name, tier)
+  `)
+  .in("workspace_id", workspaceIds)
+  .order("updated_at", { ascending: false });
 
   if (subscriptionRes.error) {
     throw subscriptionRes.error;
   }
+
 
   const latestSubscriptionByWorkspace = new Map<string, WorkspaceSubscriptionRow>();
   for (const row of (subscriptionRes.data ?? []) as unknown as WorkspaceSubscriptionRow[]) {

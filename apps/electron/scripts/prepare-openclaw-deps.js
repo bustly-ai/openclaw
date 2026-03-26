@@ -13,13 +13,13 @@ import {
   unlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, extname, relative, resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..", "..", "..");
 const targetDir = resolve(repoRoot, "apps/electron/resources/openclaw");
 const bustlySkillsTargetDir = resolve(repoRoot, "apps/electron/resources/bustly-skills");
 const stagingDir = mkdtempSync(resolve(tmpdir(), "openclaw-deps-"));
-const bustlySkillsRoot = resolve(repoRoot, "..", "bustly-skills");
+const bustlySkillsRoot = resolve(repoRoot, "bustly-skills");
 
 rmSync(targetDir, { recursive: true, force: true });
 rmSync(bustlySkillsTargetDir, { recursive: true, force: true });
@@ -62,34 +62,6 @@ if (installResult.status !== 0) {
   process.exit(installResult.status ?? 1);
 }
 
-const skipBustlyRuntimeInstall = String(process.env.BUSTLY_RUNTIME_SKIP_INSTALL || "")
-  .trim()
-  .toLowerCase();
-const shouldInstallBustlyRuntime = !["1", "true", "yes", "on"].includes(skipBustlyRuntimeInstall);
-if (shouldInstallBustlyRuntime) {
-  const runtimeSpecs = [];
-  const commerceLocalPath = resolve(bustlySkillsRoot, "skills", "commerce_core_ops");
-  const adsLocalPath = resolve(bustlySkillsRoot, "skills", "ads_core_ops");
-
-  const commerceSpec = process.env.BUSTLY_RUNTIME_COMMERCE_SPEC?.trim() ||
-    (existsSync(commerceLocalPath) ? `file:${commerceLocalPath}` : "@bustly/skill-runtime-commerce-core-ops@^0.1.0");
-  const adsSpec = process.env.BUSTLY_RUNTIME_ADS_SPEC?.trim() ||
-    (existsSync(adsLocalPath) ? `file:${adsLocalPath}` : "@bustly/skill-runtime-ads-core-ops@^0.1.0");
-
-  runtimeSpecs.push(commerceSpec, adsSpec);
-  console.log("[prepare-openclaw-deps] Installing Bustly runtime packages:", runtimeSpecs.join(", "));
-  const addRuntimeResult = spawnSync(
-    "pnpm",
-    ["add", "--prod", "--ignore-scripts", ...runtimeSpecs],
-    { cwd: stagingDir, stdio: "inherit" },
-  );
-  if (addRuntimeResult.status !== 0) {
-    process.exit(addRuntimeResult.status ?? 1);
-  }
-} else {
-  console.log("[prepare-openclaw-deps] Skip Bustly runtime package install (BUSTLY_RUNTIME_SKIP_INSTALL enabled).");
-}
-
 const removeBinDirs = (dir) => {
   const entries = readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
@@ -124,6 +96,48 @@ const pruneDevDependencies = () => {
 };
 
 pruneDevDependencies();
+
+const pruneNodeModules = () => {
+  const nodeModulesRoot = resolve(stagingDir, "node_modules");
+  const removableDirNames = new Set([
+    ".ignored",
+  ]);
+  const removableFileNames = new Set([
+    ".DS_Store",
+  ]);
+  const removableExtensions = new Set([
+    ".map",
+    ".md",
+    ".markdown",
+  ]);
+
+  const visit = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = resolve(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (removableDirNames.has(entry.name)) {
+          rmSync(fullPath, { recursive: true, force: true });
+          continue;
+        }
+        visit(fullPath);
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const lowerName = entry.name.toLowerCase();
+      if (removableFileNames.has(entry.name) || removableExtensions.has(extname(lowerName))) {
+        rmSync(fullPath, { force: true });
+      }
+    }
+  };
+
+  visit(nodeModulesRoot);
+};
+
+pruneNodeModules();
 
 // Ensure any symlinks are copied as real files.
 // Otherwise they can point at the temp staging dir after it is removed.
@@ -211,7 +225,7 @@ rewriteStagingSymlinks();
 assertNoStagingSymlinksRemain();
 
 if (existsSync(bustlySkillsRoot)) {
-  console.log("[prepare-openclaw-deps] Copying bustly-skills bundle.");
+  console.log(`[prepare-openclaw-deps] Copying bustly-skills bundle from ${bustlySkillsRoot}.`);
   cpSync(bustlySkillsRoot, bustlySkillsTargetDir, {
     recursive: true,
     dereference: true,
@@ -225,7 +239,8 @@ if (existsSync(bustlySkillsRoot)) {
     },
   });
 } else {
-  console.warn("[prepare-openclaw-deps] bustly-skills repo not found, skip bundled bustly-skills copy.");
+  console.error(`[prepare-openclaw-deps] Missing bustly-skills submodule: ${bustlySkillsRoot}`);
+  process.exit(1);
 }
 
 rmSync(stagingDir, { recursive: true, force: true });

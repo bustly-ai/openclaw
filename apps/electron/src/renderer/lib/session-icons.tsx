@@ -52,8 +52,10 @@ export const SESSION_ICON_IDS = [
   "TagSimple",
   "Truck",
   "Wallet",
+  "TrendUp",
   "Robot",
   "User",
+  "Users",
   "Globe",
   "Plug",
   "CreditCard",
@@ -82,7 +84,9 @@ export const SESSION_ICON_OPTIONS: Array<{
   { id: "TagSimple", label: "Simple tag", icon: TagSimple },
   { id: "Truck", label: "Shipping", icon: Truck },
   { id: "Wallet", label: "Wallet", icon: Wallet },
+  { id: "TrendUp", label: "Growth", icon: TrendUp },
   { id: "CreditCard", label: "Card", icon: CreditCard },
+  { id: "Users", label: "Customers", icon: Users },
 ];
 
 type PhosphorIcon = ComponentType<{ size?: number; weight?: "bold"; className?: string }>;
@@ -104,8 +108,10 @@ const SESSION_ICON_COMPONENTS: Record<SessionIconId, PhosphorIcon> = {
   TagSimple,
   Truck,
   Wallet,
+  TrendUp,
   Robot,
   User,
+  Users,
   Globe,
   Plug,
   CreditCard,

@@ -30,6 +30,7 @@ import {
 } from "../../lib/session-icons";
 import { listWorkspaceSummaries, type WorkspaceSummary } from "../../lib/bustly-supabase";
 import { GatewayBrowserClient } from "../../lib/gateway-client";
+import { createGatewayInstanceId } from "../../lib/gateway-instance-id";
 import { useAppState } from "../../providers/AppStateProvider";
 import {
   buildBustlyWorkspaceAgentId,
@@ -156,6 +157,11 @@ function sortSidebarSessions(
       if (right.key === pendingSessionKey && left.key !== pendingSessionKey) {
         return 1;
       }
+    }
+    const leftUpdatedAt = left.updatedAt ?? Number.NEGATIVE_INFINITY;
+    const rightUpdatedAt = right.updatedAt ?? Number.NEGATIVE_INFINITY;
+    if (leftUpdatedAt !== rightUpdatedAt) {
+      return rightUpdatedAt - leftUpdatedAt;
     }
     return left.key.localeCompare(right.key);
   });
@@ -1120,6 +1126,9 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [runningTasks, setRunningTasks] = useState<Record<string, boolean>>({});
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const userMenuTriggerRef = useRef<HTMLDivElement | null>(null);
+  const gatewayInstanceIdRef = useRef(createGatewayInstanceId("sidebar"));
+  const workspaceLoadingRef = useRef(false);
+  const hasLoadedWorkspacesRef = useRef(false);
   const [userMenuLayout, setUserMenuLayout] = useState({ top: 0, left: 0, width: 224 });
   const location = useLocation();
   const navigate = useNavigate();
@@ -1201,36 +1210,47 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     };
   }, []);
 
+  useEffect(() => {
+    workspaceLoadingRef.current = workspaceLoading;
+  }, [workspaceLoading]);
+
+  useEffect(() => {
+    hasLoadedWorkspacesRef.current = hasLoadedWorkspaces;
+  }, [hasLoadedWorkspaces]);
+
   const loadWorkspaces = useCallback(
     async (options?: { force?: boolean; silent?: boolean }) => {
       const force = options?.force === true;
       const silent = options?.silent === true;
-      if (workspaceLoading) {
+      if (workspaceLoadingRef.current) {
         return;
       }
-      if (hasLoadedWorkspaces && !force) {
+      if (hasLoadedWorkspacesRef.current && !force) {
         return;
       }
       if (!silent) {
+        workspaceLoadingRef.current = true;
         setWorkspaceLoading(true);
       }
       try {
         const result = await listWorkspaceSummaries();
         setWorkspaces(result.workspaces);
         setActiveWorkspaceId(result.activeWorkspaceId);
+        hasLoadedWorkspacesRef.current = true;
         setHasLoadedWorkspaces(true);
       } catch {
-        if (!hasLoadedWorkspaces) {
+        if (!hasLoadedWorkspacesRef.current) {
           setWorkspaces([]);
           setActiveWorkspaceId("");
         }
       } finally {
         if (!silent) {
+          workspaceLoadingRef.current = false;
           setWorkspaceLoading(false);
         }
       }
     },
-    [hasLoadedWorkspaces, workspaceLoading],
+    [],
   );
 
   useEffect(() => {
@@ -1315,14 +1335,14 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
           token: connectConfig.token ?? undefined,
           clientName: "openclaw-control-ui",
           mode: "webchat",
-          instanceId: `bustly-electron-sidebar-${Date.now()}`,
+          instanceId: gatewayInstanceIdRef.current,
           onHello: () => {
             if (disposed) {
               return;
             }
             void client
               .request<SessionsListResult>("sessions.list", {
-                limit: 20,
+                limit: 500,
                 includeGlobal: false,
                 includeUnknown: false,
                 includeDerivedTitles: true,
@@ -1794,24 +1814,24 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       >
         {!props.collapsed ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex-1 overflow-y-auto px-0 pt-2 pb-4">
-              <div className="sticky top-0 z-10 px-4 pt-0.5 pb-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-[13px] font-medium text-[#8A93B2]">Agents</span>
-                  <PortalTooltip content="Create agent" side="right">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        openCreateModal();
-                      }}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8A93B2] transition-all duration-200 hover:bg-[#1A162F]/5 hover:text-[#1A162F] active:bg-[#1A162F]/8"
-                      aria-label="Create agent"
-                    >
-                      <Plus size={16} weight="bold" />
-                    </button>
-                  </PortalTooltip>
-                </div>
+            <div className="shrink-0 px-4 pt-2 pb-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-medium text-[#8A93B2]">Agents</span>
+                <PortalTooltip content="Create agent" side="right">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      openCreateModal();
+                    }}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8A93B2] transition-all duration-200 hover:bg-[#1A162F]/5 hover:text-[#1A162F] active:bg-[#1A162F]/8"
+                    aria-label="Create agent"
+                  >
+                    <Plus size={16} weight="bold" />
+                  </button>
+                </PortalTooltip>
               </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-0 pb-4">
               <div className="space-y-0.5">
               {tasksLoading ? (
                 <>

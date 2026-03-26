@@ -2,7 +2,7 @@ import Foundation
 import os
 
 enum GatewaySettingsStore {
-    private static let gatewayService = "ai.openclaw.gateway"
+    private static let gatewayService = "ai.openclaw.bustly"
     private static let nodeService = "ai.openclaw.node"
     private static let talkService = "ai.openclaw.talk"
 

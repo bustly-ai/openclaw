@@ -34,15 +34,9 @@ const normalizeArch = (value) => {
 
 const platform = normalizePlatform(getArg("--platform") || process.platform);
 const arch = normalizeArch(getArg("--arch") || (platform === "mac" ? process.arch : null));
-const signMode = (getArg("--sign") || "auto").toLowerCase();
 
 if (!platform) {
   console.error("[build-release] Unknown platform. Use --platform mac|windows|linux.");
-  process.exit(1);
-}
-
-if (!["auto", "on", "off"].includes(signMode)) {
-  console.error("[build-release] Unknown sign mode. Use --sign auto|on|off.");
   process.exit(1);
 }
 
@@ -133,13 +127,7 @@ builderArgs.push(
   `-c.directories.output=${outputDir}`,
 );
 
-const extraEnv = {};
-if (signMode === "off") {
-  extraEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
-  builderArgs.push("-c.mac.identity=null");
-}
-
-run(pnpmCmd, ["dlx", "electron-builder", ...builderArgs], { env: extraEnv });
+run(pnpmCmd, ["dlx", "electron-builder", ...builderArgs]);
 
 if (platform === "mac") {
   run(nodeCmd, ["scripts/notarize-mac-artifacts.js", "--dir", outputDir]);

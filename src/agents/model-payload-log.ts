@@ -7,9 +7,11 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 
+type PayloadLogStage = "request" | "response";
+
 type PayloadLogEvent = {
   ts: string;
-  stage: "response";
+  stage: PayloadLogStage;
   runId?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -17,7 +19,8 @@ type PayloadLogEvent = {
   modelId?: string;
   modelApi?: string | null;
   workspaceDir?: string;
-  payload?: unknown;
+  request?: unknown;
+  response?: unknown;
   payloadDigest?: string;
 };
 
@@ -172,7 +175,7 @@ export function createModelPayloadLogger(params: {
             ...base,
             ts: new Date().toISOString(),
             stage: "response",
-            payload: {
+            response: {
               model: modelSummary,
               message: payload,
             },
@@ -199,7 +202,24 @@ export function createModelPayloadLogger(params: {
         return wrappedStream;
       };
 
-      const response = streamFn(model, context, options);
+      const nextOnPayload = (payload: unknown) => {
+        record({
+          ...base,
+          ts: new Date().toISOString(),
+          stage: "request",
+          request: {
+            model: modelSummary,
+            request: payload,
+          },
+          payloadDigest: digest(payload),
+        });
+        options?.onPayload?.(payload);
+      };
+
+      const response = streamFn(model, context, {
+        ...options,
+        onPayload: nextOnPayload,
+      });
       if (
         response &&
         typeof (response as Promise<AssistantMessageEventStream>).then === "function"

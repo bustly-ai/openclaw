@@ -9,7 +9,7 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import { clearAgentRunContext, emitAgentEvent } from "../../infra/agent-events.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
@@ -676,6 +676,7 @@ async function executeChatRun(params: {
     params.context.chatDeltaSentAt.delete(clientRunId);
     params.context.chatAbortedRuns.delete(clientRunId);
     params.context.chatPendingAbortedPartials.delete(clientRunId);
+    clearAgentRunContext(clientRunId);
   } else {
     const cached = params.context.dedupe.get(`chat:${clientRunId}`);
     if (cached) {
@@ -823,15 +824,19 @@ async function executeChatRun(params: {
             }
           }
           const connId = typeof params.client?.connId === "string" ? params.client.connId : undefined;
+          const instanceId =
+            typeof params.client?.connect?.client?.instanceId === "string"
+              ? params.client.connect.client.instanceId
+              : undefined;
           const wantsToolEvents = hasGatewayClientCap(
             params.client?.connect?.caps,
             GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
           );
           if (connId && wantsToolEvents) {
-            params.context.registerToolEventRecipient(runId, connId);
+            params.context.registerToolEventRecipient(runId, connId, instanceId);
             for (const [activeRunId, active] of params.context.chatAbortControllers) {
               if (activeRunId !== runId && active.sessionKey === params.sessionKey) {
-                params.context.registerToolEventRecipient(activeRunId, connId);
+                params.context.registerToolEventRecipient(activeRunId, connId, instanceId);
               }
             }
           }

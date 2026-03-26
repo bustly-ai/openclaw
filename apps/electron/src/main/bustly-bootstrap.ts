@@ -295,7 +295,7 @@ function renderTemplate(template: string, values: Record<string, string>): strin
 
 function renderBulletList(lines: string[]): string {
   if (lines.length === 0) {
-    return "- None connected yet";
+    return "";
   }
   return lines.map((line) => `- ${line}`).join("\n");
 }
@@ -769,7 +769,7 @@ async function buildBustlyBootstrapContext(params: {
   if (localCredentials.googleAds && !marketingPlatforms.some((entry) => entry.platform === "google_ads" && entry.source === "local")) {
     marketingPlatforms.push({
       platform: "google_ads",
-      accountLabel: "Local ads_core_ops credential",
+      accountLabel: "Local ads-core-ops credential",
       status: "configured",
       timezone: null,
       lastSyncedAt: null,
@@ -779,7 +779,7 @@ async function buildBustlyBootstrapContext(params: {
   if (localCredentials.klaviyo && !marketingPlatforms.some((entry) => entry.platform === "klaviyo" && entry.source === "local")) {
     marketingPlatforms.push({
       platform: "klaviyo",
-      accountLabel: "Local ads_core_ops credential",
+      accountLabel: "Local ads-core-ops credential",
       status: "configured",
       timezone: null,
       lastSyncedAt: null,
@@ -789,7 +789,7 @@ async function buildBustlyBootstrapContext(params: {
   if (localCredentials.metaAds) {
     marketingPlatforms.push({
       platform: "meta_ads",
-      accountLabel: "Local ads_core_ops credential",
+      accountLabel: "Local ads-core-ops credential",
       status: "configured",
       timezone: null,
       lastSyncedAt: null,
@@ -904,15 +904,15 @@ function buildTemplateValues(context: BustlyBootstrapContext): Record<string, st
   ].join(", ");
   const commercePlatformSummary = summarizePlatforms(
     context.commerce.storefronts.map((entry) => entry.platform),
-    "None connected yet",
+    "",
   );
   const sourcingPlatformSummary = summarizePlatforms(
     context.sourcing.connections.map((entry) => entry.platform),
-    "None connected yet",
+    "",
   );
   const marketingPlatformSummary = summarizePlatforms(
     context.marketing.platforms.map((entry) => entry.platform),
-    "None connected yet",
+    "",
   );
 
   return {

@@ -265,6 +265,9 @@ importers:
       '@phosphor-icons/react':
         specifier: ^2.1.10
         version: 2.1.10(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
       '@supabase/supabase-js':
         specifier: ^2.99.0
         version: 2.99.0
@@ -280,12 +283,18 @@ importers:
       dompurify:
         specifier: ^3.3.1
         version: 3.3.1
+      dotenv:
+        specifier: ^17.3.1
+        version: 17.3.1
       electron-updater:
         specifier: ^6.7.3
         version: 6.7.3
       google-auth-library:
         specifier: ^10.5.0
         version: 10.5.0
+      ipaddr.js:
+        specifier: ^2.3.0
+        version: 2.3.0
       json5:
         specifier: ^2.2.3
         version: 2.2.3

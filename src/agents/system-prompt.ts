@@ -170,6 +170,16 @@ function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   return ["## Voice (TTS)", hint, ""];
 }
 
+function buildInteractionSection() {
+  return [
+    "## Interaction",
+    "Reply in the user's language by default. If they switch languages, follow their latest message unless they ask for a different language.",
+    "In the OpenClaw client, the user cannot run OpenClaw commands in a terminal themselves. When OpenClaw-related commands are needed, run them for the user and report the result.",
+    "After creating a file for the user, open the directory containing that file.",
+    "",
+  ];
+}
+
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
   const docsPath = params.docsPath?.trim();
   if (!docsPath || params.isMinimal) {
@@ -447,6 +457,7 @@ export function buildAgentSystemPrompt(params: {
     "Use plain human language for narration unless in a technical context.",
     "",
     ...safetySection,
+    ...buildInteractionSection(),
     ...skillsSection,
     ...memorySection,
     "",

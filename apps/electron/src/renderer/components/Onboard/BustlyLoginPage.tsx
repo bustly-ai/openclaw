@@ -1,9 +1,15 @@
 import {
-  FileText,
-  MagnifyingGlass,
-  ShoppingBag,
+  ArrowCounterClockwise,
+  Package,
+  PencilSimpleLine,
+  Pulse,
+  ShoppingCartSimple,
   SignOut,
-  Sparkle,
+  TrendDown,
+  TrendUp,
+  Users,
+  Wallet,
+  WarningCircle,
 } from "@phosphor-icons/react";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -21,32 +27,54 @@ type BustlyLoginPageProps = {
 
 const HOME_CAROUSEL_ITEMS = [
   {
-    id: "shopify",
-    text: "Update low-stock alerts in Shopify.",
-    brandIcon: "https://cdn.brandfetch.io/shopify.com/icon",
-    icon: ShoppingBag,
-    alt: "Shopify",
+    id: "failed-orders",
+    text: "Fix failed orders in Shopify.",
+    icon: ShoppingCartSimple,
   },
   {
-    id: "google",
-    text: "Write weekly performance summary.",
-    brandIcon: "https://cdn.brandfetch.io/google.com/icon",
-    icon: MagnifyingGlass,
-    alt: "Google",
+    id: "attention-today",
+    text: "Show me what needs attention today.",
+    icon: WarningCircle,
   },
   {
-    id: "klaviyo",
-    text: "Launch abandoned-cart flow in Klaviyo.",
-    brandIcon: "https://cdn.brandfetch.io/klaviyo.com/icon",
-    icon: Sparkle,
-    alt: "Klaviyo",
+    id: "sales-down",
+    text: "Explain why sales are down this week.",
+    icon: TrendDown,
   },
   {
-    id: "woocommerce",
-    text: "Fix failed orders in WooCommerce.",
-    brandIcon: "https://cdn.brandfetch.io/woocommerce.com/icon",
-    icon: FileText,
-    alt: "WooCommerce",
+    id: "losing-conversion",
+    text: "Find products losing conversion.",
+    icon: Package,
+  },
+  {
+    id: "high-value-customers",
+    text: "Identify my highest-value customers.",
+    icon: Users,
+  },
+  {
+    id: "re-engagement-campaign",
+    text: "Create a re-engagement campaign draft.",
+    icon: PencilSimpleLine,
+  },
+  {
+    id: "grow-store",
+    text: "Recommend 3 actions to grow this store.",
+    icon: TrendUp,
+  },
+  {
+    id: "revenue-orders",
+    text: "Summarize today’s revenue and orders.",
+    icon: Wallet,
+  },
+  {
+    id: "traffic-drops",
+    text: "Spot unusual traffic drops.",
+    icon: Pulse,
+  },
+  {
+    id: "win-back-customers",
+    text: "Flag customers I should win back.",
+    icon: ArrowCounterClockwise,
   },
 ] as const;
 
@@ -217,18 +245,10 @@ export default function BustlyLoginPage({
                   style={style}
                 >
                   <div className="mx-auto flex w-full items-center gap-3 overflow-hidden rounded-xl border border-gray-100 bg-white/90 px-5 py-3 text-[12px] text-gray-700 shadow-lg backdrop-blur-md">
-                    <div className="flex h-5 w-5 shrink-0 items-center justify-center">
+                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#F4F1FF]">
                       <Icon size={16} weight="bold" className="text-[#1A162F]" />
                     </div>
                     <span className="flex-1 whitespace-nowrap text-left font-medium">{item.text}</span>
-                    <img
-                      src={item.brandIcon}
-                      alt={item.alt}
-                      className="h-4 w-4 opacity-100 transition-opacity"
-                      onError={(event) => {
-                        event.currentTarget.style.display = "none";
-                      }}
-                    />
                   </div>
                 </div>
               );
