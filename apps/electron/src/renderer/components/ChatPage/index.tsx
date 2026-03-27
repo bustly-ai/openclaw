@@ -807,6 +807,7 @@ export default function ChatPage() {
   const [subscriptionExpired, setSubscriptionExpired] = useState(false);
   const [subscriptionActionText, setSubscriptionActionText] = useState("Upgrade");
   const [canManageSubscription, setCanManageSubscription] = useState(false);
+  const [workspaceStateLoading, setWorkspaceStateLoading] = useState(true);
   const [modelLevel, setModelLevel] = useState<ChatModelLevelId>(() => {
     const stored = window.localStorage.getItem(CHAT_MODEL_LEVEL_STORAGE_KEY);
     if (stored === "standard" || stored === "advanced" || stored === "ultra") {
@@ -853,10 +854,20 @@ export default function ChatPage() {
     () => resolveBustlyPresetUseCases({ sessionKey: currentSessionKey, workspaceId: activeWorkspaceId }),
     [activeWorkspaceId, currentSessionKey],
   );
+  const pageResolving = workspaceStateLoading || loading;
   const canSendMessage =
-    connected && !subscriptionExpired && !sending && (draft.trim() || attachments.length > 0 || contextPaths.length > 0);
+    !pageResolving &&
+    connected &&
+    !subscriptionExpired &&
+    !sending &&
+    (draft.trim() || attachments.length > 0 || contextPaths.length > 0);
   const showPlaceholderTicker =
-    connected && !subscriptionExpired && !draft && attachments.length === 0 && contextPaths.length === 0;
+    !pageResolving &&
+    connected &&
+    !subscriptionExpired &&
+    !draft &&
+    attachments.length === 0 &&
+    contextPaths.length === 0;
   const updateScrollBottomState = useCallback(() => {
     const element = scrollRef.current;
     if (!element) {
@@ -2089,6 +2100,9 @@ export default function ChatPage() {
     let disposed = false;
 
     const loadWorkspaceState = async (options?: { force?: boolean }) => {
+      if (!disposed) {
+        setWorkspaceStateLoading(true);
+      }
       try {
         const summary = await listWorkspaceSummaries(options);
         if (disposed) {
@@ -2106,6 +2120,10 @@ export default function ChatPage() {
           setSubscriptionExpired(false);
           setSubscriptionActionText("Upgrade");
           setCanManageSubscription(false);
+        }
+      } finally {
+        if (!disposed) {
+          setWorkspaceStateLoading(false);
         }
       }
     };
@@ -3059,7 +3077,7 @@ export default function ChatPage() {
       <div className="relative flex-1 overflow-hidden">
         <div ref={scrollRef} className="chat-page-timeline h-full">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 pt-8" style={{ paddingBottom: composerAreaHeight + 16 }}>
-            {!loading && timeline.length === 0 ? (
+            {!pageResolving && timeline.length === 0 ? (
               <div className="flex min-h-[52vh] flex-col items-center justify-center py-8 text-center">
                 <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-[#1A162F] shadow-lg shadow-[#1A162F]/5">
                   <CurrentScenarioIcon size={28} weight="bold" />
@@ -3068,24 +3086,24 @@ export default function ChatPage() {
                   {currentScenarioLabel}
                 </h1>
                 <p className="max-w-[720px] text-base text-[#666F8D]">
-                  {subscriptionExpired
-                    ? "Renew your workspace plan to continue this workflow."
-                    : "How can I help you today?"}
+                  How can I help you today?
                 </p>
               </div>
             ) : null}
-            <ChatTimeline
-              timeline={processedTimeline}
-              activeRunningToolKey={activeRunningToolKey}
-              liveIndicatorLabel={liveIndicatorLabel}
-              liveIndicatorVisible={liveIndicatorLabel !== null}
-              onRetryRun={handleRetryRun}
-              onPreviewImage={setPreviewImage}
-            />
+            {!pageResolving ? (
+              <ChatTimeline
+                timeline={processedTimeline}
+                activeRunningToolKey={activeRunningToolKey}
+                liveIndicatorLabel={liveIndicatorLabel}
+                liveIndicatorVisible={liveIndicatorLabel !== null}
+                onRetryRun={handleRetryRun}
+                onPreviewImage={setPreviewImage}
+              />
+            ) : null}
           </div>
         </div>
 
-        {showScrollBottom ? (
+        {!pageResolving && showScrollBottom ? (
           <button
             type="button"
             onClick={() => scrollToBottom()}
@@ -3101,7 +3119,7 @@ export default function ChatPage() {
           <div className="h-8 bg-gradient-to-t from-white via-white/80 to-transparent" />
           <div className="border-t border-white/40 bg-white px-6 pb-8 pointer-events-auto">
             <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4 pt-4">
-              {subscriptionExpired ? (
+              {!pageResolving && subscriptionExpired ? (
                 <div className="mb-3 rounded-2xl border border-[#ECECEC] bg-white p-4 shadow-[0_10px_24px_rgba(26,22,47,0.05)]">
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-start gap-3">
@@ -3130,7 +3148,7 @@ export default function ChatPage() {
                 </div>
               ) : null}
 
-              {timeline.length === 0 && currentUseCases.length > 0 ? (
+              {!pageResolving && !subscriptionExpired && timeline.length === 0 && currentUseCases.length > 0 ? (
                 <div className="grid grid-cols-3 gap-3">
                     {currentUseCases.map((useCase) => (
                       <button
@@ -3153,19 +3171,21 @@ export default function ChatPage() {
                         />
                       </button>
                     ))}
-                </div>
+                  </div>
               ) : null}
 
               <div
                 className={`group relative rounded-[28px] border bg-white p-4 shadow-sm transition-all duration-300 ${
-                  subscriptionExpired
+                  pageResolving
+                    ? "border-gray-200"
+                    : subscriptionExpired
                     ? "cursor-not-allowed border-[#ECECEC] bg-[#FAFAFA]"
                     : isDraggingFiles
                       ? "border-[#1A162F] bg-[#1A162F]/5 shadow-[0_18px_44px_rgba(26,22,47,0.08)] ring-1 ring-[#1A162F]"
                     : "border-gray-200 hover:border-gray-300 focus-within:border-gray-400 focus-within:shadow-md"
                 }`}
                 onDragOver={(event) => {
-                  if (subscriptionExpired) {
+                  if (pageResolving || subscriptionExpired) {
                     return;
                   }
                   event.preventDefault();
@@ -3179,7 +3199,7 @@ export default function ChatPage() {
                   setIsDraggingFiles(false);
                 }}
                 onDrop={(event) => {
-                  if (subscriptionExpired) {
+                  if (pageResolving || subscriptionExpired) {
                     return;
                   }
                   event.preventDefault();
@@ -3196,7 +3216,7 @@ export default function ChatPage() {
                   });
                 }}
               >
-                {isDraggingFiles && !subscriptionExpired ? (
+                {isDraggingFiles && !pageResolving && !subscriptionExpired ? (
                   <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
                     <div className="animate-in zoom-in-95 fade-in flex items-center gap-2 text-[#1A162F] duration-200">
                       <Paperclip size={20} weight="bold" />
@@ -3205,7 +3225,7 @@ export default function ChatPage() {
                   </div>
                 ) : null}
 
-                {attachments.length > 0 || contextPaths.length > 0 ? (
+                {!pageResolving && (attachments.length > 0 || contextPaths.length > 0) ? (
                   <div className={`relative z-10 mb-3 flex flex-wrap gap-2 transition-opacity duration-200 ${isDraggingFiles ? "opacity-20" : ""}`}>
                     {attachments.map((att) => (
                       <InputArtifactCard
@@ -3250,9 +3270,11 @@ export default function ChatPage() {
                     ref={composerRef}
                     rows={1}
                     value={draft}
-                    disabled={!connected || sending || subscriptionExpired}
+                    disabled={pageResolving || !connected || sending || subscriptionExpired}
                     placeholder={
-                      subscriptionExpired
+                      pageResolving
+                        ? ""
+                        : subscriptionExpired
                         ? "Renew your plan to continue..."
                         : connected
                           ? showPlaceholderTicker
@@ -3286,6 +3308,9 @@ export default function ChatPage() {
                       }
                     }}
                     onPaste={(e) => {
+                      if (pageResolving || subscriptionExpired) {
+                        return;
+                      }
                       const files = e.clipboardData.files;
                       const items = e.clipboardData.items;
                       const source = files && files.length > 0 ? files : items;
@@ -3298,10 +3323,10 @@ export default function ChatPage() {
                     }}
                   />
 
-                  {showPlaceholderTicker ? <PlaceholderTicker items={COMPOSER_PLACEHOLDERS} /> : null}
+                  {!pageResolving && showPlaceholderTicker ? <PlaceholderTicker items={COMPOSER_PLACEHOLDERS} /> : null}
                 </div>
 
-                {activeRunId ? (
+                {!pageResolving && activeRunId ? (
                   <div className="absolute right-3 bottom-3 z-20">
                     <PortalTooltip content="Stop">
                       <button
@@ -3317,7 +3342,7 @@ export default function ChatPage() {
                 ) : null}
 
                 <div className="mt-1 flex items-center justify-between pt-2">
-                  <div className={`flex items-center gap-2 ${subscriptionExpired ? "pointer-events-none opacity-50" : ""}`}>
+                  <div className={`flex items-center gap-2 ${pageResolving || subscriptionExpired ? "pointer-events-none opacity-50" : ""}`}>
                     <PortalTooltip content="Add photos & files">
                       <button
                         type="button"
@@ -3333,7 +3358,7 @@ export default function ChatPage() {
                       value={modelLevel}
                       options={CHAT_MODEL_LEVELS}
                       onChange={setModelLevel}
-                      disabled={subscriptionExpired}
+                      disabled={pageResolving || subscriptionExpired}
                     />
                   </div>
 
