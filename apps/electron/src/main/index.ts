@@ -401,6 +401,41 @@ type DeepLinkPayload = {
 let pendingDeepLink: DeepLinkPayload | null = null;
 
 const EXTERNAL_NAV_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+const WINDOWS_ABSOLUTE_PATH_RE = /^[A-Za-z]:[\\/]/;
+const HOME_RELATIVE_PATH_RE = /^~(?:[\\/]|$)/;
+
+function isOpenableLocalPath(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("\\\\") ||
+    WINDOWS_ABSOLUTE_PATH_RE.test(trimmed) ||
+    HOME_RELATIVE_PATH_RE.test(trimmed)
+  );
+}
+
+function decodeOpenableLocalPath(value: string): string {
+  if (!value.includes("%")) {
+    return value;
+  }
+  try {
+    return decodeURI(value);
+  } catch {
+    return value;
+  }
+}
+
+function resolveOpenableLocalPath(value: string): string {
+  const trimmed = decodeOpenableLocalPath(value.trim());
+  if (!HOME_RELATIVE_PATH_RE.test(trimmed)) {
+    return trimmed;
+  }
+  const suffix = trimmed.slice(1).replace(/^[/\\]+/, "");
+  return suffix ? join(app.getPath("home"), suffix) : app.getPath("home");
+}
 
 function shouldOpenExternal(url: string): boolean {
   if (!url) {
@@ -1787,7 +1822,6 @@ async function startGateway(): Promise<boolean> {
       mainWindow?.webContents.send("gateway-exit", { code, signal });
     });
 
-    const startupTimeoutMs = 45_000;
     const exitPromise = new Promise<never>((_resolve, rejectExit) => {
       gatewayProcess?.once("exit", (code, signal) => {
         rejectExit(
@@ -1796,7 +1830,7 @@ async function startGateway(): Promise<boolean> {
       });
     });
     const readyPromise = (async () => {
-      const ready = await waitForGatewayPort(gatewayPort, startupTimeoutMs);
+      const ready = await waitForGatewayPort(gatewayPort, null);
       if (!ready) {
         throw new Error(`Gateway port ${gatewayPort} not ready`);
       }
@@ -1874,9 +1908,9 @@ function buildControlUiUrl(params: { port: number; token?: string | null }) {
   return `${baseUrl}?token=${params.token}`;
 }
 
-async function waitForGatewayPort(port: number, timeoutMs = 20_000): Promise<boolean> {
+async function waitForGatewayPort(port: number, timeoutMs: number | null = 20_000): Promise<boolean> {
   const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
+  while (timeoutMs === null || Date.now() - start < timeoutMs) {
     const ready = await new Promise<boolean>((resolve) => {
       const socket = new Socket();
       const onDone = (result: boolean) => {
@@ -2626,6 +2660,25 @@ function setupIpcHandlers(): void {
       return `data:${mimeType};base64,${base64}`;
     } catch {
       return null;
+    }
+  });
+
+  ipcMain.handle("open-local-path", async (_event, rawPath: string) => {
+    const targetPath = typeof rawPath === "string" ? rawPath.trim() : "";
+    if (!isOpenableLocalPath(targetPath)) {
+      return { success: false, error: "Expected an openable local path." };
+    }
+    try {
+      const error = await shell.openPath(resolveOpenableLocalPath(targetPath));
+      if (error) {
+        return { success: false, error };
+      }
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   });
 

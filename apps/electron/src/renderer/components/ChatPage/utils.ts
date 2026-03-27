@@ -53,7 +53,7 @@ const allowedTags = [
   "tr", "ul", "img",
 ];
 
-const allowedAttrs = ["class", "href", "rel", "target", "title", "start", "src", "alt"];
+const allowedAttrs = ["class", "href", "rel", "target", "title", "start", "src", "alt", "data-local-path"];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
   ALLOWED_ATTR: allowedAttrs,
@@ -66,6 +66,21 @@ const MARKDOWN_PARSE_LIMIT = 40_000;
 const MARKDOWN_CACHE_LIMIT = 200;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const markdownCache = new Map<string, string>();
+const WINDOWS_ABSOLUTE_PATH_RE = /^[A-Za-z]:[\\/]/;
+const HOME_RELATIVE_PATH_RE = /^~(?:[\\/]|$)/;
+
+export function isAbsoluteLocalMarkdownPath(value: string | null | undefined): boolean {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("\\\\") ||
+    WINDOWS_ABSOLUTE_PATH_RE.test(trimmed) ||
+    HOME_RELATIVE_PATH_RE.test(trimmed)
+  );
+}
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -100,6 +115,12 @@ function installHooks() {
     }
     const href = node.getAttribute("href");
     if (!href) {
+      return;
+    }
+    if (isAbsoluteLocalMarkdownPath(href)) {
+      node.setAttribute("data-local-path", href);
+      node.setAttribute("rel", "noopener");
+      node.setAttribute("target", "_self");
       return;
     }
     node.setAttribute("rel", "noreferrer noopener");

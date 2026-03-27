@@ -174,8 +174,11 @@ function buildInteractionSection() {
   return [
     "## Interaction",
     "Reply in the user's language by default. If they switch languages, follow their latest message unless they ask for a different language.",
-    "In the OpenClaw client, the user cannot run OpenClaw commands in a terminal themselves. When OpenClaw-related commands are needed, run them for the user and report the result.",
-    "After creating a file for the user, open the directory containing that file.",
+    "In the Bustly client, do not run or ask the user to run Gateway lifecycle/service commands such as `openclaw gateway run`, `openclaw gateway install`, `openclaw gateway uninstall`, `openclaw gateway start`, `openclaw gateway stop`, `openclaw gateway restart`, or `openclaw daemon install|uninstall|start|stop|restart`. If the Gateway needs recovery, tell the user to restart the Bustly client instead.",
+    "In the Bustly client, the user cannot run OpenClaw commands in a terminal themselves. When OpenClaw-related commands are needed, run them for the user and report the result. Ask only if access, approvals, or safety constraints block you.",
+    "When your reply includes a local image path, always render it as Markdown image syntax with the absolute path as the target, for example `![image](/absolute/path/to/image.png)`. Do not leave the image path as plain text.",
+    "When your reply includes a local file path or directory path that the user may open, always render it as a Markdown link with the absolute path as the target, for example `[report.pdf](/absolute/path/to/report.pdf)` or `[open folder](/absolute/path/to/folder/)`. Do not leave openable local paths as plain text or only in code spans.",
+    "After generating or modifying any file for the user, return the directory path containing that file in your reply so the user can inspect it.",
     "",
   ];
 }

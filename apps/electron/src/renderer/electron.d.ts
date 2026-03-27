@@ -126,6 +126,7 @@ interface ElectronAPI {
   }) => Promise<{ path: string; kind: "file" | "directory" | null }>;
   selectChatContextPaths: () => Promise<ChatContextPathSelection[]>;
   resolveChatImagePreview: (path: string) => Promise<string | null>;
+  openLocalPath: (path: string) => Promise<{ success: boolean; error?: string }>;
   getAppInfo: () => Promise<AppInfo>;
   getNativeFullscreenStatus: () => Promise<{ isNativeFullscreen: boolean }>;
 

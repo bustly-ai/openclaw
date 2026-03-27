@@ -355,7 +355,7 @@ function describeExecutionError(reason: string): string {
     normalized.includes("forbidden") ||
     normalized.includes("403")
   ) {
-    return "The current provider credentials were rejected. Refresh the provider auth and retry the request.";
+    return "Please login again to refresh your credentials.";
   }
   return "Execution stopped before the agent could finish this run. Retry the request or check the gateway connection and model availability.";
 }
@@ -3077,7 +3077,7 @@ export default function ChatPage() {
       <div className="relative flex-1 overflow-hidden">
         <div ref={scrollRef} className="chat-page-timeline h-full">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 pt-8" style={{ paddingBottom: composerAreaHeight + 16 }}>
-            {!pageResolving && timeline.length === 0 ? (
+            {timeline.length === 0 ? (
               <div className="flex min-h-[52vh] flex-col items-center justify-center py-8 text-center">
                 <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-[#1A162F] shadow-lg shadow-[#1A162F]/5">
                   <CurrentScenarioIcon size={28} weight="bold" />
@@ -3090,20 +3090,18 @@ export default function ChatPage() {
                 </p>
               </div>
             ) : null}
-            {!pageResolving ? (
-              <ChatTimeline
-                timeline={processedTimeline}
-                activeRunningToolKey={activeRunningToolKey}
-                liveIndicatorLabel={liveIndicatorLabel}
-                liveIndicatorVisible={liveIndicatorLabel !== null}
-                onRetryRun={handleRetryRun}
-                onPreviewImage={setPreviewImage}
-              />
-            ) : null}
+            <ChatTimeline
+              timeline={processedTimeline}
+              activeRunningToolKey={activeRunningToolKey}
+              liveIndicatorLabel={liveIndicatorLabel}
+              liveIndicatorVisible={liveIndicatorLabel !== null}
+              onRetryRun={handleRetryRun}
+              onPreviewImage={setPreviewImage}
+            />
           </div>
         </div>
 
-        {!pageResolving && showScrollBottom ? (
+        {showScrollBottom ? (
           <button
             type="button"
             onClick={() => scrollToBottom()}

@@ -121,7 +121,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Interaction");
     expect(prompt).toContain("Reply in the user's language by default.");
     expect(prompt).toContain(
-      "In the OpenClaw client, the user cannot run OpenClaw commands in a terminal themselves.",
+      "In the Bustly client, the user cannot run OpenClaw commands in a terminal themselves.",
     );
     expect(prompt).toContain(
       "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
@@ -184,7 +184,19 @@ describe("buildAgentSystemPrompt", () => {
       "Reply in the user's language by default. If they switch languages, follow their latest message unless they ask for a different language.",
     );
     expect(prompt).toContain(
-      "In the OpenClaw client, the user cannot run OpenClaw commands in a terminal themselves. When OpenClaw-related commands are needed, run them for the user and report the result. Ask only if access, approvals, or safety constraints block you.",
+      "In the Bustly client, the user cannot run OpenClaw commands in a terminal themselves. When OpenClaw-related commands are needed, run them for the user and report the result. Ask only if access, approvals, or safety constraints block you.",
+    );
+    expect(prompt).toContain(
+      "In the Bustly client, do not run or ask the user to run Gateway lifecycle/service commands such as `openclaw gateway run`, `openclaw gateway install`, `openclaw gateway uninstall`, `openclaw gateway start`, `openclaw gateway stop`, `openclaw gateway restart`, or `openclaw daemon install|uninstall|start|stop|restart`. If the Gateway needs recovery, tell the user to restart the Bustly client instead.",
+    );
+    expect(prompt).toContain(
+      "When your reply includes a local image path, always render it as Markdown image syntax with the absolute path as the target, for example `![image](/absolute/path/to/image.png)`.",
+    );
+    expect(prompt).toContain(
+      "When your reply includes a local file path or directory path that the user may open, always render it as a Markdown link with the absolute path as the target, for example `[report.pdf](/absolute/path/to/report.pdf)` or `[open folder](/absolute/path/to/folder/)`.",
+    );
+    expect(prompt).toContain(
+      "After generating or modifying any file for the user, return the directory path containing that file in your reply so the user can inspect it.",
     );
   });
 
@@ -215,7 +227,6 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain("## OpenClaw CLI Quick Reference");
-    expect(prompt).not.toContain("openclaw gateway restart");
   });
 
   it("marks system message blocks as internal and not user-visible", () => {

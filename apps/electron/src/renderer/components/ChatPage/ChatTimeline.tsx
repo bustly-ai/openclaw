@@ -43,7 +43,7 @@ import {
   type ChatInputArtifact,
 } from "./input-artifacts";
 import type { TimelineArtifact, TimelineNode } from "./types";
-import { toSanitizedMarkdownHtml } from "./utils";
+import { isAbsoluteLocalMarkdownPath, toSanitizedMarkdownHtml } from "./utils";
 
 type ChatTimelineProps = {
   timeline: TimelineNode[];
@@ -530,6 +530,60 @@ async function copyText(text: string, onCopyText?: (text: string) => void) {
   }
 }
 
+const MarkdownContent = memo(function MarkdownContent({
+  text,
+  className,
+}: {
+  text: string;
+  className: string;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const html = toSanitizedMarkdownHtml(text);
+
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root) {
+      return;
+    }
+
+    root.querySelectorAll<HTMLAnchorElement>("a[data-local-path]").forEach((anchor) => {
+      const path = anchor.getAttribute("data-local-path")?.trim() ?? "";
+      if (!isAbsoluteLocalMarkdownPath(path)) {
+        return;
+      }
+      anchor.setAttribute("title", path);
+      anchor.classList.add("cursor-pointer");
+    });
+
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      const anchor = target.closest("a[data-local-path]");
+      if (!(anchor instanceof HTMLAnchorElement) || !root.contains(anchor)) {
+        return;
+      }
+
+      const path = anchor.getAttribute("data-local-path")?.trim() ?? "";
+      if (!isAbsoluteLocalMarkdownPath(path)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      void window.electronAPI?.openLocalPath(path);
+    };
+
+    root.addEventListener("click", handleClick);
+    return () => {
+      root.removeEventListener("click", handleClick);
+    };
+  }, [html]);
+
+  return <div ref={containerRef} className={className} dangerouslySetInnerHTML={{ __html: html }} />;
+});
+
 const TextNode = memo(function TextNode({
   node,
   onCopyText,
@@ -613,9 +667,9 @@ const TextNode = memo(function TextNode({
             backgroundRepeat: "repeat-y",
           }}
         />
-        <div
+        <MarkdownContent
+          text={node.text}
           className={cx(markdownClassName(isErrorText), "relative z-10 !text-gray-500")}
-          dangerouslySetInnerHTML={{ __html: toSanitizedMarkdownHtml(node.text) }}
         />
       </div>
     );
@@ -624,9 +678,9 @@ const TextNode = memo(function TextNode({
   if (node.tone === "assistant" && !node.final) {
     return (
       <div className="pl-3">
-        <div
+        <MarkdownContent
+          text={node.text}
           className={markdownClassName(isErrorText)}
-          dangerouslySetInnerHTML={{ __html: toSanitizedMarkdownHtml(node.text) }}
         />
       </div>
     );
@@ -640,9 +694,9 @@ const TextNode = memo(function TextNode({
         node.final && "pb-1",
       )}
     >
-      <div
+      <MarkdownContent
+        text={node.text}
         className={markdownClassName(isErrorText)}
-        dangerouslySetInnerHTML={{ __html: toSanitizedMarkdownHtml(node.text) }}
       />
     </div>
   );
