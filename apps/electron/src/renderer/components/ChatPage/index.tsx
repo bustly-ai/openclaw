@@ -2088,9 +2088,9 @@ export default function ChatPage() {
   useEffect(() => {
     let disposed = false;
 
-    const loadWorkspaceState = async () => {
+    const loadWorkspaceState = async (options?: { force?: boolean }) => {
       try {
-        const summary = await listWorkspaceSummaries();
+        const summary = await listWorkspaceSummaries(options);
         if (disposed) {
           return;
         }
@@ -2112,7 +2112,7 @@ export default function ChatPage() {
 
     void loadWorkspaceState();
     const unsubscribe = window.electronAPI.onBustlyLoginRefresh(() => {
-      void loadWorkspaceState();
+      void loadWorkspaceState({ force: true });
     });
 
     return () => {

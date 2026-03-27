@@ -65,6 +65,11 @@ export type WorkspaceSummary = {
   planStatus: "none" | "active" | "expired" | "canceled";
 };
 
+type WorkspaceSummaryResult = {
+  workspaces: WorkspaceSummary[];
+  activeWorkspaceId: string;
+};
+
 type ResolvedBenefitPlan = {
   code: string | null;
   name: string | null;
@@ -228,6 +233,23 @@ function resolveWorkspacePlanState(
 
 let cachedClient: SupabaseClient | null = null;
 let cachedConfigKey = "";
+let cachedWorkspaceSummaryKey = "";
+let cachedWorkspaceSummaryExpiresAt = 0;
+let cachedWorkspaceSummaryResult: WorkspaceSummaryResult | null = null;
+let pendingWorkspaceSummaryKey = "";
+let pendingWorkspaceSummaryPromise: Promise<WorkspaceSummaryResult> | null = null;
+const WORKSPACE_SUMMARY_CACHE_TTL_MS = 2_000;
+
+function buildSupabaseConfigKey(config: BustlySupabaseConfig): string {
+  return [
+    config.url,
+    config.anonKey,
+    config.accessToken,
+    config.userId,
+    config.workspaceId,
+  ].join("|");
+}
+
 async function getSupabaseConfig(): Promise<BustlySupabaseConfig> {
   const config = await window.electronAPI.bustlyGetSupabaseConfig();
   if (!config?.url || !config.anonKey || !config.accessToken || !config.userId) {
@@ -241,13 +263,7 @@ export async function getBustlySupabaseClient(): Promise<{
   config: BustlySupabaseConfig;
 }> {
   const config = await getSupabaseConfig();
-  const configKey = [
-    config.url,
-    config.anonKey,
-    config.accessToken,
-    config.userId,
-    config.workspaceId,
-  ].join("|");
+  const configKey = buildSupabaseConfigKey(config);
   if (!cachedClient || cachedConfigKey !== configKey) {
     cachedClient = createClient(config.url, config.anonKey, {
       auth: {
@@ -269,113 +285,152 @@ export async function getBustlySupabaseClient(): Promise<{
   };
 }
 
-export async function listWorkspaceSummaries(): Promise<{
-  workspaces: WorkspaceSummary[];
-  activeWorkspaceId: string;
-}> {
-  const { client, config } = await getBustlySupabaseClient();
-  const workspacesRes = await client
-    .from("workspaces")
-    .select(`
-      id,
-      name,
-      logo_url,
-      status,
-      workspace_members (
-        role,
-        user_id
-      ),
-      workspace_subscriptions (
+export function invalidateWorkspaceSummariesCache(): void {
+  cachedWorkspaceSummaryKey = "";
+  cachedWorkspaceSummaryExpiresAt = 0;
+  cachedWorkspaceSummaryResult = null;
+}
+
+export async function listWorkspaceSummaries(options?: { force?: boolean }): Promise<WorkspaceSummaryResult> {
+  const config = await getSupabaseConfig();
+  const configKey = buildSupabaseConfigKey(config);
+  const force = options?.force === true;
+  const now = Date.now();
+
+  if (
+    !force &&
+    cachedWorkspaceSummaryResult &&
+    cachedWorkspaceSummaryKey === configKey &&
+    cachedWorkspaceSummaryExpiresAt > now
+  ) {
+    return cachedWorkspaceSummaryResult;
+  }
+
+  if (pendingWorkspaceSummaryPromise && pendingWorkspaceSummaryKey === configKey) {
+    return pendingWorkspaceSummaryPromise;
+  }
+
+  const pendingRequest = (async () => {
+    const { client } = await getBustlySupabaseClient();
+    const workspacesRes = await client
+      .from("workspaces")
+      .select(`
         id,
-        plan_id,
+        name,
+        logo_url,
         status,
-        current_period_end,
-        trial_end_at,
-        cancel_at_period_end,
-        benefit_plan:benefit_plan!workspace_subscriptions_plan_id_fkey (
-          code,
-          name,
-          tier,
-          billing_cycle
+        workspace_members (
+          role,
+          user_id
+        ),
+        workspace_subscriptions (
+          id,
+          plan_id,
+          status,
+          current_period_end,
+          trial_end_at,
+          cancel_at_period_end,
+          benefit_plan:benefit_plan!workspace_subscriptions_plan_id_fkey (
+            code,
+            name,
+            tier,
+            billing_cycle
+          )
         )
-      )
-    `)
-    .eq("status", "ACTIVE")
-    .eq("workspace_members.user_id", config.userId)
-    .order("created_at", { ascending: false });
+      `)
+      .eq("status", "ACTIVE")
+      .eq("workspace_members.user_id", config.userId)
+      .order("created_at", { ascending: false });
 
-  if (workspacesRes.error) {
-    throw workspacesRes.error;
-  }
-
-  const workspaceRows = (workspacesRes.data ?? []) as unknown as WorkspaceRow[];
-  const workspaceIds = workspaceRows.map((item) => item.id).filter(Boolean);
-  if (workspaceIds.length === 0) {
-    return { workspaces: [], activeWorkspaceId: "" };
-  }
-
-  const memberCountsRes = await client
-    .from("workspace_members")
-    .select("workspace_id")
-    .in("workspace_id", workspaceIds)
-    .eq("status", "ACTIVE");
-
-  if (memberCountsRes.error) {
-    throw memberCountsRes.error;
-  }
-
-  const memberCounts = new Map<string, number>();
-  for (const row of (memberCountsRes.data ?? []) as WorkspaceMemberCountRow[]) {
-    memberCounts.set(row.workspace_id, (memberCounts.get(row.workspace_id) ?? 0) + 1);
-  }
-
-  const planIds = workspaceRows
-    .flatMap((workspace) => workspace.workspace_subscriptions ?? [])
-    .map((subscription) => subscription.plan_id)
-    .filter((planId): planId is string => Boolean(planId));
-  const uniquePlanIds = [...new Set(planIds)];
-  const planById = new Map<string, BenefitPlanRow>();
-  if (uniquePlanIds.length > 0) {
-    const plansRes = await client
-      .from("benefit_plan")
-      .select("id, code, name, tier, billing_cycle")
-      .in("id", uniquePlanIds);
-
-    if (plansRes.error) {
-      throw plansRes.error;
+    if (workspacesRes.error) {
+      throw workspacesRes.error;
     }
 
-    for (const plan of (plansRes.data ?? []) as BenefitPlanRow[]) {
-      planById.set(plan.id, plan);
+    const workspaceRows = (workspacesRes.data ?? []) as unknown as WorkspaceRow[];
+    const workspaceIds = workspaceRows.map((item) => item.id).filter(Boolean);
+    if (workspaceIds.length === 0) {
+      return { workspaces: [], activeWorkspaceId: "" };
     }
-  }
 
-  const workspaces = workspaceRows
-    .map((workspace) => {
-      if (!workspace?.id || !workspace.name || workspace.status.trim().toUpperCase() !== "ACTIVE") {
-        return null;
+    const memberCountsRes = await client
+      .from("workspace_members")
+      .select("workspace_id")
+      .in("workspace_id", workspaceIds)
+      .eq("status", "ACTIVE");
+
+    if (memberCountsRes.error) {
+      throw memberCountsRes.error;
+    }
+
+    const memberCounts = new Map<string, number>();
+    for (const row of (memberCountsRes.data ?? []) as WorkspaceMemberCountRow[]) {
+      memberCounts.set(row.workspace_id, (memberCounts.get(row.workspace_id) ?? 0) + 1);
+    }
+
+    const planIds = workspaceRows
+      .flatMap((workspace) => workspace.workspace_subscriptions ?? [])
+      .map((subscription) => subscription.plan_id)
+      .filter((planId): planId is string => Boolean(planId));
+    const uniquePlanIds = [...new Set(planIds)];
+    const planById = new Map<string, BenefitPlanRow>();
+    if (uniquePlanIds.length > 0) {
+      const plansRes = await client
+        .from("benefit_plan")
+        .select("id, code, name, tier, billing_cycle")
+        .in("id", uniquePlanIds);
+
+      if (plansRes.error) {
+        throw plansRes.error;
       }
-      const role = workspace.workspace_members?.[0]?.role ?? "MEMBER";
-      const subscription = workspace.workspace_subscriptions?.[0];
-      const planState = resolveWorkspacePlanState(subscription, planById);
-      return {
-        id: workspace.id,
-        name: workspace.name,
-        logoUrl: workspace.logo_url,
-        role,
-        status: workspace.status,
-        members: memberCounts.get(workspace.id) ?? 0,
-        ...planState,
-      } satisfies WorkspaceSummary;
-    })
-    .filter((item): item is WorkspaceSummary => Boolean(item));
 
-  const activeWorkspaceId = workspaces.some((workspace) => workspace.id === config.workspaceId)
-    ? config.workspaceId
-    : (workspaces[0]?.id ?? "");
+      for (const plan of (plansRes.data ?? []) as BenefitPlanRow[]) {
+        planById.set(plan.id, plan);
+      }
+    }
 
-  return {
-    workspaces,
-    activeWorkspaceId,
-  };
+    const workspaces = workspaceRows
+      .map((workspace) => {
+        if (!workspace?.id || !workspace.name || workspace.status.trim().toUpperCase() !== "ACTIVE") {
+          return null;
+        }
+        const role = workspace.workspace_members?.[0]?.role ?? "MEMBER";
+        const subscription = workspace.workspace_subscriptions?.[0];
+        const planState = resolveWorkspacePlanState(subscription, planById);
+        return {
+          id: workspace.id,
+          name: workspace.name,
+          logoUrl: workspace.logo_url,
+          role,
+          status: workspace.status,
+          members: memberCounts.get(workspace.id) ?? 0,
+          ...planState,
+        } satisfies WorkspaceSummary;
+      })
+      .filter((item): item is WorkspaceSummary => Boolean(item));
+
+    const activeWorkspaceId = workspaces.some((workspace) => workspace.id === config.workspaceId)
+      ? config.workspaceId
+      : (workspaces[0]?.id ?? "");
+
+    return {
+      workspaces,
+      activeWorkspaceId,
+    };
+  })();
+
+  pendingWorkspaceSummaryKey = configKey;
+  pendingWorkspaceSummaryPromise = pendingRequest;
+
+  try {
+    const result = await pendingRequest;
+    cachedWorkspaceSummaryKey = configKey;
+    cachedWorkspaceSummaryResult = result;
+    cachedWorkspaceSummaryExpiresAt = Date.now() + WORKSPACE_SUMMARY_CACHE_TTL_MS;
+    return result;
+  } finally {
+    if (pendingWorkspaceSummaryPromise === pendingRequest) {
+      pendingWorkspaceSummaryPromise = null;
+      pendingWorkspaceSummaryKey = "";
+    }
+  }
 }

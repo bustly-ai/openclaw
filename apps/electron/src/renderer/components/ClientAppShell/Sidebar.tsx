@@ -1237,12 +1237,13 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       if (hasLoadedWorkspacesRef.current && !force) {
         return;
       }
-      if (!silent) {
+      const shouldShowLoading = !silent && !hasLoadedWorkspacesRef.current;
+      if (shouldShowLoading) {
         workspaceLoadingRef.current = true;
         setWorkspaceLoading(true);
       }
       try {
-        const result = await listWorkspaceSummaries();
+        const result = await listWorkspaceSummaries({ force });
         setWorkspaces(result.workspaces);
         setActiveWorkspaceId(result.activeWorkspaceId);
         hasLoadedWorkspacesRef.current = true;
@@ -1253,7 +1254,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
           setActiveWorkspaceId("");
         }
       } finally {
-        if (!silent) {
+        if (shouldShowLoading) {
           workspaceLoadingRef.current = false;
           setWorkspaceLoading(false);
         }
@@ -1264,8 +1265,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
 
   useEffect(() => {
     const unsubscribe = window.electronAPI.onBustlyLoginRefresh(() => {
-      setHasLoadedWorkspaces(false);
-      void loadWorkspaces({ force: true });
+      void loadWorkspaces({ force: true, silent: hasLoadedWorkspacesRef.current });
     });
     return () => {
       unsubscribe();
@@ -1805,7 +1805,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                 activeWorkspaceId={activeWorkspaceId || bustlyUserInfo?.workspaceId || ""}
                 loading={workspaceLoading}
                 onBeforeOpen={() => {
-                  void loadWorkspaces({ force: true, silent: true });
+                  void loadWorkspaces({ silent: true });
                 }}
                 onSwitchWorkspace={handleSwitchWorkspace}
                 onOpenSettings={handleOpenWorkspaceSettings}

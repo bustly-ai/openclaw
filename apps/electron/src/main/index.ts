@@ -1930,7 +1930,7 @@ function createWindow(): void {
   // Load the app
   if (process.env.NODE_ENV === "development") {
     loadRendererWindow(mainWindow);
-    mainWindow.webContents.openDevTools();
+    mainWindow.webContents.openDevTools({ mode: "detach" });
   } else {
     loadRendererWindow(mainWindow);
   }
@@ -2575,7 +2575,6 @@ function setupIpcHandlers(): void {
   ipcMain.handle(
     "bustly-set-active-workspace",
     async (_event, workspaceId: string, workspaceName?: string) => {
-    emitGatewayLifecycle("starting", "Switching workspace...");
     try {
       BustlyOAuth.setActiveWorkspaceId(workspaceId);
       syncBustlyConfigFile(resolveElectronConfigPath());
@@ -2583,7 +2582,6 @@ function setupIpcHandlers(): void {
         workspaceId,
         workspaceName,
       });
-      emitGatewayLifecycle("ready", null);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("bustly-login-refresh");
       }
@@ -2593,7 +2591,6 @@ function setupIpcHandlers(): void {
         sessionKey: agentBinding?.sessionKey,
       };
     } catch (error) {
-      emitGatewayLifecycle("ready", null);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
