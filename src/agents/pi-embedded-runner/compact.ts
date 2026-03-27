@@ -342,10 +342,12 @@ export async function compactEmbeddedPiSessionDirect(
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
           config: params.config,
+          runtimeEnv: { OPENCLAW_RUN_ID: params.runId },
         })
       : applySkillEnvOverrides({
           skills: skillEntries ?? [],
           config: params.config,
+          runtimeEnv: { OPENCLAW_RUN_ID: params.runId },
         });
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
