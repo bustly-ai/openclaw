@@ -3,10 +3,17 @@ import { resolve } from "node:path";
 import type { BustlyOAuthState } from "../bustly-types.js";
 import { resolveElectronIsolatedStateDir } from "../defaults.js";
 
+export type SupabaseUserMetadata = {
+  avatar_url?: string;
+  picture?: string;
+  full_name?: string;
+};
+
 export type SupabaseUserResponse = {
   id?: string;
   email?: string;
   role?: string;
+  user_metadata?: SupabaseUserMetadata;
 };
 
 export type SupabaseVerifyResult = {

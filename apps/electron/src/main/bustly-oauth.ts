@@ -10,7 +10,7 @@ import type {
   BustlyOAuthState,
   BustlySupabaseConfig,
 } from "./bustly-types.js";
-import { refreshSupabaseAuth, verifySupabaseAuth } from "./api/bustly.js";
+import { refreshSupabaseAuth, verifySupabaseAuth, type SupabaseUserResponse } from "./api/bustly.js";
 import { resolveElectronIsolatedStateDir } from "./defaults.js";
 
 function resolveStateDir(): string {
@@ -65,6 +65,16 @@ function getStoredSessionExpiresAt(state: BustlyOAuthState | null): number | nul
   return null;
 }
 
+function extractSupabaseUserAvatarUrl(user: SupabaseUserResponse | null | undefined): string | undefined {
+  const avatarUrl = user?.user_metadata?.avatar_url?.trim() || user?.user_metadata?.picture?.trim();
+  return avatarUrl || undefined;
+}
+
+function extractSupabaseUserName(user: SupabaseUserResponse | null | undefined): string | undefined {
+  const fullName = user?.user_metadata?.full_name?.trim();
+  return fullName || undefined;
+}
+
 function shouldRefreshSession(state: BustlyOAuthState | null, nowMs = Date.now()): boolean {
   const expiresAt = getStoredSessionExpiresAt(state);
   if (!expiresAt) {
@@ -110,10 +120,14 @@ async function refreshBustlyAccessTokenInternal(): Promise<boolean> {
   const nextRefreshToken = refreshResult.data?.refresh_token?.trim() || refreshToken;
   const refreshedUserId = refreshResult.data?.user?.id?.trim() ?? currentUser.userId;
   const refreshedUserEmail = refreshResult.data?.user?.email?.trim() ?? currentUser.userEmail;
+  const refreshedUserName = extractSupabaseUserName(refreshResult.data?.user) ?? currentUser.userName;
+  const refreshedUserAvatarUrl = extractSupabaseUserAvatarUrl(refreshResult.data?.user) ?? currentUser.userAvatarUrl;
   state.user = {
     ...currentUser,
     userId: refreshedUserId,
+    userName: refreshedUserName,
     userEmail: refreshedUserEmail,
+    userAvatarUrl: refreshedUserAvatarUrl,
     userAccessToken: refreshedAccessToken,
     userRefreshToken: nextRefreshToken,
     sessionExpiresIn: refreshResult.data?.expires_in,
@@ -215,7 +229,40 @@ export async function getBustlyUserInfo(): Promise<BustlyOAuthState["user"] | nu
   if (!(await isBustlyLoggedIn())) {
     return null;
   }
-  return state?.user ?? null;
+  const currentUser = state?.user ?? null;
+  if (!currentUser) {
+    return null;
+  }
+  if (currentUser.userAvatarUrl?.trim()) {
+    return currentUser;
+  }
+
+  try {
+    const verifyResult = await verifySupabaseAuth();
+    if (!verifyResult.ok || !verifyResult.data || !state?.user) {
+      return currentUser;
+    }
+    const nextUserName = extractSupabaseUserName(verifyResult.data) ?? currentUser.userName;
+    const nextUserEmail = verifyResult.data.email?.trim() ?? currentUser.userEmail;
+    const nextUserAvatarUrl = extractSupabaseUserAvatarUrl(verifyResult.data) ?? currentUser.userAvatarUrl;
+    if (
+      nextUserName === currentUser.userName &&
+      nextUserEmail === currentUser.userEmail &&
+      nextUserAvatarUrl === currentUser.userAvatarUrl
+    ) {
+      return currentUser;
+    }
+    state.user = {
+      ...currentUser,
+      userName: nextUserName,
+      userEmail: nextUserEmail,
+      userAvatarUrl: nextUserAvatarUrl,
+    };
+    writeBustlyOAuthState(state);
+    return state.user;
+  } catch {
+    return currentUser;
+  }
 }
 
 /**
@@ -386,6 +433,7 @@ export function completeBustlyLogin(params: {
     userId: string;
     userName: string;
     userEmail: string;
+    userAvatarUrl?: string;
     userAccessToken?: string;
     userRefreshToken?: string;
     sessionExpiresIn?: number;

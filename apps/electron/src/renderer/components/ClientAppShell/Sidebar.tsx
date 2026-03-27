@@ -1525,6 +1525,9 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const userName = bustlyUserInfo?.userName?.trim() || "User";
   const userEmail = bustlyUserInfo?.userEmail?.trim() || "user@example.com";
   const avatarSeed = bustlyUserInfo?.userEmail?.trim() || bustlyUserInfo?.userName?.trim() || "User";
+  const avatarUrl =
+    bustlyUserInfo?.userAvatarUrl?.trim()
+    || `https://ui-avatars.com/api/?name=${encodeURIComponent(avatarSeed)}&background=1A162F&color=fff`;
 
   const handleOpenSettings = async () => {
     setIsUserMenuOpen(false);
@@ -2001,7 +2004,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
           }}
         >
           <img
-            src={`https://ui-avatars.com/api/?name=${encodeURIComponent(avatarSeed)}&background=1A162F&color=fff`}
+            src={avatarUrl}
             alt="Profile"
             className="h-8 w-8 rounded-full border border-gray-200 bg-white"
           />

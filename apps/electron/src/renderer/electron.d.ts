@@ -81,6 +81,7 @@ interface BustlyUserInfo {
   userId: string;
   userName: string;
   userEmail: string;
+  userAvatarUrl?: string;
   workspaceId: string;
   skills: string[];
 }

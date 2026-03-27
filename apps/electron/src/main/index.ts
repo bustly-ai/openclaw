@@ -2692,6 +2692,10 @@ function setupIpcHandlers(): void {
               userId: apiResponse.data.userId,
               userName: apiResponse.data.userName,
               userEmail: apiResponse.data.userEmail,
+              userAvatarUrl:
+                supabaseSession.user?.user_metadata?.avatar_url?.trim()
+                || supabaseSession.user?.user_metadata?.picture?.trim()
+                || undefined,
               userAccessToken: supabaseSession.access_token,
               userRefreshToken: supabaseSession.refresh_token,
               sessionExpiresIn: supabaseSession.expires_in,

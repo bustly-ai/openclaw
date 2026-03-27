@@ -328,6 +328,13 @@ export type BustlyTokenApiResponse = {
         expires_in?: number;
         expires_at?: number;
         token_type?: string;
+        user?: {
+          user_metadata?: {
+            avatar_url?: string;
+            picture?: string;
+            full_name?: string;
+          };
+        };
       };
     };
     skills?: string[];
