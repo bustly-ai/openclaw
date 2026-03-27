@@ -244,12 +244,12 @@ function ToolIcon({ name }: { name: string }) {
 
 function markdownClassName(isErrorText: boolean) {
   return cx(
-    "text-sm leading-7 text-gray-900",
+    "max-w-full break-words text-sm leading-7 text-gray-900 [overflow-wrap:anywhere]",
     isErrorText && "text-red-600",
     "[&_a]:text-[#1A162F] [&_a]:underline [&_a]:underline-offset-2",
     "[&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-gray-200 [&_blockquote]:pl-4 [&_blockquote]:text-gray-500",
-    "[&_code]:rounded [&_code]:bg-gray-100 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.92em]",
-    "[&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-2xl [&_pre]:border [&_pre]:border-gray-200 [&_pre]:bg-gray-50 [&_pre]:p-4 [&_pre]:text-xs [&_pre]:leading-6",
+    "[&_code]:rounded [&_code]:bg-gray-100 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.92em] [&_code]:break-words [&_code]:[overflow-wrap:anywhere]",
+    "[&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:rounded-2xl [&_pre]:border [&_pre]:border-gray-200 [&_pre]:bg-gray-50 [&_pre]:p-4 [&_pre]:text-xs [&_pre]:leading-6 [&_pre]:[overflow-wrap:anywhere]",
     "[&_pre_code]:bg-transparent [&_pre_code]:p-0",
     "[&_h1]:mb-2 [&_h1]:mt-5 [&_h1]:text-xl [&_h1]:font-semibold",
     "[&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-lg [&_h2]:font-semibold",
@@ -570,9 +570,12 @@ const TextNode = memo(function TextNode({
             ))}
           </div>
         ) : null}
-        <div className="flex max-w-[85%] flex-col gap-2 rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3">
+        <div className="flex max-w-[85%] min-w-0 flex-col gap-2 rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3">
           {parsed.text ? (
-            <div className="whitespace-pre-wrap text-sm leading-relaxed text-gray-900" dir="auto">
+            <div
+              className="max-w-full whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-900 [overflow-wrap:anywhere]"
+              dir="auto"
+            >
               {parsed.text}
             </div>
           ) : null}

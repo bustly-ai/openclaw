@@ -11,6 +11,7 @@ import {
   Lightning,
   PencilSimple,
   Plus,
+  UserPlus,
   SquaresFour,
   SignOut,
   Trash,
@@ -193,6 +194,10 @@ function CloseIcon({ className }: IconProps) {
 
 function GearIcon({ className }: IconProps) {
   return <Gear size={16} weight="bold" className={className} />;
+}
+
+function UserPlusIcon({ className }: IconProps) {
+  return <UserPlus size={16} weight="bold" className={className} />;
 }
 
 function SignOutIcon({ className }: IconProps) {
@@ -838,6 +843,7 @@ function WorkspaceSwitcher(props: {
       expired: false,
     };
   const showWorkspaceSkeleton = props.loading && props.workspaces.length === 0;
+  const canManageSubscription = activeWorkspace.role?.toUpperCase() === "OWNER";
 
   const handleOpenSettings = () => {
     if (!activeWorkspace.id) {
@@ -860,12 +866,10 @@ function WorkspaceSwitcher(props: {
       return;
     }
     setIsOpen(false);
-    if (activeWorkspace.buttonText === "Manage") {
-      props.onOpenManage(activeWorkspace.id);
-      return;
-    }
     props.onOpenPricing(activeWorkspace.id);
   };
+
+  const showPlanCard = Boolean(activeWorkspace.expired || activeWorkspace.plan || activeWorkspace.badge);
 
   return (
     <div ref={menuRef} className={props.collapsed ? "relative mx-auto" : "relative"}>
@@ -983,39 +987,43 @@ function WorkspaceSwitcher(props: {
                     className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
                     disabled={!activeWorkspace.id}
                   >
-                    <span className="text-sm font-bold">+</span>
+                    <UserPlusIcon className="h-4 w-4" />
                     Invite members
                   </button>
                 </div>
 
-                <div className="mx-4 mb-4 flex items-center justify-between rounded-xl border border-gray-100 bg-gray-50 p-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-gray-900">
-                      {activeWorkspace.planDisplayText || "Workspace plan"}
-                    </span>
-                    {activeWorkspace.badge ? (
-                      <span className="rounded bg-[#1A162F] px-1.5 py-0.5 text-[10px] font-bold uppercase text-white">
-                        {activeWorkspace.badge}
+                {showPlanCard ? (
+                  <div className="mx-4 mb-4 flex items-center justify-between rounded-xl border border-gray-100 bg-gray-50 p-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-gray-900">
+                        {activeWorkspace.planDisplayText}
                       </span>
+                      {activeWorkspace.badge ? (
+                        <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-bold text-gray-600">
+                          {activeWorkspace.badge}
+                        </span>
+                      ) : null}
+                    </div>
+                    {canManageSubscription ? (
+                      <button
+                        type="button"
+                        onClick={handleOpenManage}
+                        className={`rounded-lg px-4 py-1.5 text-xs font-semibold shadow-sm disabled:cursor-not-allowed disabled:opacity-60 ${
+                          activeWorkspace.expired || activeWorkspace.planStatus === "canceled"
+                            ? "border border-transparent bg-[#1A162F] text-white hover:bg-[#1A162F]/90"
+                            : "border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                        }`}
+                        disabled={!activeWorkspace.id}
+                      >
+                        {activeWorkspace.buttonText}
+                      </button>
                     ) : null}
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleOpenManage}
-                    className={`rounded-lg px-4 py-1.5 text-xs font-semibold shadow-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                      activeWorkspace.expired || activeWorkspace.planStatus === "canceled"
-                        ? "border border-transparent bg-[#1A162F] text-white hover:bg-[#1A162F]/90"
-                        : "border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-                    }`}
-                    disabled={!activeWorkspace.id}
-                  >
-                    {activeWorkspace.buttonText}
-                  </button>
-                </div>
+                ) : null}
 
                 <div className="mx-0 mb-2 h-px bg-gray-100" />
                 <div className="px-4 py-2 text-xs font-medium text-gray-500">All workspaces</div>
-                <div className="space-y-0.5 px-2 pb-2">
+                <div className="custom-scrollbar max-h-[200px] space-y-0.5 overflow-y-auto px-2 pb-2">
                   {props.loading && props.workspaces.length === 0 ? (
                     <>
                       <WorkspaceItemSkeleton />
@@ -1032,9 +1040,7 @@ function WorkspaceSwitcher(props: {
                             props.onSwitchWorkspace(workspace.id);
                             setIsOpen(false);
                           }}
-                          className={`group flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 hover:bg-gray-50 ${
-                            isActive ? "bg-gray-50" : ""
-                          }`}
+                          className="group flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 hover:bg-gray-50"
                         >
                           <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
                             <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-gray-100 bg-white text-gray-700">
@@ -1051,16 +1057,19 @@ function WorkspaceSwitcher(props: {
                             </div>
                             {workspace.expired ? (
                               <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase bg-gray-100 text-gray-600">
-                                Expired
-                              </span>
-                            ) : workspace.badge ? (
-                              <span className="shrink-0 rounded bg-[#1A162F] px-1.5 py-0.5 text-[10px] font-bold uppercase text-white">
-                                {workspace.badge}
+                                EXPIRED
                               </span>
                             ) : workspace.plan ? (
-                              <span className="shrink-0 rounded bg-[#1A162F] px-1.5 py-0.5 text-[10px] font-bold uppercase text-white">
-                                {workspace.plan}
-                              </span>
+                              <div className="flex shrink-0 items-center gap-1">
+                                <span className="rounded bg-[#1A162F] px-1.5 py-0.5 text-[10px] font-bold uppercase text-white">
+                                  {workspace.plan}
+                                </span>
+                                {workspace.badge ? (
+                                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amber-700">
+                                    {workspace.badge}
+                                  </span>
+                                ) : null}
+                              </div>
                             ) : null}
                           </div>
                           {isActive ? (

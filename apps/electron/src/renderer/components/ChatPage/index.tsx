@@ -806,6 +806,7 @@ export default function ChatPage() {
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [subscriptionExpired, setSubscriptionExpired] = useState(false);
   const [subscriptionActionText, setSubscriptionActionText] = useState("Upgrade");
+  const [canManageSubscription, setCanManageSubscription] = useState(false);
   const [modelLevel, setModelLevel] = useState<ChatModelLevelId>(() => {
     const stored = window.localStorage.getItem(CHAT_MODEL_LEVEL_STORAGE_KEY);
     if (stored === "standard" || stored === "advanced" || stored === "ultra") {
@@ -2098,11 +2099,13 @@ export default function ChatPage() {
         setActiveWorkspaceId(workspaceId);
         setSubscriptionExpired(activeWorkspace?.expired === true);
         setSubscriptionActionText(activeWorkspace?.buttonText?.trim() || "Upgrade");
+        setCanManageSubscription(activeWorkspace?.role?.toUpperCase() === "OWNER");
       } catch {
         if (!disposed) {
           setActiveWorkspaceId("");
           setSubscriptionExpired(false);
           setSubscriptionActionText("Upgrade");
+          setCanManageSubscription(false);
         }
       }
     };
@@ -3112,15 +3115,17 @@ export default function ChatPage() {
                         </p>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void handleOpenPricing();
-                      }}
-                      className="shrink-0 rounded-xl bg-[#1A162F] px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-[#27223F]"
-                    >
-                      {subscriptionActionText}
-                    </button>
+                    {canManageSubscription ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleOpenPricing();
+                        }}
+                        className="shrink-0 rounded-xl bg-[#1A162F] px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-[#27223F]"
+                      >
+                        {subscriptionActionText}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               ) : null}
