@@ -120,6 +120,28 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
 
 const BUSTLY_PROVIDER_ID = "bustly";
 const BUSTLY_WORKSPACE_HEADER = "X-Workspace-Id";
+const BUSTLY_RUN_ID_HEADER = "X-Run-Id";
+
+export function mergeBustlyRuntimeHeaders(params: {
+  modelHeaders?: Record<string, string>;
+  optionHeaders?: Record<string, string>;
+  workspaceId?: string;
+  runId: string;
+}): Record<string, string> {
+  const mergedHeaders = {
+    ...(params.modelHeaders ?? {}),
+    ...(params.optionHeaders ?? {}),
+  };
+  mergedHeaders[BUSTLY_RUN_ID_HEADER] = params.runId;
+  const workspaceId = params.workspaceId?.trim() ?? "";
+  if (workspaceId) {
+    mergedHeaders[BUSTLY_WORKSPACE_HEADER] = workspaceId;
+  } else {
+    delete mergedHeaders[BUSTLY_WORKSPACE_HEADER];
+    delete mergedHeaders[BUSTLY_WORKSPACE_HEADER.toLowerCase()];
+  }
+  return mergedHeaders;
+}
 
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
@@ -808,22 +830,15 @@ export async function runEmbeddedAttempt(
         let warnedMissingWorkspace = false;
         activeSession.agent.streamFn = (model, context, options) => {
           const workspaceId = readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
-          const modelHeaders = {
-            ...(model as { headers?: Record<string, string> }).headers,
-          };
-          const optionHeaders = {
-            ...((options?.headers) ?? {}),
-          };
-          const mergedHeaders = {
-            ...modelHeaders,
-            ...optionHeaders,
-          };
+          const mergedHeaders = mergeBustlyRuntimeHeaders({
+            modelHeaders: (model as { headers?: Record<string, string> }).headers,
+            optionHeaders: options?.headers,
+            workspaceId,
+            runId: params.runId,
+          });
           if (workspaceId) {
-            mergedHeaders[BUSTLY_WORKSPACE_HEADER] = workspaceId;
             warnedMissingWorkspace = false;
           } else {
-            delete mergedHeaders[BUSTLY_WORKSPACE_HEADER];
-            delete mergedHeaders[BUSTLY_WORKSPACE_HEADER.toLowerCase()];
             if (!warnedMissingWorkspace) {
               log.warn(
                 "[bustly] Missing workspaceId in ~/.bustly/bustlyOauth.json; gateway requests may fail",
