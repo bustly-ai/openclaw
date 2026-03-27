@@ -294,6 +294,25 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
+  it("sets and restores runtime env vars for the current run", async () => {
+    const workspaceDir = await makeWorkspace();
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["OPENCLAW_RUN_ID"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        runtimeEnv: { OPENCLAW_RUN_ID: "run-123" },
+      });
+
+      try {
+        expect(process.env.OPENCLAW_RUN_ID).toBe("run-123");
+      } finally {
+        restore();
+        expect(process.env.OPENCLAW_RUN_ID).toBeUndefined();
+      }
+    });
+  });
+
   it("applies env overrides from snapshots", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "env-skill");
@@ -320,6 +339,25 @@ describe("applySkillEnvOverrides", () => {
       } finally {
         restore();
         expect(process.env.ENV_KEY).toBeUndefined();
+      }
+    });
+  });
+
+  it("applies runtime env overrides from snapshots", async () => {
+    const workspaceDir = await makeWorkspace();
+    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["OPENCLAW_RUN_ID"], () => {
+      const restore = applySkillEnvOverridesFromSnapshot({
+        snapshot,
+        runtimeEnv: { OPENCLAW_RUN_ID: "run-snapshot-1" },
+      });
+
+      try {
+        expect(process.env.OPENCLAW_RUN_ID).toBe("run-snapshot-1");
+      } finally {
+        restore();
+        expect(process.env.OPENCLAW_RUN_ID).toBeUndefined();
       }
     });
   });

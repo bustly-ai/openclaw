@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from uuid import uuid4
 import wave
 
 DEFAULT_ROUTE_MODEL = os.environ.get("BUSTLY_MODEL_GATEWAY_AUDIO_ROUTE", "audio.advanced").strip() or "audio.advanced"
@@ -79,6 +80,15 @@ def resolve_auth(args: argparse.Namespace) -> tuple[str, str]:
     if not workspace_id:
         raise RuntimeError("Missing user.workspaceId in bustlyOauth.json.")
     return jwt, workspace_id
+
+
+def resolve_run_id(args: argparse.Namespace) -> str:
+    run_id = (
+        (getattr(args, "run_id", "") or "").strip()
+        or os.environ.get("OPENCLAW_RUN_ID", "").strip()
+        or os.environ.get("BUSTLY_RUN_ID", "").strip()
+    )
+    return run_id or f"skill-{uuid4()}"
 
 
 def audio_speech_url(base_url: str) -> str:
@@ -166,7 +176,13 @@ def build_payload(args: argparse.Namespace) -> dict:
     }
 
 
-def call_gateway(gateway_base_url: str, jwt: str, workspace_id: str, payload: dict) -> tuple[dict | None, bytes, str]:
+def call_gateway(
+    gateway_base_url: str,
+    jwt: str,
+    workspace_id: str,
+    run_id: str,
+    payload: dict,
+) -> tuple[dict | None, bytes, str]:
     target = audio_speech_url(gateway_base_url)
     req = Request(
         target,
@@ -175,6 +191,7 @@ def call_gateway(gateway_base_url: str, jwt: str, workspace_id: str, payload: di
         headers={
             "Authorization": f"Bearer {jwt}",
             "X-Workspace-Id": workspace_id,
+            "X-Run-Id": run_id,
             "Content-Type": "application/json",
             "Accept": "application/json",
             "User-Agent": DEFAULT_USER_AGENT,
@@ -248,13 +265,18 @@ def main():
         "--workspace-id",
         help="Workspace UUID (optional; defaults to bustlyOauth.json user.workspaceId)",
     )
+    parser.add_argument(
+        "--run-id",
+        help="Logical task run id for usage aggregation (defaults to OPENCLAW_RUN_ID/BUSTLY_RUN_ID or a generated id)",
+    )
     args = parser.parse_args()
 
     try:
         jwt, workspace_id = resolve_auth(args)
+        run_id = resolve_run_id(args)
         gateway_base_url = resolve_gateway_base_url()
         payload = build_payload(args)
-        data, raw_body, content_type = call_gateway(gateway_base_url, jwt, workspace_id, payload)
+        data, raw_body, content_type = call_gateway(gateway_base_url, jwt, workspace_id, run_id, payload)
 
         extra: dict[str, Any] = {}
         if isinstance(data, dict):
