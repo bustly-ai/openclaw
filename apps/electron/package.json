@@ -1,6 +1,6 @@
 {
   "name": "bustly",
-  "version": "0.0.4",
+  "version": "0.0.5.beta.1",
   "description": "Bustly Desktop Client",
   "main": "dist/main/index.js",
   "private": true,
@@ -39,6 +39,7 @@
     "@mariozechner/pi-ai": "0.55.0",
     "@mariozechner/pi-coding-agent": "0.55.0",
     "@phosphor-icons/react": "^2.1.10",
+    "@sentry/electron": "^7.10.0",
     "@sinclair/typebox": "0.34.48",
     "@supabase/supabase-js": "^2.99.0",
     "@whiskeysockets/baileys": "7.0.0-rc.9",

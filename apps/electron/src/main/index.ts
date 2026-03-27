@@ -8,6 +8,7 @@ import {
   dialog,
   type OpenDialogOptions,
 } from "electron";
+import * as Sentry from "@sentry/electron/main";
 import JSZip from "jszip";
 import { randomUUID } from "node:crypto";
 import { resolve, dirname, basename, join } from "node:path";
@@ -85,6 +86,8 @@ import {
 } from "../shared/bustly-preset-channels.js";
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
+const SENTRY_DSN =
+  "https://03becf8322280fe9b5b01c0524874af0@o4511115803557888.ingest.us.sentry.io/4511115804737536";
 
 function parseDotEnv(content: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -221,6 +224,11 @@ async function createBustlyIssueReportArchive(): Promise<string> {
 }
 
 loadMainProcessEnvFromDotEnv();
+
+Sentry.init({
+  dsn: SENTRY_DSN,
+  environment: process.env.NODE_ENV || "production",
+});
 
 if (!process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL?.trim()) {
   const appVersion = app.getVersion();
