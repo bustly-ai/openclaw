@@ -74,6 +74,7 @@ interface MainLogData {
 interface DeepLinkData {
   url: string;
   route: string | null;
+  workspaceId: string | null;
 }
 
 interface BustlyUserInfo {
@@ -141,6 +142,7 @@ interface ElectronAPI {
   bustlyLogout: () => Promise<{ success: boolean; error?: string }>;
   bustlyOpenLogin: () => Promise<{ success: boolean; error?: string }>;
   bustlyOpenSettings: () => Promise<{ success: boolean; error?: string }>;
+  bustlyReportIssue: () => Promise<{ success: boolean; archivePath?: string; error?: string }>;
   bustlyOpenWorkspaceSettings: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
   bustlyOpenWorkspaceInvite: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
   bustlyOpenWorkspaceManage: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;

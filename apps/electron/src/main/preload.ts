@@ -74,6 +74,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   bustlyLogout: () => ipcRenderer.invoke("bustly-logout"),
   bustlyOpenLogin: () => ipcRenderer.invoke("bustly-open-login"),
   bustlyOpenSettings: () => ipcRenderer.invoke("bustly-open-settings"),
+  bustlyReportIssue: () => ipcRenderer.invoke("bustly-report-issue"),
   bustlyOpenWorkspaceSettings: (workspaceId: string) =>
     ipcRenderer.invoke("bustly-open-workspace-settings", workspaceId),
   bustlyOpenWorkspaceInvite: (workspaceId: string) =>
@@ -122,8 +123,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("bustly-login-refresh", listener);
     return () => ipcRenderer.removeListener("bustly-login-refresh", listener);
   },
-  onDeepLink: (callback: (payload: { url: string; route: string | null }) => void) => {
-    const listener = (_event: unknown, payload: { url: string; route: string | null }) =>
+  onDeepLink: (callback: (payload: { url: string; route: string | null; workspaceId: string | null }) => void) => {
+    const listener = (_event: unknown, payload: { url: string; route: string | null; workspaceId: string | null }) =>
       callback(payload);
     ipcRenderer.on("deep-link", listener);
     return () => ipcRenderer.removeListener("deep-link", listener);

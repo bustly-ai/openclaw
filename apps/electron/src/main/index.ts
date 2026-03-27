@@ -8,11 +8,14 @@ import {
   dialog,
   type OpenDialogOptions,
 } from "electron";
+import JSZip from "jszip";
 import { randomUUID } from "node:crypto";
 import { resolve, dirname, basename, join } from "node:path";
 import { spawn, spawnSync, ChildProcess } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
   mkdirSync,
@@ -132,6 +135,89 @@ function loadMainProcessEnvFromDotEnv(): void {
       console.error(`[Env] Failed to load ${envPath}:`, error);
     }
   }
+}
+
+function formatIssueReportTimestamp(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const seconds = String(date.getSeconds()).padStart(2, "0");
+  return `${year}${month}${day}-${hours}${minutes}${seconds}`;
+}
+
+function addDirectoryToZip(params: {
+  zip: JSZip;
+  baseDir: string;
+  currentDir: string;
+  pathPrefix: string;
+}): void {
+  const entries = readdirSync(params.currentDir, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name));
+
+  for (const entry of entries) {
+    const entryPath = join(params.currentDir, entry.name);
+    const relativePath = entryPath.slice(params.baseDir.length + 1).replace(/\\/g, "/");
+    const zipPath = `${params.pathPrefix}/${relativePath}`;
+
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      params.zip.folder(zipPath);
+      addDirectoryToZip({
+        zip: params.zip,
+        baseDir: params.baseDir,
+        currentDir: entryPath,
+        pathPrefix: params.pathPrefix,
+      });
+      continue;
+    }
+
+    if (!entry.isFile()) {
+      continue;
+    }
+
+    const stat = lstatSync(entryPath);
+    params.zip.file(zipPath, readFileSync(entryPath), {
+      unixPermissions: stat.mode,
+      date: stat.mtime,
+    });
+  }
+}
+
+async function createBustlyIssueReportArchive(): Promise<string> {
+  const stateDir = resolve(app.getPath("home"), ".bustly");
+  if (!existsSync(stateDir) || !lstatSync(stateDir).isDirectory()) {
+    throw new Error(`Bustly state directory not found: ${stateDir}`);
+  }
+
+  const downloadsDir = app.getPath("downloads");
+  mkdirSync(downloadsDir, { recursive: true });
+
+  const zip = new JSZip();
+  zip.folder(".bustly");
+  addDirectoryToZip({
+    zip,
+    baseDir: stateDir,
+    currentDir: stateDir,
+    pathPrefix: ".bustly",
+  });
+
+  const archivePath = join(
+    downloadsDir,
+    `bustly-issue-report-${formatIssueReportTimestamp(new Date())}.zip`,
+  );
+  const archiveBuffer = await zip.generateAsync({
+    type: "nodebuffer",
+    compression: "DEFLATE",
+    compressionOptions: { level: 6 },
+  });
+  writeFileSync(archivePath, archiveBuffer);
+  shell.showItemInFolder(archivePath);
+  return archivePath;
 }
 
 loadMainProcessEnvFromDotEnv();
@@ -306,7 +392,13 @@ function resolveImagePreviewMimeType(filePath: string): string | null {
 let updateReady = false;
 let updateVersion: string | null = null;
 let updateInstalling = false;
-let pendingDeepLink: { url: string; route: string | null } | null = null;
+type DeepLinkPayload = {
+  url: string;
+  route: string | null;
+  workspaceId: string | null;
+};
+
+let pendingDeepLink: DeepLinkPayload | null = null;
 
 const EXTERNAL_NAV_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
@@ -361,7 +453,7 @@ function buildBustlyAdminUrl(params: Record<string, string | null | undefined>, 
   return url.toString();
 }
 
-function parseDeepLink(url: string): { url: string; route: string | null } | null {
+function parseDeepLink(url: string): DeepLinkPayload | null {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -376,10 +468,15 @@ function parseDeepLink(url: string): { url: string; route: string | null } | nul
   const routeFromPath = normalizeDeepLinkRoute(parsed.pathname);
   const routeFromHost =
     parsed.hostname && parsed.hostname !== "open" ? normalizeDeepLinkRoute(parsed.hostname) : null;
+  const workspaceId =
+    parsed.searchParams.get("workspace_id")?.trim() ||
+    parsed.searchParams.get("workspaceId")?.trim() ||
+    null;
 
   return {
     url,
     route: routeFromQuery ?? routeFromPath ?? routeFromHost ?? null,
+    workspaceId,
   };
 }
 
@@ -395,25 +492,38 @@ function focusMainWindow() {
 }
 
 function dispatchDeepLink(url: string): boolean {
-  const payload = parseDeepLink(url);
-  if (!payload) {
-    return false;
-  }
+  void (async () => {
+    const payload = parseDeepLink(url);
+    if (!payload) {
+      writeMainLog(`[DeepLink] ignored url=${url} reason=parse_failed`);
+      return;
+    }
 
-  pendingDeepLink = payload;
-  writeMainLog(`[DeepLink] received url=${payload.url} route=${payload.route ?? "(none)"}`);
+    pendingDeepLink = payload;
+    writeMainLog(
+      `[DeepLink] received url=${payload.url} route=${payload.route ?? "(none)"} workspaceId=${payload.workspaceId ?? "(none)"}`,
+    );
 
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    ensureWindow();
-    return true;
-  }
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      writeMainLog("[DeepLink] main window missing; creating window and keeping payload pending");
+      ensureWindow();
+      return;
+    }
 
-  focusMainWindow();
-  if (payload.route) {
-    loadRendererWindow(mainWindow, { hash: payload.route });
-  }
-  mainWindow.webContents.send(DEEP_LINK_CHANNEL, payload);
-  pendingDeepLink = null;
+    focusMainWindow();
+    if (payload.workspaceId?.trim()) {
+      try {
+        await setActiveWorkspaceInternal(payload.workspaceId);
+      } catch (error) {
+        writeMainLog(
+          `[DeepLink] workspace switch failed workspaceId=${payload.workspaceId} error=${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    writeMainLog("[DeepLink] dispatching payload to renderer");
+    mainWindow.webContents.send(DEEP_LINK_CHANNEL, payload);
+    pendingDeepLink = null;
+  })();
   return true;
 }
 
@@ -421,13 +531,10 @@ function flushPendingDeepLink() {
   if (!pendingDeepLink || !mainWindow || mainWindow.isDestroyed()) {
     return;
   }
-  const payload = pendingDeepLink;
+  writeMainLog(
+    `[DeepLink] flush pending route=${pendingDeepLink.route ?? "(none)"} workspaceId=${pendingDeepLink.workspaceId ?? "(none)"}`,
+  );
   focusMainWindow();
-  if (payload.route) {
-    loadRendererWindow(mainWindow, { hash: payload.route });
-  }
-  mainWindow.webContents.send(DEEP_LINK_CHANNEL, payload);
-  pendingDeepLink = null;
 }
 
 function registerProtocolClient() {
@@ -889,6 +996,43 @@ async function synchronizeBustlyWorkspaceContext(params?: {
   return agentBinding;
 }
 
+async function setActiveWorkspaceInternal(workspaceId: string, workspaceName?: string): Promise<{
+  agentId?: string;
+  sessionKey?: string;
+}> {
+  const nextWorkspaceId = workspaceId.trim();
+  if (!nextWorkspaceId) {
+    throw new Error("Missing workspaceId");
+  }
+  const currentWorkspaceId = BustlyOAuth.readBustlyOAuthState()?.user?.workspaceId?.trim() || "";
+  writeMainLog(
+    `[Workspace] set active requested current=${currentWorkspaceId || "(none)"} next=${nextWorkspaceId}`,
+  );
+  if (currentWorkspaceId === nextWorkspaceId) {
+    writeMainLog(`[Workspace] set active skipped; already on ${nextWorkspaceId}`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("bustly-login-refresh");
+    }
+    return {};
+  }
+  BustlyOAuth.setActiveWorkspaceId(nextWorkspaceId);
+  syncBustlyConfigFile(resolveElectronConfigPath());
+  const agentBinding = await synchronizeBustlyWorkspaceContext({
+    workspaceId: nextWorkspaceId,
+    workspaceName,
+  });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("bustly-login-refresh");
+  }
+  writeMainLog(
+    `[Workspace] set active completed next=${nextWorkspaceId} agentId=${agentBinding?.agentId ?? "(none)"} sessionKey=${agentBinding?.sessionKey ?? "(none)"}`,
+  );
+  return {
+    agentId: agentBinding?.agentId,
+    sessionKey: agentBinding?.sessionKey,
+  };
+}
+
 function prependPathEntry(pathValue: string, entry: string): string {
   const delimiter = process.platform === "win32" ? ";" : ":";
   const parts = pathValue
@@ -902,7 +1046,7 @@ function prependPathEntry(pathValue: string, entry: string): string {
 }
 
 function prependPathEntries(pathValue: string, entries: Array<string | null | undefined>): string {
-  return entries.reduceRight((currentPath, entry) => {
+  return entries.reduceRight<string>((currentPath, entry) => {
     const normalized = entry?.trim();
     if (!normalized) {
       return currentPath;
@@ -2576,15 +2720,7 @@ function setupIpcHandlers(): void {
     "bustly-set-active-workspace",
     async (_event, workspaceId: string, workspaceName?: string) => {
     try {
-      BustlyOAuth.setActiveWorkspaceId(workspaceId);
-      syncBustlyConfigFile(resolveElectronConfigPath());
-      const agentBinding = await synchronizeBustlyWorkspaceContext({
-        workspaceId,
-        workspaceName,
-      });
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("bustly-login-refresh");
-      }
+      const agentBinding = await setActiveWorkspaceInternal(workspaceId, workspaceName);
       return {
         success: true,
         agentId: agentBinding?.agentId,
@@ -2788,6 +2924,22 @@ function setupIpcHandlers(): void {
     }
   });
 
+  ipcMain.handle("bustly-report-issue", async () => {
+    try {
+      const archivePath = await createBustlyIssueReportArchive();
+      return {
+        success: true,
+        archivePath,
+      };
+    } catch (error) {
+      console.error("[Bustly Report Issue] Error:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
   ipcMain.handle("bustly-open-workspace-settings", async (_event, workspaceId: string) => {
     try {
       const url = buildBustlyAdminUrl({
@@ -2875,6 +3027,9 @@ function setupIpcHandlers(): void {
   ipcMain.handle("deep-link-consume-pending", () => {
     const next = pendingDeepLink;
     pendingDeepLink = null;
+    writeMainLog(
+      `[DeepLink] consume pending route=${next?.route ?? "(none)"} workspaceId=${next?.workspaceId ?? "(none)"}`,
+    );
     return next;
   });
 }
@@ -2887,14 +3042,17 @@ if (!gotSingleInstanceLock) {
 app.on("second-instance", (_event, argv) => {
   const deepLinkArg = argv.find((value) => value.startsWith(`${APP_PROTOCOL}://`));
   if (deepLinkArg) {
+    writeMainLog(`[DeepLink] second-instance argv matched ${deepLinkArg}`);
     dispatchDeepLink(deepLinkArg);
     return;
   }
+  writeMainLog("[DeepLink] second-instance without protocol arg");
   focusMainWindow();
 });
 
 app.on("open-url", (event, url) => {
   event.preventDefault();
+  writeMainLog(`[DeepLink] open-url ${url}`);
   dispatchDeepLink(url);
 });
 

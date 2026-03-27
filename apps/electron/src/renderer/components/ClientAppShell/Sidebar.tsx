@@ -8,6 +8,7 @@ import {
   CircleNotch,
   DotsThree,
   Gear,
+  BugBeetle,
   Lightning,
   PencilSimple,
   Plus,
@@ -198,6 +199,10 @@ function GearIcon({ className }: IconProps) {
 
 function UserPlusIcon({ className }: IconProps) {
   return <UserPlus size={16} weight="bold" className={className} />;
+}
+
+function ReportIssueIcon({ className }: IconProps) {
+  return <BugBeetle size={16} weight="bold" className={className} />;
 }
 
 function SignOutIcon({ className }: IconProps) {
@@ -1119,6 +1124,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
   const [hasLoadedWorkspaces, setHasLoadedWorkspaces] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isPreparingIssueReport, setIsPreparingIssueReport] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -1185,7 +1191,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     if (left + width + viewportPadding > window.innerWidth) {
       left = Math.max(viewportPadding, window.innerWidth - width - viewportPadding);
     }
-    const estimatedHeight = 92;
+    const estimatedHeight = 132;
     const top = Math.max(viewportPadding, rect.top - 8 - estimatedHeight);
     setUserMenuLayout({ top, left, width });
   }, [props.collapsed]);
@@ -1532,6 +1538,22 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const handleOpenSettings = async () => {
     setIsUserMenuOpen(false);
     await window.electronAPI.bustlyOpenSettings();
+  };
+
+  const handleReportIssue = async () => {
+    if (isPreparingIssueReport) {
+      return;
+    }
+    setIsPreparingIssueReport(true);
+    try {
+      const result = await window.electronAPI.bustlyReportIssue();
+      if (!result.success) {
+        console.error("[Bustly Report Issue] Failed:", result.error);
+      }
+    } finally {
+      setIsPreparingIssueReport(false);
+      setIsUserMenuOpen(false);
+    }
   };
 
   const handleOpenWorkspaceSettings = (workspaceId: string) => {
@@ -1965,6 +1987,21 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                   >
                     <GearIcon className="h-4 w-4 text-gray-500" />
                     Settings
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleReportIssue();
+                    }}
+                    disabled={isPreparingIssueReport}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isPreparingIssueReport ? (
+                      <SpinnerIcon className="h-4 w-4 animate-spin text-gray-500" />
+                    ) : (
+                      <ReportIssueIcon className="h-4 w-4 text-gray-500" />
+                    )}
+                    {isPreparingIssueReport ? "Preparing report..." : "Report an issue"}
                   </button>
                   <div className="mx-2 my-1 h-px bg-gray-100" />
                   <button

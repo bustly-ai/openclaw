@@ -1,5 +1,5 @@
-import { useEffect, useCallback, useRef, type ReactElement } from "react";
-import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useRef, type ReactElement } from "react";
+import { HashRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 // Types are defined in electron.d.ts
 import BustlyLoginPage from "./components/Onboard/BustlyLoginPage";
@@ -7,6 +7,7 @@ import ChatPage from "./components/ChatPage/index";
 import ClientAppShell from "./components/ClientAppShell";
 import SkillPage from "./components/SkillPage";
 import { AppStateProvider, useAppState } from "./providers/AppStateProvider";
+import DeepLinkBridge from "./providers/DeepLinkBridge";
 import { GlobalLoaderProvider, useGlobalLoader } from "./providers/GlobalLoaderProvider";
 import GlobalLoading from "./components/ui/GlobalLoading";
 
@@ -19,25 +20,9 @@ function AppShell() {
     refreshAppState,
   } = useAppState();
   const location = useLocation();
-  const navigate = useNavigate();
   const pathname = location.pathname || "/";
   const isBustlyLoginWindow = pathname === "/bustly-login";
   const hasCompletedInitialGatewayBootRef = useRef(false);
-
-  const handleDeepLink = useCallback(
-    (data: { url: string; route: string | null } | null) => {
-      const route = data?.route;
-      if (!route) {
-        return;
-      }
-      if (route === "/") {
-        void navigate("/", { replace: true });
-        return;
-      }
-      void navigate(route, { replace: true });
-    },
-    [navigate],
-  );
 
   useEffect(() => {
     if (!window.electronAPI?.onUpdateStatus) {
@@ -48,21 +33,6 @@ function AppShell() {
       unsubscribe();
     };
   }, []);
-
-  useEffect(() => {
-    if (!window.electronAPI) {
-      return;
-    }
-    void window.electronAPI.consumePendingDeepLink().then((data) => {
-      handleDeepLink(data);
-    });
-    const unsubscribe = window.electronAPI.onDeepLink((data) => {
-      handleDeepLink(data);
-    });
-    return () => {
-      unsubscribe();
-    };
-  }, [handleDeepLink]);
 
   useEffect(() => {
     if (!loggedIn || hasCompletedInitialGatewayBootRef.current) {
@@ -119,6 +89,7 @@ function AppShell() {
     gatewayPhase !== "error";
   return (
     <>
+      <DeepLinkBridge />
       <Routes>
         <Route
           path="/bustly-login"
