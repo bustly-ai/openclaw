@@ -2583,10 +2583,7 @@ function setupIpcHandlers(): void {
         workspaceId,
         workspaceName,
       });
-      if (gatewayProcess) {
-        await stopGateway();
-        await startGateway();
-      }
+      emitGatewayLifecycle("ready", null);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("bustly-login-refresh");
       }

@@ -76,7 +76,6 @@ interface DeepLinkData {
   route: string | null;
 }
 
-// Bustly OAuth types
 interface BustlyUserInfo {
   userId: string;
   userName: string;

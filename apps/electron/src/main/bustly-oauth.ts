@@ -6,10 +6,7 @@
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { hostname } from "node:os";
 import { resolve } from "node:path";
-import type {
-  BustlyOAuthState,
-  BustlySupabaseConfig,
-} from "./bustly-types.js";
+import type { BustlyOAuthState, BustlySupabaseConfig } from "./bustly-types.js";
 import { refreshSupabaseAuth, verifySupabaseAuth, type SupabaseUserResponse } from "./api/bustly.js";
 import { resolveElectronIsolatedStateDir } from "./defaults.js";
 
@@ -66,8 +63,9 @@ function getStoredSessionExpiresAt(state: BustlyOAuthState | null): number | nul
 }
 
 function extractSupabaseUserAvatarUrl(user: SupabaseUserResponse | null | undefined): string | undefined {
-  const avatarUrl = user?.user_metadata?.avatar_url?.trim() || user?.user_metadata?.picture?.trim();
-  return avatarUrl || undefined;
+  const avatarUrl = user?.user_metadata?.avatar_url?.trim();
+  const picture = user?.user_metadata?.picture?.trim();
+  return avatarUrl || picture || undefined;
 }
 
 function extractSupabaseUserName(user: SupabaseUserResponse | null | undefined): string | undefined {
@@ -121,7 +119,8 @@ async function refreshBustlyAccessTokenInternal(): Promise<boolean> {
   const refreshedUserId = refreshResult.data?.user?.id?.trim() ?? currentUser.userId;
   const refreshedUserEmail = refreshResult.data?.user?.email?.trim() ?? currentUser.userEmail;
   const refreshedUserName = extractSupabaseUserName(refreshResult.data?.user) ?? currentUser.userName;
-  const refreshedUserAvatarUrl = extractSupabaseUserAvatarUrl(refreshResult.data?.user) ?? currentUser.userAvatarUrl;
+  const refreshedUserAvatarUrl =
+    extractSupabaseUserAvatarUrl(refreshResult.data?.user) ?? currentUser.userAvatarUrl;
   state.user = {
     ...currentUser,
     userId: refreshedUserId,
