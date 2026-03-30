@@ -72,6 +72,7 @@ vi.mock("./session-updates.js", () => ({
     systemSent,
     skillsSnapshot: undefined,
   })),
+  buildQueuedSystemEventBlock: vi.fn().mockResolvedValue(""),
   prependSystemEvents: vi.fn().mockImplementation(async ({ prefixedBodyBase }) => prefixedBodyBase),
 }));
 
@@ -182,6 +183,37 @@ describe("runPreparedReply media-only handling", () => {
     expect(call).toBeTruthy();
     expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
     expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
+  });
+
+  it("injects a timestamp for plain inbound text without an envelope", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "what date is it",
+          RawBody: "what date is it",
+          CommandBody: "what date is it",
+          OriginatingChannel: "openclaw-weixin",
+          OriginatingTo: "wxid_demo",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "what date is it",
+          BodyStripped: "what date is it",
+          Provider: "openclaw-weixin",
+          ChatType: "direct",
+          OriginatingChannel: "openclaw-weixin",
+          OriginatingTo: "wxid_demo",
+        },
+        cfg: { session: {}, channels: {}, agents: { defaults: { userTimezone: "UTC" } } },
+      }),
+    );
+    expect(result).toEqual({ text: "ok" });
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    const prompt = call?.followupRun.prompt ?? "";
+    expect(prompt).toContain("what date is it");
+    expect(prompt).toMatch(/\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2} [^\]]+\] what date is it/);
   });
 
   it("returns the empty-body reply when there is no text and no media", async () => {

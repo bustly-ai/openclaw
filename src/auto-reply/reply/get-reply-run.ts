@@ -27,6 +27,7 @@ import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
+import { injectTimestamp, timestampOptsFromConfig } from "../../gateway/server-methods/agent-timestamp.js";
 import {
   type ElevatedLevel,
   formatXHighModelHint,
@@ -292,7 +293,10 @@ export async function runPreparedReply(
   const baseBodyForPrompt = isBareSessionReset
     ? baseBodyFinal
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
-  const baseBodyTrimmed = baseBodyForPrompt.trim();
+  const baseBodyWithTimestamp = isBareSessionReset
+    ? baseBodyForPrompt
+    : injectTimestamp(baseBodyForPrompt, timestampOptsFromConfig(cfg));
+  const baseBodyTrimmed = baseBodyWithTimestamp.trim();
   const hasMediaAttachment = Boolean(
     sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
   );
@@ -307,7 +311,7 @@ export async function runPreparedReply(
   // When the user sends media without text, provide a minimal body so the agent
   // run proceeds and the image/document is injected by the embedded runner.
   const effectiveBaseBody = baseBodyTrimmed
-    ? baseBodyForPrompt
+    ? baseBodyWithTimestamp
     : "[User sent media without caption]";
   let prefixedBodyBase = await applySessionHints({
     baseBody: effectiveBaseBody,
