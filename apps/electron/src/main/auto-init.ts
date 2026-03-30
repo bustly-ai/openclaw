@@ -6,7 +6,7 @@
 
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { execFile, execFileSync } from "node:child_process";
@@ -34,6 +34,37 @@ import {
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 let lastInitializationLogSignature: string | null = null;
 
+function resolveOpenClawRootFromCliPath(cliPath: string): string {
+  if (cliPath.endsWith("openclaw.mjs")) {
+    return dirname(cliPath);
+  }
+  if (cliPath.endsWith("dist/cli.js")) {
+    return resolve(dirname(cliPath), "..");
+  }
+  return dirname(cliPath);
+}
+
+function isWeixinPluginBundled(): boolean {
+  const cliPath = resolveOpenClawCliPath();
+  const candidates = new Set<string>();
+
+  if (cliPath) {
+    const root = resolveOpenClawRootFromCliPath(cliPath);
+    candidates.add(resolve(root, "extensions", "openclaw-weixin"));
+  }
+
+  candidates.add(resolve(process.resourcesPath, "extensions", "openclaw-weixin"));
+  candidates.add(resolve(__dirname, "../../../extensions/openclaw-weixin"));
+  candidates.add(resolve(__dirname, "../../../../extensions/openclaw-weixin"));
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function ensureElectronDefaultConfig(configPath: string): Promise<OpenClawConfig> {
   const openrouterApiKey = getElectronOpenrouterApiKey();
   const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
@@ -54,12 +85,33 @@ async function ensureElectronDefaultConfig(configPath: string): Promise<OpenClaw
     }
   }
 
-  const pluginEntries = { ...(nextConfig.plugins?.entries ?? {}) };
-  const currentWeixinEntry = pluginEntries["openclaw-weixin"] ?? {};
-  if (currentWeixinEntry.enabled !== true) {
-    pluginEntries["openclaw-weixin"] = { ...currentWeixinEntry, enabled: true };
+  const hasWeixinPlugin = isWeixinPluginBundled();
+  const pluginEntries = { ...(nextConfig.plugins?.entries ?? {}) } as Record<string, unknown>;
+  const channels = { ...(nextConfig.channels ?? {}) } as Record<string, unknown>;
+  let configMutated = false;
+
+  if (hasWeixinPlugin) {
+    const currentWeixinEntry =
+      (pluginEntries["openclaw-weixin"] as { enabled?: boolean } | undefined) ?? {};
+    if (currentWeixinEntry.enabled !== true) {
+      pluginEntries["openclaw-weixin"] = { ...currentWeixinEntry, enabled: true };
+      configMutated = true;
+    }
+  } else {
+    if (Object.prototype.hasOwnProperty.call(pluginEntries, "openclaw-weixin")) {
+      delete pluginEntries["openclaw-weixin"];
+      configMutated = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(channels, "openclaw-weixin")) {
+      delete channels["openclaw-weixin"];
+      configMutated = true;
+    }
+  }
+
+  if (configMutated) {
     nextConfig = {
       ...nextConfig,
+      channels,
       plugins: {
         ...(nextConfig.plugins ?? {}),
         entries: pluginEntries,
