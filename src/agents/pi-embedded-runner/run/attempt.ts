@@ -151,14 +151,16 @@ function escapeRegexLiteral(value: string): string {
 }
 
 function extractToolMessageText(message: AgentMessage): string {
-  if (message.role !== "tool") {
+  const role = (message as { role?: string }).role;
+  if (role !== "toolResult" && role !== "tool") {
     return "";
   }
-  if (typeof message.content === "string") {
-    return message.content;
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content;
   }
-  if (Array.isArray(message.content)) {
-    return message.content
+  if (Array.isArray(content)) {
+    return content
       .map((block) => {
         if (!block || typeof block !== "object") {
           return "";
