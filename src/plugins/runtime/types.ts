@@ -53,6 +53,7 @@ type ShouldComputeCommandAuthorized =
   typeof import("../../auto-reply/command-detection.js").shouldComputeCommandAuthorized;
 type ShouldHandleTextCommands =
   typeof import("../../auto-reply/commands-registry.js").shouldHandleTextCommands;
+type WithReplyDispatcher = typeof import("../../auto-reply/dispatch.js").withReplyDispatcher;
 type DispatchReplyFromConfig =
   typeof import("../../auto-reply/reply/dispatch-from-config.js").dispatchReplyFromConfig;
 type FinalizeInboundContext =
@@ -217,6 +218,7 @@ export type PluginRuntime = {
       convertMarkdownTables: ConvertMarkdownTables;
     };
     reply: {
+      withReplyDispatcher: WithReplyDispatcher;
       dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
       createReplyDispatcherWithTyping: CreateReplyDispatcherWithTyping;
       resolveEffectiveMessagesConfig: ResolveEffectiveMessagesConfig;
