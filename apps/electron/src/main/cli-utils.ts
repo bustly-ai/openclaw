@@ -145,13 +145,22 @@ export function resolveOpenClawCliPath(logger?: CliLogger): string | null {
 }
 
 export function resolveNodeBinary(options?: { includeBundled?: boolean }): string | null {
+  const binaryName = process.platform === "win32" ? "node.exe" : "node";
+  const envNodeBinary = process.env.OPENCLAW_NODE_BINARY?.trim() || null;
+  const npmNodeBinary = process.env.NODE?.trim() || null;
+  const nvmBin = process.env.NVM_BIN?.trim() || null;
+  const envCandidates = [
+    envNodeBinary,
+    nvmBin ? resolve(nvmBin, binaryName) : null,
+    nvmBin ? resolve(nvmBin, "node") : null,
+    npmNodeBinary,
+  ];
   const bundledCandidates: string[] = [];
   const discoveredCandidates: Array<string | null> = [];
 
   if (options?.includeBundled ?? true) {
     const platform = normalizePlatform(process.platform);
     const arch = normalizeArch(process.arch);
-    const binaryName = process.platform === "win32" ? "node.exe" : "node";
     const canonicalTarget = platform && arch ? `${platform}-${arch}` : null;
     const platformAliases =
       process.platform === "darwin"
@@ -193,11 +202,19 @@ export function resolveNodeBinary(options?: { includeBundled?: boolean }): strin
     // ignore
   }
 
-  const pathEnvCandidates = (process.env.PATH ?? "")
+  const pathEntries = (process.env.PATH ?? "")
     .split(":")
     .map((dir) => dir.trim())
-    .filter(Boolean)
-    .map((dir) => resolve(dir, "node"));
+    .filter(Boolean);
+  const preferredPathEntries = pathEntries.filter(
+    (dir) =>
+      dir.includes("/.nvm/versions/node/") ||
+      dir.includes("/opt/homebrew/opt/node@22/") ||
+      dir.includes("/node@22/"),
+  );
+  const fallbackPathEntries = pathEntries.filter((dir) => !preferredPathEntries.includes(dir));
+  const preferredPathCandidates = preferredPathEntries.map((dir) => resolve(dir, "node"));
+  const pathEnvCandidates = fallbackPathEntries.map((dir) => resolve(dir, "node"));
 
   const commonCandidates = [
     "/opt/homebrew/bin/node",
@@ -207,10 +224,12 @@ export function resolveNodeBinary(options?: { includeBundled?: boolean }): strin
   ];
 
   const candidates = uniqueExistingPaths([
+    ...envCandidates,
     ...bundledCandidates,
+    ...preferredPathCandidates,
+    ...commonCandidates,
     ...discoveredCandidates,
     ...pathEnvCandidates,
-    ...commonCandidates,
   ]);
 
   return candidates[0] ?? null;

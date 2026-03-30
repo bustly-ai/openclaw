@@ -1083,6 +1083,7 @@ function buildElectronCliEnv(params?: {
     NODE_ENV: "production",
     OPENCLAW_PROFILE: ELECTRON_OPENCLAW_PROFILE,
     OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+    OPENCLAW_PREFER_BUNDLED_PLUGINS: "1",
     ...(existsSync(bundledSkillsDir) ? { OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir } : {}),
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: resolveElectronConfigPath(),

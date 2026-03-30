@@ -39,21 +39,43 @@ async function ensureElectronDefaultConfig(configPath: string): Promise<OpenClaw
   const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
   const currentModel = config.agents?.defaults?.model;
   const primaryModel = typeof currentModel === "string" ? currentModel : currentModel?.primary;
+  let nextConfig = config;
 
-  if (!openrouterApiKey) {
-    return config;
+  if (openrouterApiKey) {
+    await setOpenrouterApiKey(openrouterApiKey, resolveOpenClawAgentDir());
+    nextConfig = applyOpenrouterProviderConfig(nextConfig);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "openrouter:default",
+      provider: "openrouter",
+      mode: "api_key",
+    });
+    if (!primaryModel?.trim() || primaryModel !== ELECTRON_DEFAULT_MODEL) {
+      nextConfig = applyPrimaryModel(nextConfig, ELECTRON_DEFAULT_MODEL);
+    }
   }
 
-  await setOpenrouterApiKey(openrouterApiKey, resolveOpenClawAgentDir());
+  const pluginEntries = { ...(nextConfig.plugins?.entries ?? {}) };
+  const currentWeixinEntry = pluginEntries["openclaw-weixin"] ?? {};
+  if (currentWeixinEntry.enabled !== true) {
+    pluginEntries["openclaw-weixin"] = { ...currentWeixinEntry, enabled: true };
+    nextConfig = {
+      ...nextConfig,
+      plugins: {
+        ...(nextConfig.plugins ?? {}),
+        entries: pluginEntries,
+      },
+    };
+  }
 
-  let nextConfig = applyOpenrouterProviderConfig(config);
-  nextConfig = applyAuthProfileConfig(nextConfig, {
-    profileId: "openrouter:default",
-    provider: "openrouter",
-    mode: "api_key",
-  });
-  if (!primaryModel?.trim() || primaryModel !== ELECTRON_DEFAULT_MODEL) {
-    nextConfig = applyPrimaryModel(nextConfig, ELECTRON_DEFAULT_MODEL);
+  const currentDmScope = nextConfig.session?.dmScope;
+  if (!currentDmScope || currentDmScope === "main") {
+    nextConfig = {
+      ...nextConfig,
+      session: {
+        ...(nextConfig.session ?? {}),
+        dmScope: "per-account-channel-peer",
+      },
+    };
   }
 
   if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
@@ -166,6 +188,7 @@ async function runCliOnboard(options: InitializationOptions): Promise<void> {
     ...loginShellEnv,
     OPENCLAW_LOAD_SHELL_ENV: "1",
     OPENCLAW_PROFILE: ELECTRON_OPENCLAW_PROFILE,
+    OPENCLAW_PREFER_BUNDLED_PLUGINS: "1",
     OPENCLAW_STATE_DIR: resolveElectronIsolatedStateDir(),
     OPENCLAW_CONFIG_PATH: resolveElectronIsolatedConfigPath(),
   };

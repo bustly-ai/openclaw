@@ -121,6 +121,7 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
 const BUSTLY_PROVIDER_ID = "bustly";
 const BUSTLY_WORKSPACE_HEADER = "X-Workspace-Id";
 const BUSTLY_RUN_ID_HEADER = "X-Run-Id";
+const URL_WITH_QUERY_RE = /https?:\/\/[^\s<>"'`]+?\?[^\s<>"'`]+/g;
 
 export function mergeBustlyRuntimeHeaders(params: {
   modelHeaders?: Record<string, string>;
@@ -141,6 +142,89 @@ export function mergeBustlyRuntimeHeaders(params: {
     delete mergedHeaders[BUSTLY_WORKSPACE_HEADER.toLowerCase()];
   }
   return mergedHeaders;
+}
+
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractToolMessageText(message: AgentMessage): string {
+  if (message.role !== "tool") {
+    return "";
+  }
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+  if (Array.isArray(message.content)) {
+    return message.content
+      .map((block) => {
+        if (!block || typeof block !== "object") {
+          return "";
+        }
+        if ("text" in block && typeof (block as { text?: unknown }).text === "string") {
+          return (block as { text: string }).text;
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return JSON.stringify(message);
+}
+
+function collectFullUrlsFromToolOutputs(messages: AgentMessage[]): Map<string, string> {
+  const fullUrlByBase = new Map<string, string>();
+  for (const message of messages) {
+    const text = extractToolMessageText(message);
+    if (!text) {
+      continue;
+    }
+    const matches = text.match(URL_WITH_QUERY_RE);
+    if (!matches) {
+      continue;
+    }
+    for (const fullUrl of matches) {
+      const queryStart = fullUrl.indexOf("?");
+      if (queryStart <= 0) {
+        continue;
+      }
+      const base = fullUrl.slice(0, queryStart);
+      fullUrlByBase.set(base, fullUrl);
+    }
+  }
+  return fullUrlByBase;
+}
+
+function repairAssistantUrlsFromToolOutputs(params: {
+  assistantTexts: string[];
+  messagesSnapshot: AgentMessage[];
+}): string[] {
+  if (params.assistantTexts.length === 0) {
+    return params.assistantTexts;
+  }
+  const fullUrlByBase = collectFullUrlsFromToolOutputs(params.messagesSnapshot);
+  if (fullUrlByBase.size === 0) {
+    return params.assistantTexts;
+  }
+
+  let didChange = false;
+  const repaired = params.assistantTexts.map((text) => {
+    let next = text;
+    for (const [base, full] of fullUrlByBase) {
+      if (!next.includes(base) || next.includes(full)) {
+        continue;
+      }
+      const pattern = new RegExp(`${escapeRegexLiteral(base)}(?!\\?)`, "g");
+      const replaced = next.replace(pattern, full);
+      if (replaced !== next) {
+        didChange = true;
+        next = replaced;
+      }
+    }
+    return next;
+  });
+
+  return didChange ? repaired : params.assistantTexts;
 }
 
 type PromptBuildHookRunner = {
@@ -1450,6 +1534,10 @@ export async function runEmbeddedAttempt(
         .slice()
         .toReversed()
         .find((m) => m.role === "assistant");
+      const assistantTextsForOutput = repairAssistantUrlsFromToolOutputs({
+        assistantTexts,
+        messagesSnapshot,
+      });
 
       const toolMetasNormalized = toolMetas
         .filter(
@@ -1466,7 +1554,7 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               provider: params.provider,
               model: params.modelId,
-              assistantTexts,
+              assistantTexts: assistantTextsForOutput,
               lastAssistant,
               usage: getUsageTotals(),
             },
@@ -1491,7 +1579,7 @@ export async function runEmbeddedAttempt(
         sessionIdUsed,
         systemPromptReport,
         messagesSnapshot,
-        assistantTexts,
+        assistantTexts: assistantTextsForOutput,
         toolMetas: toolMetasNormalized,
         lastAssistant,
         lastToolError: getLastToolError?.(),
