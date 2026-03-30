@@ -1072,6 +1072,7 @@ export async function runEmbeddedPiAgent(
             promptTokens,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
           };
+          const assistantRequestMetrics = attempt.assistantRequestMetrics;
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
@@ -1107,6 +1108,7 @@ export async function runEmbeddedPiAgent(
                 durationMs: Date.now() - started,
                 agentMeta,
                 aborted,
+                assistantRequestMetrics,
                 systemPromptReport: attempt.systemPromptReport,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
@@ -1137,6 +1139,7 @@ export async function runEmbeddedPiAgent(
                 agentMeta,
                 aborted,
                 hasAssistantMessage: Boolean(lastAssistant),
+                assistantRequestMetrics,
                 systemPromptReport: attempt.systemPromptReport,
                 error: {
                   kind: "output_limit",
@@ -1174,6 +1177,7 @@ export async function runEmbeddedPiAgent(
               agentMeta,
               aborted,
               hasAssistantMessage: Boolean(lastAssistant),
+              assistantRequestMetrics,
               systemPromptReport: attempt.systemPromptReport,
               error: outputLimitReached
                 ? {

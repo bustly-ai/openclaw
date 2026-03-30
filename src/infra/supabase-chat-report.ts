@@ -6,6 +6,8 @@ import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config
 
 type ReportSessionCompletionParams = {
   sessionKey?: string;
+  sessionId?: string;
+  sessionFile?: string;
   source?: string;
   conversationId?: string;
   messageSid?: string;
@@ -13,8 +15,10 @@ type ReportSessionCompletionParams = {
   senderName?: string;
   senderUsername?: string;
   senderE164?: string;
-  ttftMs?: number;
-  ttlrMs?: number;
+  assistantRequestMetrics?: Array<{
+    ttftMs?: number;
+    ttlrMs?: number;
+  }>;
   cfg: OpenClawConfig;
 };
 
@@ -168,15 +172,15 @@ const buildRows = (params: {
   senderName: string | null;
   senderUsername: string | null;
   senderE164: string | null;
-  ttftMs: number | null;
-  ttlrMs: number | null;
+  assistantRequestMetrics: Array<{
+    ttftMs: number | null;
+    ttlrMs: number | null;
+  }>;
   messages: ParsedMessage[];
 }): SupabaseChatRow[] => {
-  const assistantIndices = params.messages.flatMap((msg, index) => (msg.role === "assistant" ? [index] : []));
-  const firstAssistantIndex = assistantIndices[0] ?? -1;
-  const lastAssistantIndex = assistantIndices.at(-1) ?? -1;
+  const assistantRequestMetrics = params.assistantRequestMetrics.slice();
 
-  return params.messages.map((msg, index) => {
+  return params.messages.map((msg) => {
     const metadata: Record<string, unknown> = {
       messageSid: params.messageSid,
       senderId: params.senderId,
@@ -185,11 +189,14 @@ const buildRows = (params: {
       senderE164: params.senderE164,
       raw: msg.rawEntry,
     };
-    if (index === firstAssistantIndex && params.ttftMs !== null) {
-      metadata.ttftMs = params.ttftMs;
-    }
-    if (index === lastAssistantIndex && params.ttlrMs !== null) {
-      metadata.ttlrMs = params.ttlrMs;
+    if (msg.role === "assistant") {
+      const metric = assistantRequestMetrics.shift();
+      if (metric?.ttftMs !== null && metric?.ttftMs !== undefined) {
+        metadata.ttftMs = metric.ttftMs;
+      }
+      if (metric?.ttlrMs !== null && metric?.ttlrMs !== undefined) {
+        metadata.ttlrMs = metric.ttlrMs;
+      }
     }
     return {
       workspace_id: params.workspaceId,
@@ -237,6 +244,30 @@ const postRowsToSupabase = async (
   }
 };
 
+const fetchExistingMessageIds = async (
+  supabaseUrl: string,
+  anonKey: string,
+  accessToken: string,
+  sessionId: string,
+): Promise<Set<string>> => {
+  const url = new URL("/rest/v1/client_chat_messages", supabaseUrl);
+  url.searchParams.set("select", "message_id");
+  url.searchParams.set("session_id", `eq.${sessionId}`);
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      apikey: anonKey,
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`supabase chat report lookup failed: status=${response.status} body=${text}`);
+  }
+  const rows = (await response.json().catch(() => [])) as Array<Record<string, unknown>>;
+  return new Set(rows.map((row) => trimOrNull(row.message_id)).filter((id): id is string => Boolean(id)));
+};
+
 const resolveSessionEntry = (params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -259,7 +290,10 @@ export async function reportSessionCompletionToSupabase(
   params: ReportSessionCompletionParams,
 ): Promise<void> {
   const sessionKey = trimOrNull(params.sessionKey);
-  if (!sessionKey) {
+  const directSessionId = trimOrNull(params.sessionId);
+  const directSessionFile = trimOrNull(params.sessionFile);
+  const reportSessionKey = sessionKey ?? directSessionId;
+  if (!reportSessionKey) {
     return;
   }
 
@@ -278,10 +312,14 @@ export async function reportSessionCompletionToSupabase(
     return;
   }
 
-  const { sessionId, sessionFile } = resolveSessionEntry({
-    cfg: params.cfg,
-    sessionKey,
-  });
+  const resolvedSession = sessionKey
+    ? resolveSessionEntry({
+        cfg: params.cfg,
+        sessionKey,
+      })
+    : {};
+  const sessionId = directSessionId ?? resolvedSession.sessionId;
+  const sessionFile = directSessionFile ?? resolvedSession.sessionFile;
   if (!sessionId || !sessionFile) {
     return;
   }
@@ -292,11 +330,33 @@ export async function reportSessionCompletionToSupabase(
     return;
   }
 
+  let messagesToPost = messages;
+  if (!uploadedLineCursor.has(sessionFile)) {
+    const existingMessageIds = await fetchExistingMessageIds(
+      supabaseUrl,
+      anonKey,
+      accessToken,
+      sessionId,
+    );
+    if (existingMessageIds.size > 0) {
+      messagesToPost = messages.filter((msg) => !existingMessageIds.has(msg.messageId));
+    }
+  }
+  if (messagesToPost.length === 0) {
+    uploadedLineCursor.set(sessionFile, nextCursor);
+    return;
+  }
+
+  const normalizedAssistantRequestMetrics = (params.assistantRequestMetrics ?? []).map((metric) => ({
+    ttftMs: normalizeMetricMs(metric?.ttftMs),
+    ttlrMs: normalizeMetricMs(metric?.ttlrMs),
+  }));
+
   const rows = buildRows({
     workspaceId,
     userUid,
     sessionId,
-    sessionKey,
+    sessionKey: reportSessionKey,
     source: trimOrNull(params.source) ?? "unknown",
     conversationId: trimOrNull(params.conversationId),
     messageSid: trimOrNull(params.messageSid),
@@ -304,9 +364,8 @@ export async function reportSessionCompletionToSupabase(
     senderName: trimOrNull(params.senderName),
     senderUsername: trimOrNull(params.senderUsername),
     senderE164: trimOrNull(params.senderE164),
-    ttftMs: normalizeMetricMs(params.ttftMs),
-    ttlrMs: normalizeMetricMs(params.ttlrMs),
-    messages,
+    assistantRequestMetrics: normalizedAssistantRequestMetrics,
+    messages: messagesToPost,
   });
   await postRowsToSupabase(supabaseUrl, anonKey, accessToken, rows);
   uploadedLineCursor.set(sessionFile, nextCursor);

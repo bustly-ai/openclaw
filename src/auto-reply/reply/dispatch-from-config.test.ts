@@ -33,9 +33,10 @@ const internalHookMocks = vi.hoisted(() => ({
 const reportMocks = vi.hoisted(() => ({
   reportSessionCompletionToSupabase: vi.fn(async () => {}),
 }));
-const turnMetricMocks = vi.hoisted(() => ({
-  recordChatTurnStart: vi.fn(),
-  consumeChatTurnTtftMs: vi.fn(() => undefined),
+const assistantRequestMetricMocks = vi.hoisted(() => ({
+  consumeCompletedAssistantRequestMetrics: vi.fn<
+    () => Array<{ ttftMs?: number; ttlrMs?: number }>
+  >(() => []),
 }));
 
 vi.mock("./route-reply.js", () => ({
@@ -74,9 +75,9 @@ vi.mock("../../hooks/internal-hooks.js", () => ({
 vi.mock("../../infra/supabase-chat-report.js", () => ({
   reportSessionCompletionToSupabase: reportMocks.reportSessionCompletionToSupabase,
 }));
-vi.mock("../../infra/chat-turn-metrics.js", () => ({
-  recordChatTurnStart: turnMetricMocks.recordChatTurnStart,
-  consumeChatTurnTtftMs: turnMetricMocks.consumeChatTurnTtftMs,
+vi.mock("../../infra/assistant-request-metrics.js", () => ({
+  consumeCompletedAssistantRequestMetrics:
+    assistantRequestMetricMocks.consumeCompletedAssistantRequestMetrics,
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
@@ -132,9 +133,8 @@ describe("dispatchReplyFromConfig", () => {
     internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
     internalHookMocks.triggerInternalHook.mockClear();
     reportMocks.reportSessionCompletionToSupabase.mockClear();
-    turnMetricMocks.recordChatTurnStart.mockClear();
-    turnMetricMocks.consumeChatTurnTtftMs.mockReset();
-    turnMetricMocks.consumeChatTurnTtftMs.mockReturnValue(undefined);
+    assistantRequestMetricMocks.consumeCompletedAssistantRequestMetrics.mockReset();
+    assistantRequestMetricMocks.consumeCompletedAssistantRequestMetrics.mockReturnValue([]);
   });
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     setNoAbort();
@@ -190,7 +190,7 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
-  it("reports ttft and ttlr for streamed assistant replies", async () => {
+  it("reports ttft and ttlr for a settled assistant request", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-30T00:00:00.000Z"));
     setNoAbort();
@@ -209,9 +209,15 @@ describe("dispatchReplyFromConfig", () => {
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
+      opts?.onAgentRunStart?.("run-123");
       vi.advanceTimersByTime(120);
       await opts?.onBlockReply?.({ text: "First chunk" });
       vi.advanceTimersByTime(380);
+      opts?.onAgentRunSettled?.({
+        runId: "run-123",
+        aborted: false,
+        hasAssistantMessage: true,
+      });
       return { text: "Final reply" } satisfies ReplyPayload;
     };
 
@@ -221,8 +227,7 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         sessionKey: "agent:main:main",
         messageSid: "run-123",
-        ttftMs: 120,
-        ttlrMs: 500,
+        assistantRequestMetrics: [{ ttftMs: 120, ttlrMs: 500 }],
       }),
     );
   });
@@ -246,9 +251,15 @@ describe("dispatchReplyFromConfig", () => {
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
+      opts?.onAgentRunStart?.("run-456");
       vi.advanceTimersByTime(80);
-      await opts?.onBlockReply?.({ text: "Reasoning:\n_thinking..._", isReasoning: true });
+      await opts?.onReasoningStream?.({ text: "Reasoning:\n_thinking..._", isReasoning: true });
       vi.advanceTimersByTime(220);
+      opts?.onAgentRunSettled?.({
+        runId: "run-456",
+        aborted: false,
+        hasAssistantMessage: true,
+      });
       return { text: "Final reply" } satisfies ReplyPayload;
     };
 
@@ -258,16 +269,20 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         sessionKey: "agent:main:main",
         messageSid: "run-456",
-        ttftMs: 80,
-        ttlrMs: 300,
+        assistantRequestMetrics: [{ ttftMs: 80, ttlrMs: 300 }],
       }),
     );
   });
 
-  it("prefers gateway first-delta ttft when available", async () => {
+  it("prefers per-request metrics captured from the assistant stream", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-30T00:00:00.000Z"));
-    turnMetricMocks.consumeChatTurnTtftMs.mockReturnValue(45);
+    assistantRequestMetricMocks.consumeCompletedAssistantRequestMetrics.mockReturnValue([
+      {
+        ttftMs: 45,
+        ttlrMs: 300,
+      },
+    ]);
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -281,22 +296,28 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      _opts?: GetReplyOptions,
+      opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
+      opts?.onAgentRunStart?.("run-789");
       vi.advanceTimersByTime(300);
+      opts?.onAgentRunSettled?.({
+        runId: "run-789",
+        aborted: false,
+        hasAssistantMessage: true,
+      });
       return { text: "Final reply" } satisfies ReplyPayload;
     };
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(turnMetricMocks.recordChatTurnStart).toHaveBeenCalledWith("run-789", expect.any(Number));
-    expect(turnMetricMocks.consumeChatTurnTtftMs).toHaveBeenCalledWith("run-789");
+    expect(assistantRequestMetricMocks.consumeCompletedAssistantRequestMetrics).toHaveBeenCalledWith(
+      "run-789",
+    );
     expect(reportMocks.reportSessionCompletionToSupabase).toHaveBeenCalledWith(
       expect.objectContaining({
         messageSid: "run-789",
-        ttftMs: 45,
-        ttlrMs: 300,
+        assistantRequestMetrics: [{ ttftMs: 45, ttlrMs: 300 }],
       }),
     );
   });

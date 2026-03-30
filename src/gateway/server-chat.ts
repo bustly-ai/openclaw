@@ -4,7 +4,6 @@ import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
-import { recordChatTurnFirstDelta } from "../infra/chat-turn-metrics.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "./protocol/client-info.js";
@@ -497,14 +496,6 @@ export function createAgentEventHandler({
       // WS clients already received the event above via broadcastToConnIds.
       if (!isToolEvent || toolVerbose !== "off") {
         nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
-      }
-      if (
-        !isAborted &&
-        (evt.stream === "assistant" || evt.stream === "thinking") &&
-        typeof evt.data?.delta === "string" &&
-        evt.data.delta.trim()
-      ) {
-        recordChatTurnFirstDelta(clientRunId, evt.ts);
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text);

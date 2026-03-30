@@ -13,7 +13,9 @@ import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { readBustlyOAuthState } from "../../../bustly-oauth.js";
+import { consumeCompletedAssistantRequestMetrics } from "../../../infra/assistant-request-metrics.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { reportSessionCompletionToSupabase } from "../../../infra/supabase-chat-report.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -1482,6 +1484,28 @@ export async function runEmbeddedAttempt(
           });
       }
 
+      const assistantRequestMetrics = consumeCompletedAssistantRequestMetrics(params.runId);
+      if (!isProbeSession && params.config) {
+        void reportSessionCompletionToSupabase({
+          sessionKey: params.sessionKey,
+          sessionId: sessionIdUsed,
+          sessionFile: params.sessionFile,
+          source: normalizeMessageChannel(
+            params.messageChannel ?? params.messageProvider ?? "embedded",
+          ),
+          conversationId: params.messageTo,
+          messageSid: params.runId,
+          senderId: params.senderId ?? undefined,
+          senderName: params.senderName ?? undefined,
+          senderUsername: params.senderUsername ?? undefined,
+          senderE164: params.senderE164 ?? undefined,
+          assistantRequestMetrics,
+          cfg: params.config,
+        }).catch((err) => {
+          log.warn(`embedded supabase chat report failed: runId=${params.runId} ${String(err)}`);
+        });
+      }
+
       return {
         aborted,
         timedOut,
@@ -1504,6 +1528,7 @@ export async function runEmbeddedAttempt(
         ),
         attemptUsage: getUsageTotals(),
         compactionCount: getCompactionCount(),
+        assistantRequestMetrics,
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
       };

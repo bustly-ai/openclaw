@@ -3,7 +3,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { consumeChatTurnTtftMs, recordChatTurnStart } from "../../infra/chat-turn-metrics.js";
+import {
+  consumeCompletedAssistantRequestMetrics,
+  type AssistantRequestMetric,
+} from "../../infra/assistant-request-metrics.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { reportSessionCompletionToSupabase } from "../../infra/supabase-chat-report.js";
 import {
@@ -100,20 +103,36 @@ export async function dispatchReplyFromConfig(params: {
   const sessionKey = ctx.SessionKey;
   const startTime = diagnosticsEnabled ? turnStartedAtMs : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
-  let firstAssistantResponseAtMs: number | null = null;
-  if (reportMessageId) {
-    recordChatTurnStart(reportMessageId, turnStartedAtMs);
-  }
+  let didReportAssistantRequestMetrics = false;
+  const assistantRuns = new Map<
+    string,
+    {
+      startedAtMs: number;
+      firstAssistantResponseAtMs: number | null;
+    }
+  >();
+  let latestAssistantRunId: string | null = null;
+  let fallbackFirstAssistantResponseAtMs: number | null = null;
 
   const markFirstAssistantResponse = (payload?: ReplyPayload) => {
-    if (firstAssistantResponseAtMs !== null || !payload) {
+    if (!payload) {
       return;
     }
     const text = typeof payload.text === "string" ? payload.text.trim() : "";
     if (!text) {
       return;
     }
-    firstAssistantResponseAtMs = Date.now();
+    const activeRun =
+      latestAssistantRunId === null ? undefined : assistantRuns.get(latestAssistantRunId);
+    if (activeRun) {
+      if (activeRun.firstAssistantResponseAtMs === null) {
+        activeRun.firstAssistantResponseAtMs = Date.now();
+      }
+      return;
+    }
+    if (fallbackFirstAssistantResponseAtMs === null) {
+      fallbackFirstAssistantResponseAtMs = Date.now();
+    }
   };
 
   const recordProcessed = (
@@ -138,11 +157,8 @@ export async function dispatchReplyFromConfig(params: {
     });
   };
 
-  const reportSessionCompletion = () => {
-    const ttftMs =
-      (reportMessageId ? consumeChatTurnTtftMs(reportMessageId) : undefined) ??
-      (firstAssistantResponseAtMs === null ? undefined : firstAssistantResponseAtMs - turnStartedAtMs);
-    const ttlrMs = Date.now() - turnStartedAtMs;
+  const reportAssistantRequestMetrics = (assistantRequestMetrics?: AssistantRequestMetric[]) => {
+    didReportAssistantRequestMetrics = true;
     void reportSessionCompletionToSupabase({
       sessionKey: ctx.SessionKey,
       source: (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase(),
@@ -152,12 +168,24 @@ export async function dispatchReplyFromConfig(params: {
       senderName: ctx.SenderName,
       senderUsername: ctx.SenderUsername,
       senderE164: ctx.SenderE164,
-      ttftMs,
-      ttlrMs,
+      assistantRequestMetrics,
       cfg,
-    }).catch((err) => {
-      logVerbose(`dispatch-from-config: supabase chat report failed: ${String(err)}`);
-    });
+    }).catch(() => {});
+  };
+
+  const reportFallbackCompletion = () => {
+    if (didReportAssistantRequestMetrics) {
+      return;
+    }
+    reportAssistantRequestMetrics([
+      {
+        ttftMs:
+          fallbackFirstAssistantResponseAtMs === null
+            ? undefined
+            : fallbackFirstAssistantResponseAtMs - turnStartedAtMs,
+        ttlrMs: Date.now() - turnStartedAtMs,
+      },
+    ]);
   };
 
   const markProcessing = () => {
@@ -354,7 +382,7 @@ export async function dispatchReplyFromConfig(params: {
       counts.final += routedFinalCount;
       recordProcessed("completed", { reason: "fast_abort" });
       markIdle("message_completed");
-      reportSessionCompletion();
+      reportFallbackCompletion();
       return { queuedFinal, counts };
     }
 
@@ -379,10 +407,57 @@ export async function dispatchReplyFromConfig(params: {
       return { ...payload, text: undefined };
     };
 
+    const noteAssistantRunStart = (runId: string) => {
+      latestAssistantRunId = runId;
+      assistantRuns.set(runId, {
+        startedAtMs: Date.now(),
+        firstAssistantResponseAtMs: null,
+      });
+      params.replyOptions?.onAgentRunStart?.(runId);
+    };
+
+    const noteAssistantRunSettled = (info: {
+      runId: string;
+      aborted: boolean;
+      hasAssistantMessage: boolean;
+      assistantRequestMetrics?: AssistantRequestMetric[];
+    }) => {
+      params.replyOptions?.onAgentRunSettled?.(info);
+      const run = assistantRuns.get(info.runId);
+      assistantRuns.delete(info.runId);
+      if (latestAssistantRunId === info.runId) {
+        latestAssistantRunId = Array.from(assistantRuns.keys()).at(-1) ?? null;
+      }
+      if (!run) {
+        return;
+      }
+      const completedMetrics =
+        info.assistantRequestMetrics ?? consumeCompletedAssistantRequestMetrics(info.runId);
+      if (completedMetrics.length > 0) {
+        reportAssistantRequestMetrics(completedMetrics);
+        return;
+      }
+      reportAssistantRequestMetrics([
+        {
+          ttftMs:
+            run.firstAssistantResponseAtMs === null
+              ? undefined
+              : run.firstAssistantResponseAtMs - run.startedAtMs,
+          ttlrMs: Date.now() - run.startedAtMs,
+        },
+      ]);
+    };
+
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
       {
         ...params.replyOptions,
+        onAgentRunStart: noteAssistantRunStart,
+        onAgentRunSettled: noteAssistantRunSettled,
+        onReasoningStream: async (payload: ReplyPayload) => {
+          markFirstAssistantResponse(payload);
+          await params.replyOptions?.onReasoningStream?.(payload);
+        },
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({
@@ -547,12 +622,16 @@ export async function dispatchReplyFromConfig(params: {
     counts.final += routedFinalCount;
     recordProcessed("completed");
     markIdle("message_completed");
-    reportSessionCompletion();
+    if (!didReportAssistantRequestMetrics) {
+      reportFallbackCompletion();
+    }
     return { queuedFinal, counts };
   } catch (err) {
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
-    reportSessionCompletion();
+    if (!didReportAssistantRequestMetrics) {
+      reportFallbackCompletion();
+    }
     throw err;
   }
 }
