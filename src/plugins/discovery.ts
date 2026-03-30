@@ -599,18 +599,13 @@ export function discoverOpenClawPlugins(params: {
     }
   }
 
+  const preferBundledPlugins = /^(1|true|yes|on)$/i.test(
+    process.env.OPENCLAW_PREFER_BUNDLED_PLUGINS?.trim() ?? "",
+  );
   const globalDir = path.join(resolveConfigDir(), "extensions");
-  discoverInDirectory({
-    dir: globalDir,
-    origin: "global",
-    ownershipUid: params.ownershipUid,
-    candidates,
-    diagnostics,
-    seen,
-  });
-
   const bundledDir = resolveBundledPluginsDir();
-  if (bundledDir) {
+
+  if (preferBundledPlugins && bundledDir) {
     discoverInDirectory({
       dir: bundledDir,
       origin: "bundled",
@@ -619,6 +614,33 @@ export function discoverOpenClawPlugins(params: {
       diagnostics,
       seen,
     });
+    discoverInDirectory({
+      dir: globalDir,
+      origin: "global",
+      ownershipUid: params.ownershipUid,
+      candidates,
+      diagnostics,
+      seen,
+    });
+  } else {
+    discoverInDirectory({
+      dir: globalDir,
+      origin: "global",
+      ownershipUid: params.ownershipUid,
+      candidates,
+      diagnostics,
+      seen,
+    });
+    if (bundledDir) {
+      discoverInDirectory({
+        dir: bundledDir,
+        origin: "bundled",
+        ownershipUid: params.ownershipUid,
+        candidates,
+        diagnostics,
+        seen,
+      });
+    }
   }
 
   return { candidates, diagnostics };

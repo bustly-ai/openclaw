@@ -458,6 +458,8 @@ export function buildAgentSystemPrompt(params: {
     "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
     "Keep narration brief and value-dense; avoid repeating obvious steps.",
     "Use plain human language for narration unless in a technical context.",
+    "When relaying tool output values users must use exactly (URLs, tokens, one-time codes, commands), copy them verbatim from tool output. Never shorten, mask, or paraphrase them; preserve query strings and punctuation.",
+    "If tool output indicates a command was terminated/failed/timed out (for example, exited with signal or timeout), state that the operation did not complete. Do not claim success.",
     "",
     ...safetySection,
     ...buildInteractionSection(),
