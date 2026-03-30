@@ -86,6 +86,27 @@ const resolvePluginSdkAccountIdAlias = (): string | null => {
   return resolvePluginSdkAliasFile({ srcFile: "account-id.ts", distFile: "account-id.js" });
 };
 
+const resolvePluginSdkCompatAliasFile = (fileName: string): string | null => {
+  try {
+    const modulePath = fileURLToPath(import.meta.url);
+    let cursor = path.dirname(modulePath);
+    for (let i = 0; i < 6; i += 1) {
+      const candidate = path.join(cursor, "src", "plugin-sdk-compat", fileName);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        break;
+      }
+      cursor = parent;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+};
+
 function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
@@ -421,16 +442,28 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
     const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
+    const pluginSdkCompatAliases = {
+      "openclaw/plugin-sdk/channel-config-schema": resolvePluginSdkCompatAliasFile("channel-config-schema.js"),
+      "openclaw/plugin-sdk/channel-runtime": resolvePluginSdkCompatAliasFile("channel-runtime.js"),
+      "openclaw/plugin-sdk/command-auth": resolvePluginSdkCompatAliasFile("command-auth.js"),
+      "openclaw/plugin-sdk/config-runtime": resolvePluginSdkCompatAliasFile("config-runtime.js"),
+      "openclaw/plugin-sdk/infra-runtime": resolvePluginSdkCompatAliasFile("infra-runtime.js"),
+      "openclaw/plugin-sdk/text-runtime": resolvePluginSdkCompatAliasFile("text-runtime.js"),
+    } as const;
+    const resolvedPluginSdkCompatAliases = Object.fromEntries(
+      Object.entries(pluginSdkCompatAliases).filter(([, aliasPath]) => Boolean(aliasPath)),
+    );
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-      ...(pluginSdkAlias || pluginSdkAccountIdAlias
+      ...(pluginSdkAlias || pluginSdkAccountIdAlias || Object.keys(resolvedPluginSdkCompatAliases).length > 0
         ? {
             alias: {
               ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
               ...(pluginSdkAccountIdAlias
                 ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
                 : {}),
+              ...resolvedPluginSdkCompatAliases,
             },
           }
         : {}),

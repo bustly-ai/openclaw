@@ -38,8 +38,14 @@
     ".": "./dist/index.js",
     "./plugin-sdk": {
       "types": "./dist/plugin-sdk/index.d.ts",
-      "default": "./dist/plugin-sdk/index.js"
+      "default": "./src/plugin-sdk-compat"
     },
+    "./plugin-sdk/channel-config-schema": "./src/plugin-sdk-compat/channel-config-schema.js",
+    "./plugin-sdk/channel-runtime": "./src/plugin-sdk-compat/channel-runtime.js",
+    "./plugin-sdk/command-auth": "./src/plugin-sdk-compat/command-auth.js",
+    "./plugin-sdk/config-runtime": "./src/plugin-sdk-compat/config-runtime.js",
+    "./plugin-sdk/infra-runtime": "./src/plugin-sdk-compat/infra-runtime.js",
+    "./plugin-sdk/text-runtime": "./src/plugin-sdk-compat/text-runtime.js",
     "./plugin-sdk/account-id": {
       "types": "./dist/plugin-sdk/account-id.d.ts",
       "default": "./dist/plugin-sdk/account-id.js"
