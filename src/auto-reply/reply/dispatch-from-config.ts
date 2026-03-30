@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { consumeChatTurnTtftMs, recordChatTurnStart } from "../../infra/chat-turn-metrics.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { reportSessionCompletionToSupabase } from "../../infra/supabase-chat-report.js";
 import {
@@ -91,12 +92,29 @@ export async function dispatchReplyFromConfig(params: {
 }): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
+  const turnStartedAtMs = Date.now();
   const channel = String(ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase();
   const chatId = ctx.To ?? ctx.From;
   const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
+  const reportMessageId = ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const sessionKey = ctx.SessionKey;
-  const startTime = diagnosticsEnabled ? Date.now() : 0;
+  const startTime = diagnosticsEnabled ? turnStartedAtMs : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
+  let firstAssistantResponseAtMs: number | null = null;
+  if (reportMessageId) {
+    recordChatTurnStart(reportMessageId, turnStartedAtMs);
+  }
+
+  const markFirstAssistantResponse = (payload?: ReplyPayload) => {
+    if (firstAssistantResponseAtMs !== null || !payload) {
+      return;
+    }
+    const text = typeof payload.text === "string" ? payload.text.trim() : "";
+    if (!text) {
+      return;
+    }
+    firstAssistantResponseAtMs = Date.now();
+  };
 
   const recordProcessed = (
     outcome: "completed" | "skipped" | "error",
@@ -121,15 +139,21 @@ export async function dispatchReplyFromConfig(params: {
   };
 
   const reportSessionCompletion = () => {
+    const ttftMs =
+      (reportMessageId ? consumeChatTurnTtftMs(reportMessageId) : undefined) ??
+      (firstAssistantResponseAtMs === null ? undefined : firstAssistantResponseAtMs - turnStartedAtMs);
+    const ttlrMs = Date.now() - turnStartedAtMs;
     void reportSessionCompletionToSupabase({
       sessionKey: ctx.SessionKey,
       source: (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase(),
       conversationId: ctx.OriginatingTo ?? ctx.To ?? ctx.From,
-      messageSid: ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast,
+      messageSid: reportMessageId,
       senderId: ctx.SenderId,
       senderName: ctx.SenderName,
       senderUsername: ctx.SenderUsername,
       senderE164: ctx.SenderE164,
+      ttftMs,
+      ttlrMs,
       cfg,
     }).catch((err) => {
       logVerbose(`dispatch-from-config: supabase chat report failed: ${String(err)}`);
@@ -301,6 +325,7 @@ export async function dispatchReplyFromConfig(params: {
       const payload = {
         text: formatAbortReplyText(fastAbort.stoppedSubagents),
       } satisfies ReplyPayload;
+      markFirstAssistantResponse(payload);
       let queuedFinal = false;
       let routedFinalCount = 0;
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
@@ -382,6 +407,7 @@ export async function dispatchReplyFromConfig(params: {
         },
         onBlockReply: (payload: ReplyPayload, context) => {
           const run = async () => {
+            markFirstAssistantResponse(payload);
             // Suppress reasoning payloads — channels using this generic dispatch
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
             // Telegram has its own dispatch path that handles reasoning splitting.
@@ -421,6 +447,7 @@ export async function dispatchReplyFromConfig(params: {
     let queuedFinal = false;
     let routedFinalCount = 0;
     for (const reply of replies) {
+      markFirstAssistantResponse(reply);
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
       if (shouldSuppressReasoningPayload(reply)) {

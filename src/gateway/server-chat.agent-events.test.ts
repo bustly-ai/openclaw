@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+import {
+  consumeChatTurnTtftMs,
+  recordChatTurnStart,
+  resetChatTurnMetricsForTest,
+} from "../infra/chat-turn-metrics.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import {
@@ -30,10 +35,12 @@ describe("agent event handler", () => {
       useIndicator: true,
     });
     resetAgentRunContextForTest();
+    resetChatTurnMetricsForTest();
   });
 
   afterEach(() => {
     resetAgentRunContextForTest();
+    resetChatTurnMetricsForTest();
   });
 
   function createHarness(params?: {
@@ -88,7 +95,7 @@ describe("agent event handler", () => {
       seq: 1,
       stream: "assistant",
       ts: Date.now(),
-      data: { text },
+      data: { text, delta: text },
     });
     return harness;
   }
@@ -227,6 +234,29 @@ describe("agent event handler", () => {
     expect(payload.message?.content?.[0]?.text).toBe("Hello world");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     nowSpy?.mockRestore();
+  });
+
+  it("records ttft from the first assistant delta for the client run", () => {
+    recordChatTurnStart("client-1", 900);
+    emitRun1AssistantText(createHarness({ now: 1_000 }), "Hello world");
+    expect(consumeChatTurnTtftMs("client-1")).toBe(100);
+  });
+
+  it("records ttft from the first thinking delta for the client run", () => {
+    const harness = createHarness();
+    harness.chatRunState.registry.add("run-1", {
+      sessionKey: "session-1",
+      clientRunId: "client-1",
+    });
+    recordChatTurnStart("client-1", 900);
+    harness.handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "thinking",
+      ts: 980,
+      data: { delta: "thinking..." },
+    });
+    expect(consumeChatTurnTtftMs("client-1")).toBe(80);
   });
 
   it("does not emit chat delta for thinking stream events", () => {

@@ -13,6 +13,8 @@ type ReportSessionCompletionParams = {
   senderName?: string;
   senderUsername?: string;
   senderE164?: string;
+  ttftMs?: number;
+  ttlrMs?: number;
   cfg: OpenClawConfig;
 };
 
@@ -62,6 +64,13 @@ const toIsoTimestamp = (value: unknown): string | null => {
     return new Date(value).toISOString();
   }
   return null;
+};
+
+const normalizeMetricMs = (value: unknown): number | null => {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  return Math.max(0, Math.round(value));
 };
 
 const getTextFromContent = (content: unknown): string | null => {
@@ -159,30 +168,45 @@ const buildRows = (params: {
   senderName: string | null;
   senderUsername: string | null;
   senderE164: string | null;
+  ttftMs: number | null;
+  ttlrMs: number | null;
   messages: ParsedMessage[];
 }): SupabaseChatRow[] => {
-  return params.messages.map((msg) => ({
-    workspace_id: params.workspaceId,
-    user_uid: params.userUid,
-    session_id: params.sessionId,
-    session_key: params.sessionKey,
-    message_id: msg.messageId,
-    parent_message_id: msg.parentMessageId,
-    role: msg.role,
-    content_text: msg.contentText,
-    content_json: msg.contentJson,
-    source: params.source,
-    conversation_id: params.conversationId,
-    message_timestamp: msg.messageTimestamp,
-    metadata: {
+  const assistantIndices = params.messages.flatMap((msg, index) => (msg.role === "assistant" ? [index] : []));
+  const firstAssistantIndex = assistantIndices[0] ?? -1;
+  const lastAssistantIndex = assistantIndices.at(-1) ?? -1;
+
+  return params.messages.map((msg, index) => {
+    const metadata: Record<string, unknown> = {
       messageSid: params.messageSid,
       senderId: params.senderId,
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
       raw: msg.rawEntry,
-    },
-  }));
+    };
+    if (index === firstAssistantIndex && params.ttftMs !== null) {
+      metadata.ttftMs = params.ttftMs;
+    }
+    if (index === lastAssistantIndex && params.ttlrMs !== null) {
+      metadata.ttlrMs = params.ttlrMs;
+    }
+    return {
+      workspace_id: params.workspaceId,
+      user_uid: params.userUid,
+      session_id: params.sessionId,
+      session_key: params.sessionKey,
+      message_id: msg.messageId,
+      parent_message_id: msg.parentMessageId,
+      role: msg.role,
+      content_text: msg.contentText,
+      content_json: msg.contentJson,
+      source: params.source,
+      conversation_id: params.conversationId,
+      message_timestamp: msg.messageTimestamp,
+      metadata,
+    };
+  });
 };
 
 const postRowsToSupabase = async (
@@ -280,6 +304,8 @@ export async function reportSessionCompletionToSupabase(
     senderName: trimOrNull(params.senderName),
     senderUsername: trimOrNull(params.senderUsername),
     senderE164: trimOrNull(params.senderE164),
+    ttftMs: normalizeMetricMs(params.ttftMs),
+    ttlrMs: normalizeMetricMs(params.ttlrMs),
     messages,
   });
   await postRowsToSupabase(supabaseUrl, anonKey, accessToken, rows);

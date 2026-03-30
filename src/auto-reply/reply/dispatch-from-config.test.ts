@@ -30,6 +30,13 @@ const internalHookMocks = vi.hoisted(() => ({
   createInternalHookEvent: vi.fn(),
   triggerInternalHook: vi.fn(async () => {}),
 }));
+const reportMocks = vi.hoisted(() => ({
+  reportSessionCompletionToSupabase: vi.fn(async () => {}),
+}));
+const turnMetricMocks = vi.hoisted(() => ({
+  recordChatTurnStart: vi.fn(),
+  consumeChatTurnTtftMs: vi.fn(() => undefined),
+}));
 
 vi.mock("./route-reply.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
@@ -63,6 +70,13 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
+}));
+vi.mock("../../infra/supabase-chat-report.js", () => ({
+  reportSessionCompletionToSupabase: reportMocks.reportSessionCompletionToSupabase,
+}));
+vi.mock("../../infra/chat-turn-metrics.js", () => ({
+  recordChatTurnStart: turnMetricMocks.recordChatTurnStart,
+  consumeChatTurnTtftMs: turnMetricMocks.consumeChatTurnTtftMs,
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
@@ -107,6 +121,7 @@ async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs,
 describe("dispatchReplyFromConfig", () => {
   beforeEach(() => {
     resetInboundDedupe();
+    vi.useRealTimers();
     diagnosticMocks.logMessageQueued.mockClear();
     diagnosticMocks.logMessageProcessed.mockClear();
     diagnosticMocks.logSessionStateChange.mockClear();
@@ -116,6 +131,10 @@ describe("dispatchReplyFromConfig", () => {
     internalHookMocks.createInternalHookEvent.mockClear();
     internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
     internalHookMocks.triggerInternalHook.mockClear();
+    reportMocks.reportSessionCompletionToSupabase.mockClear();
+    turnMetricMocks.recordChatTurnStart.mockClear();
+    turnMetricMocks.consumeChatTurnTtftMs.mockReset();
+    turnMetricMocks.consumeChatTurnTtftMs.mockReturnValue(undefined);
   });
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     setNoAbort();
@@ -167,6 +186,117 @@ describe("dispatchReplyFromConfig", () => {
         to: "telegram:999",
         accountId: "acc-1",
         threadId: 123,
+      }),
+    );
+  });
+
+  it("reports ttft and ttlr for streamed assistant replies", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-30T00:00:00.000Z"));
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "webchat",
+      SessionKey: "agent:main:main",
+      MessageSid: "run-123",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      vi.advanceTimersByTime(120);
+      await opts?.onBlockReply?.({ text: "First chunk" });
+      vi.advanceTimersByTime(380);
+      return { text: "Final reply" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(reportMocks.reportSessionCompletionToSupabase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        messageSid: "run-123",
+        ttftMs: 120,
+        ttlrMs: 500,
+      }),
+    );
+  });
+
+  it("counts reasoning text toward ttft", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-30T00:00:00.000Z"));
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "webchat",
+      SessionKey: "agent:main:main",
+      MessageSid: "run-456",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      vi.advanceTimersByTime(80);
+      await opts?.onBlockReply?.({ text: "Reasoning:\n_thinking..._", isReasoning: true });
+      vi.advanceTimersByTime(220);
+      return { text: "Final reply" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(reportMocks.reportSessionCompletionToSupabase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        messageSid: "run-456",
+        ttftMs: 80,
+        ttlrMs: 300,
+      }),
+    );
+  });
+
+  it("prefers gateway first-delta ttft when available", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-30T00:00:00.000Z"));
+    turnMetricMocks.consumeChatTurnTtftMs.mockReturnValue(45);
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "webchat",
+      SessionKey: "agent:main:main",
+      MessageSid: "run-789",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      vi.advanceTimersByTime(300);
+      return { text: "Final reply" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(turnMetricMocks.recordChatTurnStart).toHaveBeenCalledWith("run-789", expect.any(Number));
+    expect(turnMetricMocks.consumeChatTurnTtftMs).toHaveBeenCalledWith("run-789");
+    expect(reportMocks.reportSessionCompletionToSupabase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageSid: "run-789",
+        ttftMs: 45,
+        ttlrMs: 300,
       }),
     );
   });
