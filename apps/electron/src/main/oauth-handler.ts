@@ -3,7 +3,7 @@
  * Provides browser-based OAuth authentication for Bustly login and model providers
  */
 
-import { app, shell } from "electron";
+import { shell } from "electron";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { loginOpenAICodex, loginAntigravity } from "@mariozechner/pi-ai";
@@ -18,66 +18,10 @@ let oauthPromptResolver: ((value: string) => void) | null = null;
 
 /** Default port for OAuth callback server (separate from gateway to avoid conflicts). */
 const DEFAULT_OAUTH_CALLBACK_PORT = 17900;
-const DEFAULT_BUSTLY_CLIENT_ID = "openclaw-desktop";
-const DEFAULT_BUSTLY_TEST_WEB_BASE_URL = "https://test-www.bustly.shop";
-const DEFAULT_BUSTLY_TEST_API_BASE_URL = "https://test.agent-api.bustly.shop/java";
-const DEFAULT_BUSTLY_PROD_WEB_BASE_URL = "https://www.bustly.shop";
-const DEFAULT_BUSTLY_PROD_API_BASE_URL = "https://gateway.bustly.shop";
 
 let oauthServer: ReturnType<typeof createServer> | null = null;
 let oauthServerPort: number | null = null;
 let oauthCodeResolver: ((code: string) => void) | null = null;
-
-function shouldUseProdBustlyEndpoints(): boolean {
-  const envHint = process.env.BUSTLY_ENV?.trim().toLowerCase();
-  if (envHint === "prod" || envHint === "production") {
-    return true;
-  }
-  if (envHint === "test" || envHint === "internal" || envHint === "dev" || envHint === "development") {
-    return false;
-  }
-  if (!app.isPackaged) {
-    return false;
-  }
-  const version = app.getVersion().toLowerCase();
-  return !version.includes("beta") && !version.includes("test");
-}
-
-function resolveBustlyOAuthConfig(): {
-  apiBaseUrl: string;
-  webBaseUrl: string;
-  clientId: string;
-  source: "env" | "fallback-test" | "fallback-prod";
-} {
-  const envApiBaseUrl = process.env.BUSTLY_API_BASE_URL?.trim();
-  const envWebBaseUrl = process.env.BUSTLY_WEB_BASE_URL?.trim();
-  const envClientId = process.env.BUSTLY_CLIENT_ID?.trim();
-
-  if (envApiBaseUrl && envWebBaseUrl && envClientId) {
-    return {
-      apiBaseUrl: envApiBaseUrl,
-      webBaseUrl: envWebBaseUrl,
-      clientId: envClientId,
-      source: "env",
-    };
-  }
-
-  if (shouldUseProdBustlyEndpoints()) {
-    return {
-      apiBaseUrl: envApiBaseUrl || DEFAULT_BUSTLY_PROD_API_BASE_URL,
-      webBaseUrl: envWebBaseUrl || DEFAULT_BUSTLY_PROD_WEB_BASE_URL,
-      clientId: envClientId || DEFAULT_BUSTLY_CLIENT_ID,
-      source: "fallback-prod",
-    };
-  }
-
-  return {
-    apiBaseUrl: envApiBaseUrl || DEFAULT_BUSTLY_TEST_API_BASE_URL,
-    webBaseUrl: envWebBaseUrl || DEFAULT_BUSTLY_TEST_WEB_BASE_URL,
-    clientId: envClientId || DEFAULT_BUSTLY_CLIENT_ID,
-    source: "fallback-test",
-  };
-}
 
 /**
  * Get OAuth callback port from config, with fallback to default value
@@ -101,7 +45,16 @@ export function generateLoginUrl(
   loginTraceId: string,
   redirectUri: string,
 ): string {
-  const { apiBaseUrl, webBaseUrl, clientId, source } = resolveBustlyOAuthConfig();
+  // Load config from environment variables
+  const apiBaseUrl = process.env.BUSTLY_API_BASE_URL;
+  const webBaseUrl = process.env.BUSTLY_WEB_BASE_URL;
+  const clientId = process.env.BUSTLY_CLIENT_ID;
+
+  if (!apiBaseUrl || !webBaseUrl || !clientId) {
+    throw new Error(
+      "Bustly OAuth configuration not found. Please set BUSTLY_API_BASE_URL, BUSTLY_WEB_BASE_URL, and BUSTLY_CLIENT_ID environment variables.",
+    );
+  }
 
   const state = BustlyOAuth.readBustlyOAuthState();
   const deviceId = state?.deviceId ?? "";
@@ -112,7 +65,6 @@ export function generateLoginUrl(
   console.log("[Bustly OAuth] generateLoginUrl - apiBaseUrl:", apiBaseUrl);
   console.log("[Bustly OAuth] generateLoginUrl - webBaseUrl:", webBaseUrl);
   console.log("[Bustly OAuth] generateLoginUrl - clientId:", clientId);
-  console.log("[Bustly OAuth] generateLoginUrl - config source:", source);
 
   // Build the OAuth URL with all the parameters
   const params = new URLSearchParams({
@@ -397,9 +349,15 @@ export async function exchangeToken(code: string): Promise<BustlyTokenApiRespons
   console.log("[Bustly OAuth] Exchanging authorization code for access token");
   console.log("[Bustly OAuth] Auth code:", code.substring(0, 10) + "...");
 
-  const { apiBaseUrl, clientId, source } = resolveBustlyOAuthConfig();
+  const clientId = process.env.BUSTLY_CLIENT_ID ?? "openclaw-desktop";
   console.log("[Bustly OAuth] Client ID:", clientId);
-  console.log("[Bustly OAuth] exchangeToken - config source:", source);
+
+  const apiBaseUrl = process.env.BUSTLY_API_BASE_URL;
+  if (!apiBaseUrl) {
+    throw new Error(
+      "Bustly OAuth configuration not found. Please set BUSTLY_API_BASE_URL environment variable.",
+    );
+  }
   const apiEndpoint = `${apiBaseUrl.replace(/\/+$/, "")}/api/oauth/getToken`;
   console.log("[Bustly OAuth] API endpoint:", apiEndpoint);
 

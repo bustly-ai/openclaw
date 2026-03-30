@@ -117,29 +117,11 @@ function parseDotEnv(content: string): Record<string, string> {
 }
 
 function loadMainProcessEnvFromDotEnv(): void {
-  const envSearchBases = [
-    resolve(__dirname, "../"),
-    resolve(__dirname, "../../"),
-    process.cwd(),
+  const envPathCandidates = [
+    resolve(__dirname, "../../.env"),
+    resolve(__dirname, "../.env"),
+    resolve(process.cwd(), ".env"),
   ];
-  const preferredEnvFiles = [
-    ".env",
-    (process.env.NODE_ENV === "development" || !app.isPackaged) ? ".env.internal" : ".env.production",
-    ".env.internal",
-    ".env.production",
-  ];
-  const seen = new Set<string>();
-  const envPathCandidates: string[] = [];
-  for (const base of envSearchBases) {
-    for (const filename of preferredEnvFiles) {
-      const candidate = resolve(base, filename);
-      if (seen.has(candidate)) {
-        continue;
-      }
-      seen.add(candidate);
-      envPathCandidates.push(candidate);
-    }
-  }
   for (const envPath of envPathCandidates) {
     if (!existsSync(envPath)) {
       continue;
@@ -498,22 +480,10 @@ function normalizeDeepLinkRoute(route: string | null | undefined): string | null
 
 function resolveBustlyWebBaseUrl(): string {
   const baseUrl = process.env.BUSTLY_WEB_BASE_URL?.trim();
-  if (baseUrl) {
-    return baseUrl.replace(/\/+$/, "");
+  if (!baseUrl) {
+    throw new Error("Missing BUSTLY_WEB_BASE_URL");
   }
-  const envHint = process.env.BUSTLY_ENV?.trim().toLowerCase();
-  const forceProd = envHint === "prod" || envHint === "production";
-  const forceTest =
-    envHint === "test" || envHint === "internal" || envHint === "dev" || envHint === "development";
-  const isProdBuild =
-    app.isPackaged &&
-    !app.getVersion().toLowerCase().includes("beta") &&
-    !app.getVersion().toLowerCase().includes("test");
-  const fallback = (forceProd || (!forceTest && isProdBuild))
-    ? "https://www.bustly.shop"
-    : "https://test-www.bustly.shop";
-  console.warn("[Bustly OAuth] BUSTLY_WEB_BASE_URL missing; using fallback:", fallback);
-  return fallback;
+  return baseUrl.replace(/\/+$/, "");
 }
 
 function buildBustlyAdminUrl(params: Record<string, string | null | undefined>, path?:string): string {
