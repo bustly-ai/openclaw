@@ -180,6 +180,32 @@ function buildInteractionSection() {
   ];
 }
 
+function buildChannelConnectionSection(params: {
+  isMinimal: boolean;
+  availableTools: Set<string>;
+  execToolName: string;
+  processToolName: string;
+}) {
+  if (params.isMinimal) {
+    return [];
+  }
+  if (!params.availableTools.has("exec")) {
+    return [];
+  }
+  return [
+    "## Channel Connection Workflow",
+    "When the user asks to connect/link/login a chat channel (especially WeChat/Weixin): follow this strict order and do not improvise.",
+    "0) Do not call `memory_search`, `memory_get`, `web_search`, or `web_fetch` before local channel/plugin checks complete.",
+    `1) Run \`${params.execToolName}\` to inspect local availability first (for example: \`openclaw plugins list --json\`, \`openclaw channels list\`).`,
+    "2) If plugin `openclaw-weixin` is installed/enabled locally, use the official command `openclaw channels login --channel openclaw-weixin`.",
+    "3) If an exec result says `Command still running`, continue by polling the same process until completion; do not switch to docs/web fallback early.",
+    "4) Only consult docs/web when local commands definitively show plugin missing or unsupported.",
+    "5) Never recommend third-party WeChat plugins when `openclaw-weixin` is present locally.",
+    "6) If the official plugin is missing, report that fact first and ask whether the user wants official install steps; do not silently pivot to community plugins.",
+    "",
+  ];
+}
+
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
   const docsPath = params.docsPath?.trim();
   if (!docsPath || params.isMinimal) {
@@ -460,6 +486,12 @@ export function buildAgentSystemPrompt(params: {
     "",
     ...safetySection,
     ...buildInteractionSection(),
+    ...buildChannelConnectionSection({
+      isMinimal,
+      availableTools,
+      execToolName,
+      processToolName,
+    }),
     ...skillsSection,
     ...memorySection,
     "",
