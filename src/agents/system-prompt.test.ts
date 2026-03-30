@@ -200,6 +200,33 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("includes strict channel connection workflow when command tools are available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "process", "memory_search", "web_fetch"],
+    });
+
+    expect(prompt).toContain("## Channel Connection Workflow");
+    expect(prompt).toContain(
+      "When the user asks to connect/link/login a chat channel (especially WeChat/Weixin): follow this strict order and do not improvise.",
+    );
+    expect(prompt).toContain(
+      "0) Do not call `memory_search`, `memory_get`, `web_search`, or `web_fetch` before local channel/plugin checks complete.",
+    );
+    expect(prompt).toContain(
+      "2) If plugin `openclaw-weixin` is installed/enabled locally, use the official command `openclaw channels login --channel openclaw-weixin`.",
+    );
+  });
+
+  it("omits channel connection workflow when exec tool is unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["memory_search", "web_fetch"],
+    });
+
+    expect(prompt).not.toContain("## Channel Connection Workflow");
+  });
+
   it("includes voice hint when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
