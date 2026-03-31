@@ -17,6 +17,7 @@ const BUSTLY_AGENT_PREFIX = "bustly-";
 const BUSTLY_WORKSPACES_DIRNAME = "workspaces";
 const BUSTLY_AGENTS_DIRNAME = "agents";
 const DEFAULT_BUSTLY_AGENT_NAME = "overview";
+const UUID_PREFIX_RE = /^([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {
@@ -133,6 +134,15 @@ function normalizeBustlyToken(value: string | undefined): string {
   return trimmed.replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
 }
 
+function normalizeBustlyWorkspaceId(value: string | undefined): string {
+  const normalized = normalizeBustlyToken(value);
+  if (!normalized) {
+    return "";
+  }
+  const uuidPrefix = UUID_PREFIX_RE.exec(normalized)?.[1]?.toLowerCase();
+  return uuidPrefix || normalized;
+}
+
 function buildBustlyWorkspaceAgentId(
   workspaceId: string | undefined,
   agentName: string = DEFAULT_BUSTLY_AGENT_NAME,
@@ -141,7 +151,7 @@ function buildBustlyWorkspaceAgentId(
   if (!trimmed) {
     return null;
   }
-  const normalizedWorkspaceId = normalizeBustlyToken(trimmed);
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(trimmed);
   if (!normalizedWorkspaceId) {
     return null;
   }
@@ -201,7 +211,7 @@ function resolveOAuthBustlyWorkspaceAgentDir(agentId: string): string | null {
     if (!workspaceId || oauthAgentId !== agentId) {
       return null;
     }
-    const normalizedWorkspaceId = normalizeBustlyToken(workspaceId);
+    const normalizedWorkspaceId = normalizeBustlyWorkspaceId(workspaceId);
     if (!normalizedWorkspaceId) {
       return null;
     }

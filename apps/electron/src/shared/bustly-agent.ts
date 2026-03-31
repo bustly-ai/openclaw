@@ -2,6 +2,7 @@ const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
 const LEADING_DASH_RE = /^-+/;
 const TRAILING_DASH_RE = /-+$/;
+const UUID_PREFIX_RE = /^([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const DEFAULT_BUSTLY_AGENT_NAME = "overview";
 
 function normalizeToken(value: string | undefined | null): string {
@@ -21,7 +22,12 @@ function normalizeToken(value: string | undefined | null): string {
 }
 
 export function normalizeBustlyWorkspaceId(value: string | undefined | null): string {
-  return normalizeToken(value);
+  const normalized = normalizeToken(value);
+  if (!normalized) {
+    return "";
+  }
+  const uuidPrefix = UUID_PREFIX_RE.exec(normalized)?.[1]?.toLowerCase();
+  return uuidPrefix || normalized;
 }
 
 export function normalizeBustlyAgentName(value: string | undefined | null): string {

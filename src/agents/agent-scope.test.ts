@@ -348,7 +348,7 @@ describe("resolveAgentConfig", () => {
       expect.arrayContaining([
         "bustly-local-workspace-overview",
         "bustly-local-workspace-finance",
-        "bustly-9a85bcbe-a783-4b37-81d1-229d176e9d87-overview",
+        "bustly-9a85bcbe-overview",
       ]),
     );
   });
@@ -356,16 +356,16 @@ describe("resolveAgentConfig", () => {
   it("uses the Bustly workspaces directory for dynamic workspace agents", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bustly-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    fs.mkdirSync(path.join(stateDir, "workspaces", "9a85bcbe-a783-4b37-81d1-229d176e9d87", "agents", "overview"), {
+    fs.mkdirSync(path.join(stateDir, "workspaces", "9a85bcbe", "agents", "overview"), {
       recursive: true,
     });
 
     const workspace = resolveAgentWorkspaceDir(
       { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig,
-      "bustly-9a85bcbe-a783-4b37-81d1-229d176e9d87-overview",
+      "bustly-9a85bcbe-overview",
     );
     expect(workspace).toBe(
-      path.join(stateDir, "workspaces", "9a85bcbe-a783-4b37-81d1-229d176e9d87", "agents", "overview"),
+      path.join(stateDir, "workspaces", "9a85bcbe", "agents", "overview"),
     );
   });
 });

@@ -1,6 +1,7 @@
 import type { SessionIconId } from "../renderer/lib/session-icons.js";
 import {
   DEFAULT_BUSTLY_AGENT_NAME,
+  normalizeBustlyAgentName,
   resolveBustlyAgentNameFromAgentId,
   resolveBustlyAgentNameFromSessionKey,
 } from "./bustly-agent.js";
@@ -20,6 +21,16 @@ export type BustlyPresetChannel = {
   model?: string;
   useCases: BustlyPresetUseCase[];
 };
+
+function createBustlyPresetChannel(
+  channel: Omit<BustlyPresetChannel, "slug"> & { slug?: string },
+): BustlyPresetChannel {
+  return {
+    ...channel,
+    // Keep the persisted agent slug aligned with the visible label.
+    slug: normalizeBustlyAgentName(channel.slug ?? channel.label),
+  };
+}
 
 export const BUSTLY_MAIN_AGENT_PRESET = {
   label: "Overview",
@@ -45,8 +56,7 @@ export const BUSTLY_MAIN_AGENT_PRESET = {
 };
 
 export const BUSTLY_PRESET_CHANNELS: BustlyPresetChannel[] = [
-  {
-    slug: "daily-ops",
+  createBustlyPresetChannel({
     label: "Marketing",
     icon: "TrendUp",
     order: 10,
@@ -67,9 +77,8 @@ export const BUSTLY_PRESET_CHANNELS: BustlyPresetChannel[] = [
         prompt: "Pinpoint where demand is leaking across the funnel, from traffic to click, conversion, and checkout.",
       },
     ],
-  },
-  {
-    slug: "campaigns",
+  }),
+  createBustlyPresetChannel({
     label: "Store Ops",
     icon: "Storefront",
     order: 20,
@@ -90,9 +99,8 @@ export const BUSTLY_PRESET_CHANNELS: BustlyPresetChannel[] = [
         prompt: "Surface products with abnormal sales drops, high return rates, or unusual discount pressure.",
       },
     ],
-  },
-  {
-    slug: "inventory",
+  }),
+  createBustlyPresetChannel({
     label: "Customers",
     icon: "Users",
     order: 30,
@@ -113,9 +121,8 @@ export const BUSTLY_PRESET_CHANNELS: BustlyPresetChannel[] = [
         prompt: "Reveal which customer segments contribute the most long-term value, repeat revenue, and profitability.",
       },
     ],
-  },
-  {
-    slug: "support",
+  }),
+  createBustlyPresetChannel({
     label: "Finance",
     icon: "Wallet",
     order: 40,
@@ -136,7 +143,7 @@ export const BUSTLY_PRESET_CHANNELS: BustlyPresetChannel[] = [
         prompt: "Turn financial metrics into clear business signals, such as rising discount dependency or concentrated refund pressure.",
       },
     ],
-  },
+  }),
 ];
 
 export function resolveBustlyPresetUseCases(params: {
