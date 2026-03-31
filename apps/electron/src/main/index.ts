@@ -36,8 +36,6 @@ import {
 } from "./auto-init.js";
 import {
   ensureBundledOpenClawShim,
-  resolveBundledBustlyBinDir,
-  resolveNodeBinary,
   resolveOpenClawCliPath,
 } from "./cli-utils.js";
 import {
@@ -1632,13 +1630,8 @@ function buildElectronCliEnv(params?: {
       appPath,
     })
     : null;
-  const bundledBustlyBinDir = resolveBundledBustlyBinDir({
-    resourcesPath,
-    appPath,
-  });
   const effectivePath = prependPathEntries(fixedPath, [
     bundledCliShim?.shimDir,
-    bundledBustlyBinDir,
   ]);
   const bunInstall = process.env.BUN_INSTALL?.trim() || resolve(homeDir, ".bun");
   const homebrewPrefix = process.env.HOMEBREW_PREFIX?.trim() || "/opt/homebrew";
@@ -1684,10 +1677,9 @@ function buildElectronCliEnv(params?: {
     COLORTERM: process.env.COLORTERM?.trim() || "truecolor",
     TERM_PROGRAM: process.env.TERM_PROGRAM?.trim() || "OpenClaw",
     NODE_PATH: effectiveNodePath,
-    ...(bundledCliShim || bundledBustlyBinDir
+    ...(bundledCliShim
       ? {
         OPENCLAW_EXEC_PATH_PREPEND: [
-          bundledBustlyBinDir,
           bundledCliShim?.shimDir,
         ]
           .filter((value) => Boolean(value && value.length > 0))
@@ -2132,13 +2124,8 @@ async function startGateway(): Promise<boolean> {
       resourcesPath,
       appPath,
     });
-    const bundledBustlyBinDir = resolveBundledBustlyBinDir({
-      resourcesPath,
-      appPath,
-    });
     const effectivePath = prependPathEntries(fixedPath, [
       bundledCliShim?.shimDir,
-      bundledBustlyBinDir,
     ]);
     const appNodeModules = resolve(appPath, "node_modules");
     const resourcesNodeModules = resolve(resourcesPath, "node_modules");
@@ -2158,29 +2145,14 @@ async function startGateway(): Promise<boolean> {
       .filter((value) => Boolean(value && value.length > 0))
       .map((value) => `${value}(${existsSync(value!) ? "exists" : "missing"})`)
       .join(" | ");
-    const nodePath = resolveNodeBinary({ includeBundled: true });
-    if (!nodePath) {
-      writeMainLog("Failed to locate node binary in bundled resources.");
-      reject(new Error("Node binary not found for gateway worker"));
-      return;
-    }
-    try {
-      const nodeVersion = spawnSync(nodePath, ["-v"], { encoding: "utf-8" }).stdout?.trim();
-      const nodeArch = spawnSync(nodePath, ["-p", "process.arch"], { encoding: "utf-8" })
-        .stdout?.trim();
-      writeMainLog(
-        `Gateway node runtime: path=${nodePath} version=${nodeVersion ?? "unknown"} arch=${nodeArch ?? "unknown"}`,
-      );
-    } catch (error) {
-      writeMainLog(
-        `Gateway node runtime probe failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    const nodePath = process.execPath;
+    writeMainLog(`Gateway runtime: execPath=${nodePath} mode=electron-run-as-node`);
 
     const spawnEnv = buildElectronCliEnv({ cliPath, oauthCallbackPort });
     if (existsSync(bundledPluginsDir)) {
       spawnEnv.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
     }
+    spawnEnv.ELECTRON_RUN_AS_NODE = "1";
     spawnEnv.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
     spawnEnv.OPENCLAW_ELECTRON_GATEWAY_BIND = gatewayBind;
     if (gatewayToken) {

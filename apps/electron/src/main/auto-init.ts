@@ -22,7 +22,7 @@ import {
   setOpenrouterApiKey,
 } from "../../../../src/commands/onboard-auth";
 import { applyPrimaryModel } from "../../../../src/commands/model-picker";
-import { resolveCliInvocation, resolveOpenClawCliPath } from "./cli-utils.js";
+import { resolveOpenClawCliPath } from "./cli-utils.js";
 import {
   ELECTRON_DEFAULT_MODEL,
   ELECTRON_OPENCLAW_PROFILE,
@@ -155,16 +155,11 @@ async function runCliOnboard(options: InitializationOptions): Promise<void> {
     args.push("--auth-choice", "skip");
   }
 
-  const invocation = resolveCliInvocation(cliPath, args, { includeBundledNode: true });
-  if (!invocation) {
-    throw new Error("Node binary not found in bundled resources.");
-  }
-  const command = invocation.command;
-  const commandArgs = invocation.args;
   const loginShellEnv = loadLoginShellEnvironment();
   const env = {
     ...process.env,
     ...loginShellEnv,
+    ELECTRON_RUN_AS_NODE: "1",
     OPENCLAW_LOAD_SHELL_ENV: "1",
     OPENCLAW_PROFILE: ELECTRON_OPENCLAW_PROFILE,
     OPENCLAW_STATE_DIR: resolveElectronIsolatedStateDir(),
@@ -172,7 +167,7 @@ async function runCliOnboard(options: InitializationOptions): Promise<void> {
   };
 
   await new Promise<void>((resolvePromise, rejectPromise) => {
-    execFile(command, commandArgs, { env }, (error) => {
+    execFile(process.execPath, [cliPath, ...args], { env }, (error) => {
       if (error) {
         rejectPromise(error);
         return;
