@@ -2308,7 +2308,7 @@ async function startGateway(): Promise<boolean> {
       const output = data.toString().trim();
       if (output) {
         pushRecent(recentStderr, output);
-        writeMainLog(`Gateway stderr: ${output}`);
+        writeMainError(`Gateway stderr: ${output}`);
       }
       mainWindow?.webContents.send("gateway-log", { stream: "stderr", message: output });
     });
