@@ -22,9 +22,11 @@ type AppStateContextValue = {
   gatewayPhase: GatewayPhase;
   gatewayReady: boolean;
   gatewayMessage: string | null;
+  gatewayCanRestoreLastGoodConfig: boolean;
   error: string | null;
   refreshAppState: () => Promise<void>;
   ensureGatewayReady: () => Promise<boolean>;
+  restoreGatewayLastGoodConfig: () => Promise<boolean>;
 };
 
 const AppStateContext = createContext<AppStateContextValue | null>(null);
@@ -76,8 +78,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [checking, setChecking] = useState(true);
   const [gatewayPhase, setGatewayPhase] = useState<GatewayPhase>("idle");
   const [gatewayMessage, setGatewayMessage] = useState<string | null>(null);
+  const [gatewayCanRestoreLastGoodConfig, setGatewayCanRestoreLastGoodConfig] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ensurePromiseRef = useRef<Promise<boolean> | null>(null);
+  const ensureRunIdRef = useRef(0);
 
   const refreshAppState = useCallback(async () => {
     if (!window.electronAPI) {
@@ -99,6 +103,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setInitialized(nextInitialized);
       setLoggedIn(nextLoggedIn);
       setError(null);
+      setGatewayCanRestoreLastGoodConfig(false);
       if (!nextLoggedIn || !nextInitialized) {
         setGatewayPhase("idle");
         setGatewayMessage(null);
@@ -114,12 +119,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     if (!window.electronAPI?.gatewayStatus || !window.electronAPI.gatewayConnectConfig) {
       setGatewayPhase("error");
       setGatewayMessage(null);
+      setGatewayCanRestoreLastGoodConfig(false);
       setError("Electron gateway APIs are unavailable");
       return false;
     }
     if (ensurePromiseRef.current) {
       return ensurePromiseRef.current;
     }
+    const runId = ensureRunIdRef.current + 1;
+    ensureRunIdRef.current = runId;
+    const isStale = () => ensureRunIdRef.current !== runId;
 
     const task = (async () => {
       const deadline = Date.now() + 30_000;
@@ -128,13 +137,23 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
       try {
         while (Date.now() < deadline) {
+          if (isStale()) {
+            return false;
+          }
           const status = await window.electronAPI.gatewayStatus();
+          if (isStale()) {
+            return false;
+          }
           setGatewayStatus(status);
 
           if (!status.running && !started) {
             started = true;
+            if (isStale()) {
+              return false;
+            }
             setGatewayPhase("starting");
             setGatewayMessage("Starting gateway...");
+            setGatewayCanRestoreLastGoodConfig(false);
             const startResult = await window.electronAPI.gatewayStart();
             if (!startResult.success) {
               lastError = startResult.error ?? "Failed to start gateway";
@@ -143,12 +162,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           }
 
           if (status.running) {
+            if (isStale()) {
+              return false;
+            }
             setGatewayPhase("checking");
             setGatewayMessage("Waiting for gateway...");
+            setGatewayCanRestoreLastGoodConfig(false);
             try {
               const connectConfig = await window.electronAPI.gatewayConnectConfig();
               if (connectConfig.wsUrl) {
                 await openGatewayProbe(connectConfig.wsUrl, connectConfig.token ?? undefined);
+                if (isStale()) {
+                  return false;
+                }
                 setGatewayPhase("ready");
                 setGatewayMessage(null);
                 return true;
@@ -166,8 +192,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         lastError = err instanceof Error ? err.message : String(err);
       }
 
+      if (isStale()) {
+        return false;
+      }
       setGatewayPhase("error");
       setGatewayMessage(null);
+      setGatewayCanRestoreLastGoodConfig(false);
       setError(lastError);
       return false;
     })();
@@ -177,6 +207,27 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     });
     return ensurePromiseRef.current;
   }, []);
+
+  const restoreGatewayLastGoodConfig = useCallback(async () => {
+    if (!window.electronAPI?.gatewayRestoreLastGoodConfig) {
+      setGatewayPhase("error");
+      setError("Electron gateway recovery API is unavailable");
+      return false;
+    }
+    ensureRunIdRef.current += 1;
+    setGatewayPhase("starting");
+    setGatewayMessage("Restoring last working gateway config...");
+    setGatewayCanRestoreLastGoodConfig(false);
+    setError(null);
+    const result = await window.electronAPI.gatewayRestoreLastGoodConfig();
+    if (!result.success) {
+      setGatewayPhase("error");
+      setGatewayMessage(null);
+      setError(result.error ?? "Failed to restore last working gateway config");
+      return false;
+    }
+    return await ensureGatewayReady();
+  }, [ensureGatewayReady]);
 
   useEffect(() => {
     void refreshAppState();
@@ -202,26 +253,31 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       if (data.phase === "starting") {
         setGatewayPhase("starting");
         setGatewayMessage(data.message ?? "Starting gateway...");
+        setGatewayCanRestoreLastGoodConfig(false);
         setError(null);
         return;
       }
       if (data.phase === "stopping") {
         setGatewayPhase("starting");
         setGatewayMessage(data.message ?? "Restarting gateway...");
+        setGatewayCanRestoreLastGoodConfig(false);
         setError(null);
         return;
       }
       if (data.phase === "ready") {
         setGatewayPhase("checking");
         setGatewayMessage("Waiting for gateway...");
+        setGatewayCanRestoreLastGoodConfig(false);
         setError(null);
         void ensureGatewayReady().then(() => {
           void refreshAppState();
         });
         return;
       }
+      ensureRunIdRef.current += 1;
       setGatewayPhase("error");
       setGatewayMessage(null);
+      setGatewayCanRestoreLastGoodConfig(data.canRestoreLastGoodConfig === true);
       if (data.message) {
         setError(data.message);
       }
@@ -280,9 +336,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       gatewayPhase,
       gatewayReady: gatewayPhase === "ready",
       gatewayMessage,
+      gatewayCanRestoreLastGoodConfig,
       error,
       refreshAppState,
       ensureGatewayReady,
+      restoreGatewayLastGoodConfig,
     }),
     [
       appInfo,
@@ -292,9 +350,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       gatewayMessage,
       gatewayPhase,
       gatewayStatus,
+      gatewayCanRestoreLastGoodConfig,
       initialized,
       loggedIn,
       refreshAppState,
+      restoreGatewayLastGoodConfig,
     ],
   );
 

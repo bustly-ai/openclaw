@@ -209,6 +209,42 @@ describe("gateway broadcaster", () => {
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
     expect(pairingSocket.send).toHaveBeenCalledTimes(1);
   });
+
+  it("drops events for slow clients without closing the socket", () => {
+    const slowSocket: TestSocket = {
+      bufferedAmount: 60 * 1024 * 1024,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const healthySocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+
+    const clients = new Set<GatewayWsClient>([
+      {
+        socket: slowSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+        connId: "c-slow",
+      },
+      {
+        socket: healthySocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+        connId: "c-healthy",
+      },
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("agent", { data: { kind: "message" } });
+    broadcast("tick", { ts: 1 }, { dropIfSlow: true });
+
+    expect(slowSocket.send).not.toHaveBeenCalled();
+    expect(slowSocket.close).not.toHaveBeenCalled();
+    expect(healthySocket.send).toHaveBeenCalledTimes(2);
+    expect(healthySocket.close).not.toHaveBeenCalled();
+  });
 });
 
 describe("chat run registry", () => {

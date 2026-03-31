@@ -133,6 +133,8 @@ function buildMessagingSection(params: {
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
+    "- sessions_send returns `status: \"ok\"` once the target session accepts the message; any agent-to-agent follow-up continues in the background.",
+    "- If sessions_send returns `acceptance.status = \"received\"` with `acceptance.replyStatus = \"pending\"`, treat that as: the other session has received the message and may reply later. Do not describe it as a failure or as \"no reply\".",
     "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
     "- `[System Message] ...` blocks are internal context and are not user-visible by default.",
     `- If a \`[System Message]\` reports completed cron/subagent work and asks for a user update, rewrite it in your normal assistant voice and send that update (do not forward raw system text or default to ${SILENT_REPLY_TOKEN}).`,

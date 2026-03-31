@@ -98,15 +98,10 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         continue;
       }
       const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
-      if (slow && opts?.dropIfSlow) {
-        continue;
-      }
       if (slow) {
-        try {
-          c.socket.close(1008, "slow consumer");
-        } catch {
-          /* ignore */
-        }
+        // Dropping a broadcast for a backed-up client is safer than force-closing
+        // the connection. The client can recover via seq-gap resync without losing
+        // the whole websocket session.
         continue;
       }
       try {

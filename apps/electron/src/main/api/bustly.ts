@@ -98,7 +98,6 @@ export async function supabaseFetch(params: SupabaseFetchParams): Promise<Respon
     ...params.headers,
   };
 
-  console.log("[Supabase API] Request:", params.method ?? "GET", endpoint);
   return fetch(endpoint, {
     method: params.method ?? "GET",
     headers,
@@ -119,8 +118,6 @@ export async function refreshSupabaseAuth(): Promise<SupabaseRefreshResult> {
   }
 
   const endpoint = `${supabaseUrl.replace(/\/+$/, "")}/auth/v1/token?grant_type=refresh_token`;
-  console.log("[Supabase API] Refresh request:", endpoint);
-
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -133,7 +130,6 @@ export async function refreshSupabaseAuth(): Promise<SupabaseRefreshResult> {
     }),
   });
 
-  console.log("[Supabase API] Refresh response:", response.status, response.statusText);
   if (!response.ok) {
     const errorText = await response.text();
     return { ok: false, status: response.status, errorText };
@@ -148,12 +144,10 @@ export async function verifySupabaseAuth(): Promise<SupabaseVerifyResult> {
     path: "/auth/v1/user",
     method: "GET",
   });
-  console.log("[Supabase API] Verify auth response:", response.status, response.statusText);
   if (!response.ok) {
     return { ok: false, status: response.status };
   }
 
   const data = (await response.json()) as SupabaseUserResponse;
-  console.log("[Supabase API] Verify auth user:", data.id ?? "unknown");
   return { ok: true, status: response.status, data };
 }

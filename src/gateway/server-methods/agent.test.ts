@@ -81,6 +81,8 @@ const makeContext = (): GatewayRequestContext =>
   ({
     dedupe: new Map(),
     addChatRun: vi.fn(),
+    broadcast: vi.fn(),
+    nodeSendToSession: vi.fn(),
     logGateway: { info: vi.fn(), error: vi.fn() },
   }) as unknown as GatewayRequestContext;
 
@@ -218,6 +220,41 @@ async function invokeAgentIdentityGet(
 }
 
 describe("gateway agent handler", () => {
+  it("broadcasts accepted user input to the target session for live UI updates", async () => {
+    primeMainAgentRun();
+    const context = makeContext();
+
+    await invokeAgent(
+      {
+        message: "Hello from another agent",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-live-input",
+      },
+      { context, reqId: "live-input-1" },
+    );
+
+    expect(context.broadcast).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        state: "final",
+        message: expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: "Hello from another agent" }],
+        }),
+      }),
+    );
+    expect(context.nodeSendToSession).toHaveBeenCalledWith(
+      "agent:main:main",
+      "chat",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        state: "final",
+      }),
+    );
+  });
+
   it("preserves cliSessionIds from existing session entry", async () => {
     const existingCliSessionIds = { "claude-cli": "abc-123-def" };
     const existingClaudeCliSessionId = "abc-123-def";

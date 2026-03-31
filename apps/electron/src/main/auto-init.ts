@@ -22,7 +22,7 @@ import {
   setOpenrouterApiKey,
 } from "../../../../src/commands/onboard-auth";
 import { applyPrimaryModel } from "../../../../src/commands/model-picker";
-import { resolveCliInvocation, resolveOpenClawCliPath } from "./cli-utils.js";
+import { resolveOpenClawCliPath } from "./cli-utils.js";
 import {
   ELECTRON_DEFAULT_MODEL,
   ELECTRON_OPENCLAW_PROFILE,
@@ -30,6 +30,7 @@ import {
   resolveElectronIsolatedConfigPath,
   resolveElectronIsolatedStateDir,
 } from "./defaults.js";
+import { writeMainError, writeMainInfo } from "./logger.js";
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 let lastInitializationLogSignature: string | null = null;
@@ -228,16 +229,11 @@ async function runCliOnboard(options: InitializationOptions): Promise<void> {
     args.push("--auth-choice", "skip");
   }
 
-  const invocation = resolveCliInvocation(cliPath, args, { includeBundledNode: true });
-  if (!invocation) {
-    throw new Error("Node binary not found in bundled resources.");
-  }
-  const command = invocation.command;
-  const commandArgs = invocation.args;
   const loginShellEnv = loadLoginShellEnvironment();
   const env = {
     ...process.env,
     ...loginShellEnv,
+    ELECTRON_RUN_AS_NODE: "1",
     OPENCLAW_LOAD_SHELL_ENV: "1",
     OPENCLAW_PROFILE: ELECTRON_OPENCLAW_PROFILE,
     OPENCLAW_PREFER_BUNDLED_PLUGINS: "1",
@@ -246,7 +242,7 @@ async function runCliOnboard(options: InitializationOptions): Promise<void> {
   };
 
   await new Promise<void>((resolvePromise, rejectPromise) => {
-    execFile(command, commandArgs, { env }, (error) => {
+    execFile(process.execPath, [cliPath, ...args], { env }, (error) => {
       if (error) {
         rejectPromise(error);
         return;
@@ -286,9 +282,9 @@ export async function initializeOpenClaw(
 
     // Check if config already exists
     if (!force && existsSync(configPath)) {
-      console.log("Configuration already exists, skipping initialization");
+      writeMainInfo("Configuration already exists, skipping initialization");
     } else {
-      console.log("Initializing OpenClaw via CLI onboarding...");
+      writeMainInfo("Initializing OpenClaw via CLI onboarding...");
       await runCliOnboard(configOptions);
       if (!existsSync(configPath)) {
         throw new Error("OpenClaw CLI did not create config file");
@@ -312,7 +308,7 @@ export async function initializeOpenClaw(
       workspace: resolvedWorkspace,
     };
   } catch (error) {
-    console.error("Initialization failed:", error);
+    writeMainError("Initialization failed:", error);
     return {
       success: false,
       configPath: "",
@@ -343,7 +339,7 @@ export function isFullyInitialized(): boolean {
       const signature = `missing:${configPath}`;
       if (lastInitializationLogSignature !== signature) {
         lastInitializationLogSignature = signature;
-        console.log(`[Init] Config file not found at ${configPath}`);
+        writeMainInfo(`[Init] Config file not found at ${configPath}`);
       }
       return false;
     }
@@ -366,7 +362,7 @@ export function isFullyInitialized(): boolean {
     ].join("|");
     if (lastInitializationLogSignature !== signature) {
       lastInitializationLogSignature = signature;
-      console.log(
+      writeMainInfo(
         `[Init] config=${configPath} initialized=${initialized} hasProfiles=${hasProfiles} hasPrimaryModel=${hasPrimaryModel} primary=${primary ?? ""}`,
       );
     }

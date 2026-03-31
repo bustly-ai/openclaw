@@ -67,6 +67,7 @@ interface GatewayExitData {
 interface GatewayLifecycleData {
   phase: "starting" | "stopping" | "ready" | "error";
   message: string | null;
+  canRestoreLastGoodConfig: boolean;
 }
 interface MainLogData {
   message: string;
@@ -96,6 +97,23 @@ interface BustlySupabaseConfig {
   userName: string;
 }
 
+interface BustlyWorkspaceAgent {
+  agentId: string;
+  agentName: string;
+  name: string;
+  icon?: string;
+  isMain: boolean;
+  updatedAt: number | null;
+}
+
+interface BustlyWorkspaceAgentSession {
+  agentId: string;
+  sessionKey: string;
+  name: string;
+  icon?: string;
+  updatedAt: number | null;
+}
+
 interface ElectronAPI {
   // OpenClaw initialization
   openclawInit: (options?: PresetConfigOptions) => Promise<InitializationResult>;
@@ -105,6 +123,7 @@ interface ElectronAPI {
   // Gateway management
   gatewayStart: (apiKey?: string) => Promise<{ success: boolean; error?: string }>;
   gatewayStop: () => Promise<{ success: boolean; error?: string }>;
+  gatewayRestoreLastGoodConfig: () => Promise<{ success: boolean; error?: string }>;
   gatewayStatus: () => Promise<GatewayStatus>;
   gatewayConnectConfig: () => Promise<GatewayConnectConfig>;
   gatewayPatchSession: (
@@ -139,7 +158,30 @@ interface ElectronAPI {
   bustlySetActiveWorkspace: (
     workspaceId: string,
     workspaceName?: string,
-  ) => Promise<{ success: boolean; agentId?: string; sessionKey?: string; error?: string }>;
+  ) => Promise<{ success: boolean; agentId?: string; error?: string }>;
+  bustlyListAgents: (workspaceId?: string) => Promise<BustlyWorkspaceAgent[]>;
+  bustlyListAgentSessions: (workspaceId: string, agentId: string) => Promise<BustlyWorkspaceAgentSession[]>;
+  bustlyCreateAgent: (
+    workspaceId: string,
+    name: string,
+    icon?: string,
+    workspaceName?: string,
+  ) => Promise<{ success: boolean; agentId?: string; error?: string }>;
+  bustlyCreateAgentSession: (params: {
+    workspaceId: string;
+    agentId: string;
+    label?: string;
+  }) => Promise<{ success: boolean; sessionKey?: string; error?: string }>;
+  bustlyUpdateAgent: (params: {
+    workspaceId: string;
+    agentId: string;
+    name?: string;
+    icon?: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+  bustlyDeleteAgent: (params: {
+    workspaceId: string;
+    agentId: string;
+  }) => Promise<{ success: boolean; error?: string }>;
   bustlyLogout: () => Promise<{ success: boolean; error?: string }>;
   bustlyOpenLogin: () => Promise<{ success: boolean; error?: string }>;
   bustlyOpenSettings: () => Promise<{ success: boolean; error?: string }>;

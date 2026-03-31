@@ -24,21 +24,17 @@ import openSidebarIcon from "../../assets/imgs/open_sidebar.svg";
 import {
   buildChatRoute,
   CollapsedScenariosIcon,
-  deriveScenarioLabel,
   getSessionIconComponent,
   resolveSessionIconComponent,
   SESSION_ICON_OPTIONS,
   type SessionIconId,
 } from "../../lib/session-icons";
 import { listWorkspaceSummaries, type WorkspaceSummary } from "../../lib/bustly-supabase";
-import { GatewayBrowserClient } from "../../lib/gateway-client";
-import { createGatewayInstanceId } from "../../lib/gateway-instance-id";
 import { useAppState } from "../../providers/AppStateProvider";
+import { useGlobalLoader } from "../../providers/GlobalLoaderProvider";
 import {
   buildBustlyWorkspaceAgentId,
-  buildBustlyWorkspaceMainSessionKey,
-  isAgentChannelSessionKey,
-  isAgentMainSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../../../shared/bustly-agent";
 import Skeleton from "../ui/Skeleton";
 import PortalTooltip from "../ui/PortalTooltip";
@@ -50,28 +46,24 @@ type ClientAppSidebarProps = {
 
 type SidebarTask = {
   id: string;
+  agentId: string;
   name: string;
   icon?: string;
   isMain?: boolean;
-  running?: boolean;
+  updatedAt?: number | null;
 };
 
-type GatewaySessionRow = {
-  key: string;
-  label?: string;
+type SidebarSession = {
+  id: string;
+  agentId: string;
+  name: string;
   icon?: string;
-  displayName?: string;
-  derivedTitle?: string;
-  updatedAt: number | null;
-};
-
-type SessionsListResult = {
-  sessions: GatewaySessionRow[];
+  running?: boolean;
+  updatedAt?: number | null;
 };
 
 const SIDEBAR_TASKS_REFRESH_EVENT = "openclaw:sidebar-refresh-tasks";
 const SIDEBAR_TASK_RUN_STATE_EVENT = "openclaw:sidebar-task-run-state";
-const SIDEBAR_CUSTOM_LABELS_STORAGE_KEY = "bustly.sidebar.custom-labels.v1";
 
 function notifySidebarTasksRefresh() {
   window.dispatchEvent(new Event(SIDEBAR_TASKS_REFRESH_EVENT));
@@ -81,91 +73,27 @@ function SpinnerIcon({ className }: { className?: string }) {
   return <CircleNotch size={14} weight="bold" className={className} />;
 }
 
-function readCustomSessionLabels(): Record<string, string> {
-  try {
-    const raw = window.localStorage.getItem(SIDEBAR_CUSTOM_LABELS_STORAGE_KEY);
-    if (!raw) {
-      return {};
-    }
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed as Record<string, string> : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeCustomSessionLabels(value: Record<string, string>) {
-  window.localStorage.setItem(SIDEBAR_CUSTOM_LABELS_STORAGE_KEY, JSON.stringify(value));
-}
-
-function isMainChannelSessionKey(sessionKey: string, agentId: string): boolean {
-  return isAgentMainSessionKey(sessionKey, agentId) || isAgentChannelSessionKey(sessionKey, agentId);
-}
-
-function stripLeadingMessageTimestamp(text: string): string {
-  const cleaned = text.replace(/^\[[^\]]+\]\s*/, "").trim();
-  return cleaned || text.trim();
-}
-
-function sanitizeSessionTitle(text: string | undefined): string | null {
-  if (!text?.trim()) {
-    return null;
-  }
-  const cleaned = stripLeadingMessageTimestamp(text).trim();
-  if (!cleaned) {
-    return null;
-  }
-  return cleaned;
-}
-
-function resolveSessionDisplayName(
-  session: Pick<GatewaySessionRow, "key" | "label" | "displayName" | "derivedTitle">,
-  customSessionLabels: Record<string, string>,
-): string {
-  return (
-    sanitizeSessionTitle(session.label) ||
-    sanitizeSessionTitle(session.displayName) ||
-    sanitizeSessionTitle(session.derivedTitle) ||
-    customSessionLabels[session.key] ||
-    deriveScenarioLabel(session.key)
-  );
-}
-
-function resolveChannelBaseSessionKey(sessionKey: string): string {
-  return sessionKey.replace(/:(thread|topic|channel|group):[^:]+$/i, "");
-}
-
-function buildChannelSessionKey(sessionKey: string): string {
-  return `${resolveChannelBaseSessionKey(sessionKey)}:channel:${globalThis.crypto.randomUUID()}`;
-}
-
-function sortSidebarSessions(
-  sessions: GatewaySessionRow[],
-  options: { mainSessionKey: string; pendingSessionKey?: string | null },
-): GatewaySessionRow[] {
-  const mainSessionKey = options.mainSessionKey;
-  const pendingSessionKey = options?.pendingSessionKey?.trim() || null;
-  return [...sessions].sort((left, right) => {
-    if (left.key === mainSessionKey && right.key !== mainSessionKey) {
+function sortSidebarAgents(
+  agents: BustlyWorkspaceAgent[],
+  options: { pendingAgentId?: string | null },
+): BustlyWorkspaceAgent[] {
+  const pendingAgentId = options?.pendingAgentId?.trim() || null;
+  return [...agents].sort((left, right) => {
+    if (left.isMain && !right.isMain) {
       return -1;
     }
-    if (right.key === mainSessionKey && left.key !== mainSessionKey) {
+    if (right.isMain && !left.isMain) {
       return 1;
     }
-    if (pendingSessionKey) {
-      if (left.key === pendingSessionKey && right.key !== pendingSessionKey) {
+    if (pendingAgentId) {
+      if (left.agentId === pendingAgentId && right.agentId !== pendingAgentId) {
         return -1;
       }
-      if (right.key === pendingSessionKey && left.key !== pendingSessionKey) {
+      if (right.agentId === pendingAgentId && left.agentId !== pendingAgentId) {
         return 1;
       }
     }
-    const leftUpdatedAt = left.updatedAt ?? Number.NEGATIVE_INFINITY;
-    const rightUpdatedAt = right.updatedAt ?? Number.NEGATIVE_INFINITY;
-    if (leftUpdatedAt !== rightUpdatedAt) {
-      return rightUpdatedAt - leftUpdatedAt;
-    }
-    return left.key.localeCompare(right.key);
+    return left.name.localeCompare(right.name);
   });
 }
 
@@ -377,35 +305,29 @@ function TaskItem(props: {
         onClick={props.onClick}
         collapsed={props.collapsed}
         showTooltip
-        rightSlotVisible={props.task.running || isHovered || menuOpen}
+        rightSlotVisible={isHovered || menuOpen}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         rightSlot={
           !props.collapsed ? (
             <div className="flex h-5 w-5 items-center justify-center">
-              {props.task.running && !isHovered && !menuOpen ? (
-                <div className="text-[#666F8D]">
-                  <SpinnerIcon className="h-[13px] w-[13px] animate-spin" />
-                </div>
-              ) : (
-                <button
-                  ref={triggerRef}
-                  type="button"
-                  className={`rounded-md p-1 transition-all ${
-                    isHovered || menuOpen ? "opacity-100" : "pointer-events-none opacity-0"
-                  } ${
-                    menuOpen ? "bg-white/88 shadow-sm backdrop-blur-sm" : ""
-                  } ${
-                    props.active ? "text-[#1A162F] hover:bg-[#1A162F]/6" : "text-text-sub hover:bg-black/[0.04]"
-                  }`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setMenuOpen((prev) => !prev);
-                  }}
-                >
-                  <DotsThreeIcon className="h-4 w-4" />
-                </button>
-              )}
+              <button
+                ref={triggerRef}
+                type="button"
+                className={`rounded-md p-1 transition-all ${
+                  isHovered || menuOpen ? "opacity-100" : "pointer-events-none opacity-0"
+                } ${
+                  menuOpen ? "bg-white/88 shadow-sm backdrop-blur-sm" : ""
+                } ${
+                  props.active ? "text-[#1A162F] hover:bg-[#1A162F]/6" : "text-text-sub hover:bg-black/[0.04]"
+                }`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setMenuOpen((prev) => !prev);
+                }}
+              >
+                <DotsThreeIcon className="h-4 w-4" />
+              </button>
             </div>
           ) : null
         }
@@ -1111,13 +1033,14 @@ function WorkspaceSwitcher(props: {
 }
 
 export function ClientAppSidebar(props: ClientAppSidebarProps) {
-  const { checking, gatewayReady, initialized } = useAppState();
+  const { checking, initialized } = useAppState();
+  const { showGlobalLoading, hideGlobalLoading } = useGlobalLoader();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isWindowFullscreen, setIsWindowFullscreen] = useState(false);
   const [recentTasks, setRecentTasks] = useState<SidebarTask[]>([]);
+  const [sessionsByAgent, setSessionsByAgent] = useState<Record<string, SidebarSession[]>>({});
   const [tasksLoading, setTasksLoading] = useState(true);
   const [hasLoadedTasks, setHasLoadedTasks] = useState(false);
-  const [customSessionLabels, setCustomSessionLabels] = useState<Record<string, string>>(() => readCustomSessionLabels());
   const [bustlyUserInfo, setBustlyUserInfo] = useState<BustlyUserInfo | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
@@ -1137,11 +1060,10 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedIcon, setSelectedIcon] = useState<SessionIconId>("SquaresFour");
   const [iconPickerMode, setIconPickerMode] = useState<"create" | "edit">("edit");
-  const [pendingSessionKey, setPendingSessionKey] = useState<string | null>(null);
+  const [pendingAgentId, setPendingAgentId] = useState<string | null>(null);
   const [runningTasks, setRunningTasks] = useState<Record<string, boolean>>({});
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const userMenuTriggerRef = useRef<HTMLDivElement | null>(null);
-  const gatewayInstanceIdRef = useRef(createGatewayInstanceId("sidebar"));
   const workspaceLoadingRef = useRef(false);
   const hasLoadedWorkspacesRef = useRef(false);
   const [userMenuLayout, setUserMenuLayout] = useState({ top: 0, left: 0, width: 224 });
@@ -1150,23 +1072,32 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const isSettingsPage = false;
   const isSkillPage = location.pathname === "/skill";
   const effectiveWorkspaceId = activeWorkspaceId || bustlyUserInfo?.workspaceId || "";
-  const activeAgentId = useMemo(
+  const defaultWorkspaceAgentId = useMemo(
     () => buildBustlyWorkspaceAgentId(effectiveWorkspaceId),
     [effectiveWorkspaceId],
   );
-  const activeMainSessionKey = useMemo(
-    () => buildBustlyWorkspaceMainSessionKey(effectiveWorkspaceId),
-    [effectiveWorkspaceId],
-  );
-  const activeTaskId = useMemo(() => {
-    // Skills is a separate top-level destination, so it should not leave the main
-    // workspace session highlighted in the scenario list.
+  const activeSessionKey = useMemo(() => {
     if (isSkillPage) {
       return "";
     }
     const searchParams = new URLSearchParams(location.search);
-    return searchParams.get("session") ?? activeMainSessionKey;
-  }, [activeMainSessionKey, isSkillPage, location.search]);
+    return searchParams.get("session")?.trim() || "";
+  }, [isSkillPage, location.search]);
+  const activeAgentId = useMemo(() => {
+    if (isSkillPage) {
+      return "";
+    }
+    const searchParams = new URLSearchParams(location.search);
+    return (
+      searchParams.get("agent")?.trim() ||
+      resolveAgentIdFromSessionKey(activeSessionKey) ||
+      defaultWorkspaceAgentId
+    );
+  }, [activeSessionKey, defaultWorkspaceAgentId, isSkillPage, location.search]);
+  const activeTaskId = useMemo(
+    () => recentTasks.find((task) => task.agentId === activeAgentId)?.id ?? activeAgentId,
+    [activeAgentId, recentTasks],
+  );
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -1310,103 +1241,59 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   }, []);
 
   useEffect(() => {
-    if (checking || !initialized || !gatewayReady) {
+    if (checking || !initialized || !effectiveWorkspaceId) {
       return;
     }
 
     let disposed = false;
-    const clientRef: { current: GatewayBrowserClient | null } = { current: null };
-    let requestSettled = false;
 
     const loadTasks = async () => {
-      requestSettled = false;
       if (!disposed) {
         setTasksLoading(!hasLoadedTasks);
       }
       try {
-        const status = await window.electronAPI.gatewayStatus();
-        if (!status.running) {
-          if (!disposed) {
-            if (!hasLoadedTasks) {
-              setRecentTasks([]);
-            }
-            setTasksLoading(false);
-          }
+        const agents = await window.electronAPI.bustlyListAgents(effectiveWorkspaceId);
+        if (disposed) {
           return;
         }
-        const connectConfig = await window.electronAPI.gatewayConnectConfig();
-        if (!connectConfig.token || !connectConfig.wsUrl) {
-          if (!disposed) {
-            if (!hasLoadedTasks) {
-              setRecentTasks([]);
-            }
-            setTasksLoading(false);
-          }
+        const sortedAgents = sortSidebarAgents(agents, { pendingAgentId });
+        const sessionRows = await Promise.all(
+          sortedAgents.map(async (agent) => {
+            const sessions = await window.electronAPI.bustlyListAgentSessions(effectiveWorkspaceId, agent.agentId);
+            return [
+              agent.agentId,
+              sessions.map((session) => ({
+                id: session.sessionKey,
+                agentId: session.agentId,
+                name: session.name,
+                icon: session.icon,
+                updatedAt: session.updatedAt,
+                running: runningTasks[session.sessionKey] === true,
+              })),
+            ] as const;
+          }),
+        );
+        if (disposed) {
           return;
         }
-
-        const client = new GatewayBrowserClient({
-          url: connectConfig.wsUrl,
-          token: connectConfig.token ?? undefined,
-          clientName: "openclaw-control-ui",
-          mode: "webchat",
-          instanceId: gatewayInstanceIdRef.current,
-          onHello: () => {
-            if (disposed) {
-              return;
-            }
-            void client
-              .request<SessionsListResult>("sessions.list", {
-                limit: 500,
-                includeGlobal: false,
-                includeUnknown: false,
-                includeDerivedTitles: true,
-                includeLastMessage: false,
-                agentId: activeAgentId,
-              })
-              .then((result) => {
-                if (disposed) {
-                  return;
-                }
-                requestSettled = true;
-                setRecentTasks(
-                  sortSidebarSessions(
-                    result.sessions.filter((session) => isMainChannelSessionKey(session.key, activeAgentId)),
-                    { mainSessionKey: activeMainSessionKey, pendingSessionKey },
-                  ).map((session) => ({
-                    id: session.key,
-                    name: resolveSessionDisplayName(session, customSessionLabels),
-                    icon: session.icon,
-                    isMain: session.key === activeMainSessionKey,
-                    running: runningTasks[session.key] === true,
-                  })),
-                );
-                setHasLoadedTasks(true);
-                setTasksLoading(false);
-              })
-              .catch(() => {
-                if (disposed) {
-                  return;
-                }
-                requestSettled = true;
-                if (!hasLoadedTasks) {
-                  setRecentTasks([]);
-                }
-                setTasksLoading(false);
-              });
-          },
-          onClose: () => {
-            if (!disposed && requestSettled) {
-              setTasksLoading(false);
-            }
-          },
-        });
-        clientRef.current = client;
-        client.start();
+        setRecentTasks(
+          sortedAgents.map((agent) => ({
+            id: agent.agentId,
+            agentId: agent.agentId,
+            name: agent.name,
+            icon: agent.icon,
+            isMain: agent.isMain,
+            updatedAt: agent.updatedAt,
+          })),
+        );
+        setSessionsByAgent(Object.fromEntries(sessionRows));
+        setHasLoadedTasks(true);
+        setTasksLoading(false);
       } catch {
         if (!disposed) {
           if (!hasLoadedTasks) {
             setRecentTasks([]);
+            setSessionsByAgent({});
           }
           setTasksLoading(false);
         }
@@ -1423,20 +1310,15 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     return () => {
       disposed = true;
       window.removeEventListener(SIDEBAR_TASKS_REFRESH_EVENT, handleRefreshTasks);
-      clientRef.current?.stop();
-      clientRef.current = null;
     };
   }, [
-    activeAgentId,
-    activeMainSessionKey,
     checking,
-    customSessionLabels,
-    gatewayReady,
+    effectiveWorkspaceId,
     hasLoadedTasks,
     initialized,
     location.pathname,
     location.search,
-    pendingSessionKey,
+    pendingAgentId,
     runningTasks,
   ]);
 
@@ -1449,15 +1331,15 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     if (!fallbackTask) {
       return;
     }
-    const activeSessionKey = searchParams.get("session");
-    if (activeSessionKey && pendingSessionKey === activeSessionKey) {
+    const activeAgentKey = searchParams.get("agent")?.trim();
+    if (activeAgentKey && pendingAgentId === activeAgentKey) {
       return;
     }
-    if (activeSessionKey && recentTasks.some((task) => task.id === activeSessionKey)) {
+    if (activeAgentKey && recentTasks.some((task) => task.agentId === activeAgentKey)) {
       return;
     }
     const nextSearchParams = new URLSearchParams();
-    nextSearchParams.set("session", fallbackTask.id);
+    nextSearchParams.set("agent", fallbackTask.agentId);
     if (fallbackTask.name?.trim()) {
       nextSearchParams.set("label", fallbackTask.name.trim());
     }
@@ -1483,16 +1365,16 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     void navigate(`/chat?${nextSearchParams.toString()}`, {
       replace: true,
     });
-  }, [location.pathname, location.search, navigate, pendingSessionKey, recentTasks]);
+  }, [location.pathname, location.search, navigate, pendingAgentId, recentTasks]);
 
   useEffect(() => {
-    if (!pendingSessionKey) {
+    if (!pendingAgentId) {
       return;
     }
-    if (recentTasks.some((task) => task.id === pendingSessionKey)) {
-      setPendingSessionKey(null);
+    if (recentTasks.some((task) => task.agentId === pendingAgentId)) {
+      setPendingAgentId(null);
     }
-  }, [pendingSessionKey, recentTasks]);
+  }, [pendingAgentId, recentTasks]);
 
   useEffect(() => {
     let disposed = false;
@@ -1577,14 +1459,23 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   };
 
   const handleSwitchWorkspace = async (workspaceId: string) => {
-    const workspace = workspaces.find((entry) => entry.id === workspaceId);
-    const result = await window.electronAPI.bustlySetActiveWorkspace(workspaceId, workspace?.name);
-    if (!result.success) {
+    if (workspaceId === activeWorkspaceId) {
       return;
     }
-    setActiveWorkspaceId(workspaceId);
-    void navigate("/chat", { replace: true });
-    notifySidebarTasksRefresh();
+    const workspace = workspaces.find((entry) => entry.id === workspaceId);
+    showGlobalLoading(`Loading ${workspace?.name?.trim() || "workspace"}...`, "workspace-switch", "loading", 10);
+    try {
+      const result = await window.electronAPI.bustlySetActiveWorkspace(workspaceId, workspace?.name);
+      if (!result.success) {
+        hideGlobalLoading("workspace-switch");
+        return;
+      }
+      setActiveWorkspaceId(workspaceId);
+      void navigate("/chat", { replace: true });
+      notifySidebarTasksRefresh();
+    } catch {
+      hideGlobalLoading("workspace-switch");
+    }
   };
 
   const handleSignOut = async () => {
@@ -1639,44 +1530,45 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
 
   const handleCreateScenario = async () => {
     const name = draftScenarioName.trim() || "New agent";
-    if (createSaving) {
+    if (createSaving || !effectiveWorkspaceId) {
       return;
     }
-    const nextSessionKey = buildChannelSessionKey(activeMainSessionKey);
     setCreateSaving(true);
     setCreateError(null);
     try {
-      const result = await window.electronAPI.gatewayPatchSession(nextSessionKey, {
-        label: name,
-        icon: selectedIcon,
-      });
+      const workspace = workspaces.find((entry) => entry.id === effectiveWorkspaceId);
+      const result = await window.electronAPI.bustlyCreateAgent(
+        effectiveWorkspaceId,
+        name,
+        selectedIcon,
+        workspace?.name,
+      );
       if (!result.success) {
         setCreateError(result.error ?? "Failed to create agent.");
         return;
       }
-      const nextLabels = { ...customSessionLabels, [nextSessionKey]: name };
-      setCustomSessionLabels(nextLabels);
-      writeCustomSessionLabels(nextLabels);
-      setPendingSessionKey(nextSessionKey);
+      const nextAgentId = result.agentId ?? buildBustlyWorkspaceAgentId(effectiveWorkspaceId, name);
+      setPendingAgentId(nextAgentId);
       setHasLoadedTasks(true);
       setRecentTasks((prev) => {
         const nextTask: SidebarTask = {
-          id: nextSessionKey,
+          id: nextAgentId,
+          agentId: nextAgentId,
           name,
           icon: selectedIcon,
           isMain: false,
-          running: false,
         };
-        const remainingTasks = prev.filter((entry) => entry.id !== nextSessionKey);
-        const mainTask = remainingTasks.find((entry) => entry.id === activeMainSessionKey) ?? null;
-        const otherTasks = remainingTasks.filter((entry) => entry.id !== activeMainSessionKey);
+        const remainingTasks = prev.filter((entry) => entry.id !== nextAgentId);
+        const mainTask = remainingTasks.find((entry) => entry.isMain) ?? null;
+        const otherTasks = remainingTasks.filter((entry) => !entry.isMain);
         return mainTask ? [mainTask, nextTask, ...otherTasks] : [nextTask, ...otherTasks];
       });
+      setSessionsByAgent((prev) => ({ ...prev, [nextAgentId]: [] }));
       setDraftScenarioName("");
       setSelectedIcon("SquaresFour");
       setCreateModalOpen(false);
       notifySidebarTasksRefresh();
-      void navigate(buildChatRoute({ sessionKey: nextSessionKey, label: name, icon: selectedIcon }));
+      void navigate(buildChatRoute({ agentId: nextAgentId, label: name, icon: selectedIcon }));
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1688,6 +1580,10 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     if (!selectedTaskId) {
       return;
     }
+    const selectedTask = recentTasks.find((entry) => entry.id === selectedTaskId);
+    if (!selectedTask || !effectiveWorkspaceId) {
+      return;
+    }
     const name = draftScenarioName.trim();
     if (!name || renameSaving) {
       return;
@@ -1695,22 +1591,27 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     setRenameSaving(true);
     setRenameError(null);
     try {
-      const result = await window.electronAPI.gatewayPatchSession(selectedTaskId, { label: name });
+      const result = await window.electronAPI.bustlyUpdateAgent({
+        workspaceId: effectiveWorkspaceId,
+        agentId: selectedTask.agentId,
+        name,
+      });
       if (!result.success) {
         setRenameError(result.error ?? "Failed to save agent name.");
         return;
       }
-      const nextLabels = { ...customSessionLabels, [selectedTaskId]: name };
-      setCustomSessionLabels(nextLabels);
-      writeCustomSessionLabels(nextLabels);
       setRecentTasks((prev) => prev.map((entry) => (entry.id === selectedTaskId ? { ...entry, name } : entry)));
       setRenameModalOpen(false);
       setSelectedTaskId(null);
       setDraftScenarioName("");
-      if (activeTaskId === selectedTaskId) {
-        const activeTask = recentTasks.find((entry) => entry.id === selectedTaskId);
+      if (selectedTask.agentId === activeAgentId) {
         void navigate(
-          buildChatRoute({ sessionKey: selectedTaskId, label: name, icon: activeTask?.icon }),
+          buildChatRoute({
+            agentId: selectedTask.agentId,
+            sessionKey: activeSessionKey || undefined,
+            label: name,
+            icon: selectedTask.icon,
+          }),
           { replace: true },
         );
       }
@@ -1723,25 +1624,29 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   };
 
   const handleDeleteScenario = async () => {
-    if (!selectedTask || selectedTask.isMain) {
+    if (!selectedTask || selectedTask.isMain || !effectiveWorkspaceId) {
       setDeleteModalOpen(false);
       setSelectedTaskId(null);
       return;
     }
     try {
-      const result = await window.electronAPI.gatewayDeleteSession(selectedTask.id);
+      const result = await window.electronAPI.bustlyDeleteAgent({
+        workspaceId: effectiveWorkspaceId,
+        agentId: selectedTask.agentId,
+      });
       if (!result.success) {
         setDeleteModalOpen(false);
         return;
       }
-      const nextLabels = { ...customSessionLabels };
-      delete nextLabels[selectedTask.id];
-      setCustomSessionLabels(nextLabels);
-      writeCustomSessionLabels(nextLabels);
       setRecentTasks((prev) => prev.filter((entry) => entry.id !== selectedTask.id));
+      setSessionsByAgent((prev) => {
+        const next = { ...prev };
+        delete next[selectedTask.agentId];
+        return next;
+      });
       setDeleteModalOpen(false);
       setSelectedTaskId(null);
-      if (activeTaskId === selectedTask.id) {
+      if (selectedTask.agentId === activeAgentId) {
         void navigate("/chat", { replace: true });
       }
       notifySidebarTasksRefresh();
@@ -1760,17 +1665,29 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     if (!selectedTaskId) {
       return;
     }
-    const result = await window.electronAPI.gatewayPatchSession(selectedTaskId, { icon });
+    const selectedTask = recentTasks.find((entry) => entry.id === selectedTaskId);
+    if (!selectedTask || !effectiveWorkspaceId) {
+      return;
+    }
+    const result = await window.electronAPI.bustlyUpdateAgent({
+      workspaceId: effectiveWorkspaceId,
+      agentId: selectedTask.agentId,
+      icon,
+    });
     if (!result.success) {
       return;
     }
     setRecentTasks((prev) => prev.map((entry) => (entry.id === selectedTaskId ? { ...entry, icon } : entry)));
     setIconModalOpen(false);
     setSelectedTaskId(null);
-    if (activeTaskId === selectedTaskId) {
-      const activeTask = recentTasks.find((entry) => entry.id === selectedTaskId);
+    if (selectedTask.agentId === activeAgentId) {
       void navigate(
-        buildChatRoute({ sessionKey: selectedTaskId, label: activeTask?.name, icon }),
+        buildChatRoute({
+          agentId: selectedTask.agentId,
+          sessionKey: activeSessionKey || undefined,
+          label: selectedTask.name,
+          icon,
+        }),
         { replace: true },
       );
     }
@@ -1875,25 +1792,56 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                 </>
               ) : (
                 recentTasks.map((task) => (
-                  <TaskItem
-                    key={task.id}
-                    task={task}
-                    active={activeTaskId === task.id}
-                    collapsed={false}
-                    onClick={() => {
-                      void navigate(buildChatRoute({ sessionKey: task.id, label: task.name, icon: task.icon }));
-                    }}
-                    onRename={() => {
-                      openRenameModal(task);
-                    }}
-                    onDelete={() => {
-                      setSelectedTaskId(task.id);
-                      setDeleteModalOpen(true);
-                    }}
-                    onChangeIcon={() => {
-                      openIconModal(task);
-                    }}
-                  />
+                  <div key={task.id}>
+                    <TaskItem
+                      task={task}
+                      active={!activeSessionKey && activeTaskId === task.id}
+                      collapsed={false}
+                      onClick={() => {
+                        void navigate(buildChatRoute({ agentId: task.agentId, label: task.name, icon: task.icon }));
+                      }}
+                      onRename={() => {
+                        openRenameModal(task);
+                      }}
+                      onDelete={() => {
+                        setSelectedTaskId(task.id);
+                        setDeleteModalOpen(true);
+                      }}
+                      onChangeIcon={() => {
+                        openIconModal(task);
+                      }}
+                    />
+                    {(sessionsByAgent[task.agentId] ?? []).length > 0 ? (
+                      <div className="mt-1 mb-2 max-h-40 space-y-0.5 overflow-y-auto pr-3 pl-10">
+                        {(sessionsByAgent[task.agentId] ?? []).map((session) => {
+                          return (
+                            <button
+                              key={session.id}
+                              type="button"
+                              onClick={() => {
+                                void navigate(
+                                  buildChatRoute({
+                                    agentId: task.agentId,
+                                    sessionKey: session.id,
+                                    label: task.name,
+                                    icon: task.icon,
+                                  }),
+                                );
+                              }}
+                              className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors ${
+                                activeSessionKey === session.id
+                                  ? "bg-[#1A162F]/10 font-semibold text-[#1A162F] hover:bg-[#1A162F]/15"
+                                  : "text-[#666F8D] hover:bg-[#1A162F]/4 hover:text-[#1A162F]"
+                              }`}
+                            >
+                              <span className="min-w-0 flex-1 truncate">{session.name}</span>
+                              {session.running ? <SpinnerIcon className="h-3.5 w-3.5 animate-spin" /> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
                 ))
               )}
               </div>
@@ -1934,7 +1882,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                   tasks={recentTasks}
                   activeTaskId={activeTaskId}
                   onOpenTask={(task) => {
-                    void navigate(buildChatRoute({ sessionKey: task.id, label: task.name, icon: task.icon }));
+                    void navigate(buildChatRoute({ agentId: task.agentId, label: task.name, icon: task.icon }));
                   }}
                   onRenameClick={openRenameModal}
                   onDeleteClick={(task) => {

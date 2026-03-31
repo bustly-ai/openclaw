@@ -9,16 +9,20 @@ import SkillPage from "./components/SkillPage";
 import { AppStateProvider, useAppState } from "./providers/AppStateProvider";
 import DeepLinkBridge from "./providers/DeepLinkBridge";
 import { GlobalLoaderProvider, useGlobalLoader } from "./providers/GlobalLoaderProvider";
-import GlobalLoading from "./components/ui/GlobalLoading";
 
 function AppShell() {
   const {
     loggedIn,
     checking,
+    error,
     gatewayPhase,
+    gatewayMessage,
+    gatewayCanRestoreLastGoodConfig,
     gatewayReady,
     refreshAppState,
+    restoreGatewayLastGoodConfig,
   } = useAppState();
+  const { showGlobalLoading, hideGlobalLoading } = useGlobalLoader();
   const location = useLocation();
   const pathname = location.pathname || "/";
   const isBustlyLoginWindow = pathname === "/bustly-login";
@@ -43,9 +47,49 @@ function AppShell() {
     }
   }, [gatewayPhase, gatewayReady, loggedIn]);
 
+  const showGatewayLoading =
+    !isBustlyLoginWindow &&
+    loggedIn &&
+    !hasCompletedInitialGatewayBootRef.current &&
+    gatewayPhase !== "error";
+  const shouldShowGatewayRecovery =
+    Boolean(error?.trim()) && gatewayCanRestoreLastGoodConfig;
+  const appLoadingMessage = shouldShowGatewayRecovery
+    ? "Bustly configuration is corrupted. Restore from backup?"
+    : (error?.trim() || gatewayMessage?.trim() || "Loading...");
+  const appLoadingTone = error?.trim() ? "error" : "loading";
+  const appLoadingActions =
+    shouldShowGatewayRecovery
+      ? [
+          {
+            label: "Restore",
+            onClick: () => {
+              void restoreGatewayLastGoodConfig();
+            },
+          },
+        ]
+      : undefined;
+
+  useEffect(() => {
+    if (checking || showGatewayLoading || Boolean(error?.trim())) {
+      showGlobalLoading(appLoadingMessage, "app-shell", appLoadingTone, 0, appLoadingActions);
+      return;
+    }
+    hideGlobalLoading("app-shell");
+  }, [
+    appLoadingActions,
+    appLoadingMessage,
+    appLoadingTone,
+    checking,
+    error,
+    hideGlobalLoading,
+    showGatewayLoading,
+    showGlobalLoading,
+  ]);
+
   const renderLoginRoute = () => {
     if (checking) {
-      return <GlobalLoading />;
+      return null;
     }
     if (loggedIn) {
       return <Navigate to="/chat" replace />;
@@ -64,7 +108,7 @@ function AppShell() {
 
   const renderProtectedRoute = (element: ReactElement) => {
     if (checking) {
-      return <GlobalLoading />;
+      return null;
     }
     if (!loggedIn) {
       return <Navigate to="/bustly-login" replace />;
@@ -74,7 +118,7 @@ function AppShell() {
 
   const renderDefault = () => {
     if (checking) {
-      return <GlobalLoading />;
+      return null;
     }
     if (!loggedIn) {
       return <Navigate to="/bustly-login" replace />;
@@ -82,11 +126,6 @@ function AppShell() {
     return <Navigate to="/chat" replace />;
   };
 
-  const showGatewayLoading =
-    !isBustlyLoginWindow &&
-    loggedIn &&
-    !hasCompletedInitialGatewayBootRef.current &&
-    gatewayPhase !== "error";
   return (
     <>
       <DeepLinkBridge />
@@ -122,10 +161,6 @@ function AppShell() {
         <Route path="/" element={renderDefault()} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-
-      {showGatewayLoading ? (
-        <GlobalLoading />
-      ) : null}
     </>
   );
 }

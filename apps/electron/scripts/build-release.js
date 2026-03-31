@@ -68,22 +68,6 @@ const capture = (cmd, cmdArgs, opts = {}) => {
 
 run(pnpmCmd, ["run", "prepare:openclaw-deps"]);
 
-const prepareNodeForTarget = (targetPlatform, targetArch) => {
-  const args = ["run", "prepare:node", "--", "--platform", targetPlatform, "--arch", targetArch];
-  run(pnpmCmd, args);
-};
-
-if (platform === "mac" && arch === "universal") {
-  prepareNodeForTarget("mac", "arm64");
-  prepareNodeForTarget("mac", "x64");
-} else if (platform === "mac") {
-  prepareNodeForTarget("mac", arch === "x64" ? "x64" : "arm64");
-} else if (platform === "windows") {
-  prepareNodeForTarget("windows", arch === "arm64" ? "arm64" : "x64");
-} else {
-  prepareNodeForTarget("linux", arch === "arm64" ? "arm64" : "x64");
-}
-
 run(pnpmCmd, ["run", "build"]);
 
 const updatePlatformKey =
