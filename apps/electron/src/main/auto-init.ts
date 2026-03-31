@@ -30,6 +30,7 @@ import {
   resolveElectronIsolatedConfigPath,
   resolveElectronIsolatedStateDir,
 } from "./defaults.js";
+import { writeMainError, writeMainInfo } from "./logger.js";
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 let lastInitializationLogSignature: string | null = null;
@@ -211,9 +212,9 @@ export async function initializeOpenClaw(
 
     // Check if config already exists
     if (!force && existsSync(configPath)) {
-      console.log("Configuration already exists, skipping initialization");
+      writeMainInfo("Configuration already exists, skipping initialization");
     } else {
-      console.log("Initializing OpenClaw via CLI onboarding...");
+      writeMainInfo("Initializing OpenClaw via CLI onboarding...");
       await runCliOnboard(configOptions);
       if (!existsSync(configPath)) {
         throw new Error("OpenClaw CLI did not create config file");
@@ -237,7 +238,7 @@ export async function initializeOpenClaw(
       workspace: resolvedWorkspace,
     };
   } catch (error) {
-    console.error("Initialization failed:", error);
+    writeMainError("Initialization failed:", error);
     return {
       success: false,
       configPath: "",
@@ -268,7 +269,7 @@ export function isFullyInitialized(): boolean {
       const signature = `missing:${configPath}`;
       if (lastInitializationLogSignature !== signature) {
         lastInitializationLogSignature = signature;
-        console.log(`[Init] Config file not found at ${configPath}`);
+        writeMainInfo(`[Init] Config file not found at ${configPath}`);
       }
       return false;
     }
@@ -291,7 +292,7 @@ export function isFullyInitialized(): boolean {
     ].join("|");
     if (lastInitializationLogSignature !== signature) {
       lastInitializationLogSignature = signature;
-      console.log(
+      writeMainInfo(
         `[Init] config=${configPath} initialized=${initialized} hasProfiles=${hasProfiles} hasPrimaryModel=${hasPrimaryModel} primary=${primary ?? ""}`,
       );
     }

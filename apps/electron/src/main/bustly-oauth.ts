@@ -9,6 +9,7 @@ import { resolve } from "node:path";
 import type { BustlyOAuthState, BustlySupabaseConfig } from "./bustly-types.js";
 import { refreshSupabaseAuth, verifySupabaseAuth, type SupabaseUserResponse } from "./api/bustly.js";
 import { resolveElectronIsolatedStateDir } from "./defaults.js";
+import { writeMainError, writeMainInfo, writeMainWarn } from "./logger.js";
 
 function resolveStateDir(): string {
   return resolveElectronIsolatedStateDir();
@@ -76,16 +77,11 @@ function extractSupabaseUserName(user: SupabaseUserResponse | null | undefined):
 function shouldRefreshSession(state: BustlyOAuthState | null, nowMs = Date.now()): boolean {
   const expiresAt = getStoredSessionExpiresAt(state);
   if (!expiresAt) {
-    console.log("[BustlyOAuth] Session expiry check skipped (no sessionExpiresAt/sessionExpiresIn)");
     return false;
   }
   const refreshAtSeconds = Math.max(0, expiresAt - SESSION_REFRESH_MARGIN_SECONDS);
   const nowSeconds = Math.floor(nowMs / 1000);
-  const shouldRefresh = nowSeconds >= refreshAtSeconds;
-  console.log(
-    `[BustlyOAuth] Session expiry check now=${nowSeconds} refreshAt=${refreshAtSeconds} expiresAt=${expiresAt} shouldRefresh=${shouldRefresh}`,
-  );
-  return shouldRefresh;
+  return nowSeconds >= refreshAtSeconds;
 }
 
 async function refreshBustlyAccessTokenInternal(): Promise<boolean> {
@@ -93,15 +89,15 @@ async function refreshBustlyAccessTokenInternal(): Promise<boolean> {
   const currentUser = state?.user;
   const refreshToken = getStoredSupabaseRefreshToken(state);
   if (!state || !currentUser) {
-    console.warn("[BustlyOAuth] Refresh skipped (no OAuth state/user)");
+    writeMainWarn("[BustlyOAuth] Refresh skipped (no OAuth state/user)");
     return false;
   }
   if (!refreshToken) {
-    console.warn("[BustlyOAuth] Refresh skipped (no refresh token)");
+    writeMainWarn("[BustlyOAuth] Refresh skipped (no refresh token)");
     return false;
   }
-  console.log(
-    `[BustlyOAuth] Starting Supabase session refresh user=${currentUser.userEmail} workspace=${currentUser.workspaceId} expiresAt=${currentUser.sessionExpiresAt ?? "unknown"}`,
+  writeMainInfo(
+    `[BustlyOAuth] Refreshing Supabase session user=${currentUser.userEmail} workspace=${currentUser.workspaceId}`,
   );
 
   const refreshResult = await refreshSupabaseAuth();
@@ -136,9 +132,8 @@ async function refreshBustlyAccessTokenInternal(): Promise<boolean> {
   };
   state.loggedInAt = Date.now();
   writeBustlyOAuthState(state);
-
-  console.log(
-    `[BustlyOAuth] Token refresh succeeded user=${state.user.userEmail} workspace=${state.user.workspaceId} accessToken=${refreshedAccessToken.slice(0, 8)}... refreshToken=${nextRefreshToken.slice(0, 8)}... newExpiresAt=${state.user.sessionExpiresAt ?? "unknown"} newExpiresIn=${state.user.sessionExpiresIn ?? "unknown"} tokenType=${state.user.sessionTokenType ?? "unknown"}`,
+  writeMainInfo(
+    `[BustlyOAuth] Token refresh succeeded user=${state.user.userEmail} workspace=${state.user.workspaceId}`,
   );
   return true;
 }
@@ -150,7 +145,7 @@ export async function refreshBustlyAccessToken(): Promise<boolean> {
 
   refreshBustlyTokenPromise = refreshBustlyAccessTokenInternal()
     .catch((error) => {
-      console.error("[BustlyOAuth] Token refresh failed:", error);
+      writeMainError("[BustlyOAuth] Token refresh failed:", error);
       return false;
     })
     .finally(() => {
@@ -176,15 +171,13 @@ function generateDeviceId(): string {
 export function readBustlyOAuthState(): BustlyOAuthState | null {
   try {
     const oauthFile = resolveBustlyOauthFile();
-    console.log(`[BustlyOAuth] stateDir=${resolveStateDir()} file=${oauthFile}`);
     if (!existsSync(oauthFile)) {
-      console.log("[BustlyOAuth] State file missing");
       return null;
     }
     const content = readFileSync(oauthFile, "utf-8");
     return JSON.parse(content) as BustlyOAuthState;
   } catch (error) {
-    console.error("[BustlyOAuth] Failed to read state:", error);
+    writeMainError("[BustlyOAuth] Failed to read state:", error);
     return null;
   }
 }
@@ -197,9 +190,8 @@ export function writeBustlyOAuthState(state: BustlyOAuthState): void {
     ensureConfigDir();
     const oauthFile = resolveBustlyOauthFile();
     writeFileSync(oauthFile, JSON.stringify(state, null, 2), "utf-8");
-    console.log("[BustlyOAuth] State saved to", oauthFile);
   } catch (error) {
-    console.error("[BustlyOAuth] Failed to write state:", error);
+    writeMainError("[BustlyOAuth] Failed to write state:", error);
     throw error;
   }
 }
@@ -211,13 +203,7 @@ export function writeBustlyOAuthState(state: BustlyOAuthState): void {
 export async function isBustlyLoggedIn(): Promise<boolean> {
   const state = readBustlyOAuthState();
   const accessToken = getStoredSupabaseAccessToken(state);
-  if (!accessToken) {
-    console.log("[BustlyOAuth] Logged in=false (no access token)");
-    return false;
-  }
-
-  console.log("[BustlyOAuth] Logged in=true (token present)");
-  return true;
+  return Boolean(accessToken);
 }
 
 /**
@@ -271,29 +257,21 @@ export async function verifyBustlyLoginStatus(): Promise<boolean> {
   const state = readBustlyOAuthState();
   const accessToken = getStoredSupabaseAccessToken(state);
   if (!accessToken) {
-    console.log("[BustlyOAuth] Verify skipped (no access token)");
     return false;
   }
 
   const workspaceId = state?.user?.workspaceId?.trim() ?? "";
 
   if (!workspaceId) {
-    console.warn("[BustlyOAuth] Missing workspaceId; skipping verify check");
+    writeMainWarn("[BustlyOAuth] Missing workspaceId; skipping verify check");
     return true;
   }
 
   try {
-    console.log(
-      `[BustlyOAuth] Verify start user=${state?.user?.userEmail ?? "unknown"} workspace=${workspaceId || "unknown"} hasAccessToken=${Boolean(accessToken)} expiresAt=${state?.user?.sessionExpiresAt ?? "unknown"} expiresIn=${state?.user?.sessionExpiresIn ?? "unknown"}`,
-    );
     if (shouldRefreshSession(state)) {
-      const expiresAt = getStoredSessionExpiresAt(state);
-      console.log(
-        `[BustlyOAuth] Session near expiry expiresAt=${expiresAt ?? "unknown"}; refreshing before verify`,
-      );
       const refreshed = await refreshBustlyAccessToken();
       if (!refreshed) {
-        console.warn("[BustlyOAuth] Pre-verify refresh failed; clearing user/token");
+        writeMainWarn("[BustlyOAuth] Pre-verify refresh failed; clearing user/token");
         clearBustlyAuthData();
         return false;
       }
@@ -302,19 +280,19 @@ export async function verifyBustlyLoginStatus(): Promise<boolean> {
     let verifyResult = await verifySupabaseAuth();
 
     if (verifyResult.status === 400 || verifyResult.status === 401 || verifyResult.status === 403) {
-      console.warn(
+      writeMainWarn(
         `[BustlyOAuth] Token expired/invalid (status=${verifyResult.status}); attempting refresh`,
       );
       const refreshed = await refreshBustlyAccessToken();
       if (!refreshed) {
-        console.warn("[BustlyOAuth] Refresh failed; clearing user/token");
+        writeMainWarn("[BustlyOAuth] Refresh failed; clearing user/token");
         clearBustlyAuthData();
         return false;
       }
 
       verifyResult = await verifySupabaseAuth();
       if (verifyResult.status === 400 || verifyResult.status === 401 || verifyResult.status === 403) {
-        console.warn(
+        writeMainWarn(
           `[BustlyOAuth] Refreshed token still invalid (status=${verifyResult.status}); clearing user/token`,
         );
         clearBustlyAuthData();
@@ -323,16 +301,15 @@ export async function verifyBustlyLoginStatus(): Promise<boolean> {
     }
 
     if (!verifyResult.ok) {
-      console.warn(
+      writeMainWarn(
         `[BustlyOAuth] Verify failed (status=${verifyResult.status}); keeping cached login state`,
       );
       return true;
     }
 
-    console.log("[BustlyOAuth] Logged in=true (verified)");
     return true;
   } catch (error) {
-    console.error("[BustlyOAuth] Verify error; keeping cached login state:", error);
+    writeMainError("[BustlyOAuth] Verify error; keeping cached login state:", error);
     return true;
   }
 }
@@ -462,11 +439,9 @@ export function completeBustlyLogin(params: {
   writeBustlyOAuthState(state);
   const nextAccessToken = getStoredSupabaseAccessToken(state);
   const tokenChanged = previousAccessToken !== nextAccessToken;
-  const maskedToken = nextAccessToken ? `${nextAccessToken.slice(0, 8)}...` : "(missing)";
-  console.log(
-    `[BustlyOAuth] Persisted login state user=${params.user.userEmail} workspace=${params.user.workspaceId} previousWorkspace=${previousWorkspaceId || "(none)"} tokenChanged=${tokenChanged} token=${maskedToken}`,
+  writeMainInfo(
+    `[BustlyOAuth] Login completed user=${params.user.userEmail} workspace=${params.user.workspaceId} previousWorkspace=${previousWorkspaceId || "(none)"} tokenChanged=${tokenChanged}`,
   );
-  console.log("[BustlyOAuth] Login completed for user:", params.user.userEmail);
 }
 
 export function setActiveWorkspaceId(workspaceId: string): void {
@@ -482,7 +457,7 @@ export function setActiveWorkspaceId(workspaceId: string): void {
     state.user.workspaceId = nextWorkspaceId;
   }
   writeBustlyOAuthState(state);
-  console.log("[BustlyOAuth] Active workspace updated:", nextWorkspaceId);
+  writeMainInfo(`[BustlyOAuth] Active workspace updated: ${nextWorkspaceId}`);
 }
 
 /**
@@ -490,7 +465,7 @@ export function setActiveWorkspaceId(workspaceId: string): void {
  */
 export function logoutBustly(): void {
   clearBustlyAuthData();
-  console.log("[BustlyOAuth] Logged out");
+  writeMainInfo("[BustlyOAuth] Logged out");
 }
 
 /**
@@ -501,10 +476,10 @@ export function clearBustlyOAuthState(): void {
     const oauthFile = resolveBustlyOauthFile();
     if (existsSync(oauthFile)) {
       unlinkSync(oauthFile);
-      console.log("[BustlyOAuth] State cleared");
+      writeMainInfo("[BustlyOAuth] State cleared");
     }
   } catch (error) {
-    console.error("[BustlyOAuth] Failed to clear state:", error);
+    writeMainError("[BustlyOAuth] Failed to clear state:", error);
   }
 }
 
@@ -521,7 +496,7 @@ export function clearBustlyAuthData(): void {
   delete state.loggedInAt;
 
   writeBustlyOAuthState(state);
-  console.log("[BustlyOAuth] Cleared token and user data");
+  writeMainInfo("[BustlyOAuth] Cleared token and user data");
 }
 
 /**

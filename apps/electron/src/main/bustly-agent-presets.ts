@@ -1,4 +1,5 @@
 import { normalizeBustlyAgentName, DEFAULT_BUSTLY_AGENT_NAME } from "../shared/bustly-agent.js";
+import { writeMainWarn } from "./logger.js";
 
 export type BustlyRemoteUseCase = {
   icon: string;
@@ -159,10 +160,10 @@ function cloneFallbackPresets(): BustlyRemoteAgentPreset[] {
 
 function logPresetWarning(message: string, extra?: unknown): void {
   if (extra === undefined) {
-    console.warn(`[Bustly Agent Presets] ${message}`);
+    writeMainWarn(`[Bustly Agent Presets] ${message}`);
     return;
   }
-  console.warn(`[Bustly Agent Presets] ${message}`, extra);
+  writeMainWarn(`[Bustly Agent Presets] ${message}`, extra);
 }
 
 function resolveAgentConfigUrl(env: NodeJS.ProcessEnv = process.env): string {
