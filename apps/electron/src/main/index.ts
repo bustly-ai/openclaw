@@ -25,6 +25,7 @@ import {
   statSync,
 } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { inspect } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { Socket, createServer } from "node:net";
 import updater from "electron-updater";
@@ -110,9 +111,71 @@ type BustlyAgentMetadata = {
   icon?: string;
 };
 
+type OpenClawAgentListEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 const SENTRY_DSN =
   "https://03becf8322280fe9b5b01c0524874af0@o4511115803557888.ingest.us.sentry.io/4511115804737536";
+const originalConsole = {
+  log: console.log.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+};
+let sentryLogReportingActive = false;
+
+function formatLogArg(value: unknown): string {
+  if (value instanceof Error) {
+    return value.stack || value.message;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return inspect(value, { depth: 6, breakLength: 120, maxArrayLength: 50 });
+}
+
+function captureSentryLog(level: "info" | "warning" | "error", args: unknown[], logger: string): void {
+  if (sentryLogReportingActive) {
+    return;
+  }
+  sentryLogReportingActive = true;
+  try {
+    const errorArg = args.find((arg) => arg instanceof Error);
+    const message = args.map((arg) => formatLogArg(arg)).join(" ").trim() || "(empty log)";
+    if (errorArg instanceof Error) {
+      Sentry.withScope((scope) => {
+        scope.setLevel(level);
+        scope.setTag("logger", logger);
+        scope.setExtra("log_message", message);
+        Sentry.captureException(errorArg);
+      });
+      return;
+    }
+    Sentry.withScope((scope) => {
+      scope.setLevel(level);
+      scope.setTag("logger", logger);
+      Sentry.captureMessage(message);
+    });
+  } catch {
+    // Never let log reporting break the main process.
+  } finally {
+    sentryLogReportingActive = false;
+  }
+}
+
+function installSentryConsoleReporting(): void {
+  console.log = (...args: unknown[]) => {
+    originalConsole.log(...args);
+    captureSentryLog("info", args, "console.log");
+  };
+  console.warn = (...args: unknown[]) => {
+    originalConsole.warn(...args);
+    captureSentryLog("warning", args, "console.warn");
+  };
+  console.error = (...args: unknown[]) => {
+    originalConsole.error(...args);
+    captureSentryLog("error", args, "console.error");
+  };
+}
 
 function parseDotEnv(content: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -139,6 +202,23 @@ function parseDotEnv(content: string): Record<string, string> {
     out[key] = value;
   }
   return out;
+}
+
+function stripPerAgentSkipBootstrap(
+  entries: OpenClawAgentListEntry[] | undefined,
+): OpenClawAgentListEntry[] | undefined {
+  if (!entries) {
+    return entries;
+  }
+  return entries.map((entry) => {
+    if (!("skipBootstrap" in entry)) {
+      return entry;
+    }
+    const { skipBootstrap: _skipBootstrap, ...rest } = entry as OpenClawAgentListEntry & {
+      skipBootstrap?: boolean;
+    };
+    return rest;
+  });
 }
 
 function loadMainProcessEnvFromDotEnv(): void {
@@ -254,6 +334,7 @@ Sentry.init({
   dsn: SENTRY_DSN,
   environment: process.env.NODE_ENV || "production",
 });
+installSentryConsoleReporting();
 
 if (!process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL?.trim()) {
   const appVersion = app.getVersion();
@@ -1053,7 +1134,6 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
     agentId,
     name: nextName,
     workspace: workspaceDir,
-    skipBootstrap: true,
   });
   const currentList = listAgentEntries(updated);
   const nextList = currentList.map((entry) => ({
@@ -1062,7 +1142,7 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
   }));
   const normalizedNextList = nextList.some((entry) => entry.id === agentId)
     ? nextList
-    : [...nextList, { id: agentId, name: nextName, workspace: workspaceDir, default: true, skipBootstrap: true }];
+    : [...nextList, { id: agentId, name: nextName, workspace: workspaceDir, default: true }];
   const nextConfig: OpenClawConfig = {
     ...updated,
     agents: {
@@ -1070,8 +1150,9 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
       defaults: {
         ...updated.agents?.defaults,
         workspace: workspaceDir,
+        skipBootstrap: true,
       },
-      list: normalizedNextList,
+      list: stripPerAgentSkipBootstrap(normalizedNextList),
     },
   };
   const synchronizedConfig = applyBustlyWorkspaceCollaborationConfig(nextConfig, workspaceId);
@@ -1134,9 +1215,18 @@ async function createBustlyWorkspaceAgent(params: {
     agentId,
     name: displayName,
     workspace: workspaceDir,
-    skipBootstrap: true,
   });
-  const synchronizedConfig = applyBustlyWorkspaceCollaborationConfig(updated, workspaceId);
+  const synchronizedConfig = applyBustlyWorkspaceCollaborationConfig({
+    ...updated,
+    agents: {
+      ...updated.agents,
+      defaults: {
+        ...updated.agents?.defaults,
+        skipBootstrap: true,
+      },
+      list: stripPerAgentSkipBootstrap(updated.agents?.list),
+    },
+  }, workspaceId);
   if (JSON.stringify(synchronizedConfig) !== JSON.stringify(config)) {
     writeFileSync(configPath, JSON.stringify(synchronizedConfig, null, 2));
   }
@@ -1449,6 +1539,7 @@ function writeMainLog(message: string) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("main-log", { message });
   }
+  captureSentryLog("info", [message], "writeMainLog");
 }
 
 function loadLoginShellEnvironment(shellPath: string, homeDir: string): Record<string, string> {

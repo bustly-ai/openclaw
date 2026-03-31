@@ -248,7 +248,7 @@ export async function loadBustlyRemoteAgentPresets(
         });
         return cloneFallbackPresets();
       }
-    });
+    })();
   }
   return await presetsPromise;
 }
