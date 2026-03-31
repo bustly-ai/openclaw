@@ -164,14 +164,37 @@ function captureSentryLog(level: "info" | "warning" | "error", args: unknown[], 
   }
 }
 
+function addSentryBreadcrumb(level: "info" | "warning", args: unknown[], logger: string): void {
+  if (sentryLogReportingActive) {
+    return;
+  }
+  sentryLogReportingActive = true;
+  try {
+    const message = args.map((arg) => formatLogArg(arg)).join(" ").trim() || "(empty log)";
+    Sentry.addBreadcrumb({
+      type: "default",
+      category: logger,
+      level,
+      message,
+      data: {
+        logger,
+      },
+    });
+  } catch {
+    // Never let log reporting break the main process.
+  } finally {
+    sentryLogReportingActive = false;
+  }
+}
+
 function installSentryConsoleReporting(): void {
   console.log = (...args: unknown[]) => {
     originalConsole.log(...args);
-    captureSentryLog("info", args, "console.log");
+    addSentryBreadcrumb("info", args, "console.log");
   };
   console.warn = (...args: unknown[]) => {
     originalConsole.warn(...args);
-    captureSentryLog("warning", args, "console.warn");
+    addSentryBreadcrumb("warning", args, "console.warn");
   };
   console.error = (...args: unknown[]) => {
     originalConsole.error(...args);
@@ -1586,7 +1609,7 @@ function writeMainLog(message: string) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("main-log", { message });
   }
-  captureSentryLog("info", [message], "writeMainLog");
+  addSentryBreadcrumb("info", [message], "writeMainLog");
 }
 
 function loadLoginShellEnvironment(shellPath: string, homeDir: string): Record<string, string> {
