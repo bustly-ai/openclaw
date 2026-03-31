@@ -31,6 +31,7 @@ import {
 } from "../../lib/session-icons";
 import { listWorkspaceSummaries, type WorkspaceSummary } from "../../lib/bustly-supabase";
 import { useAppState } from "../../providers/AppStateProvider";
+import { useGlobalLoader } from "../../providers/GlobalLoaderProvider";
 import {
   buildBustlyWorkspaceAgentId,
   resolveAgentIdFromSessionKey,
@@ -1033,6 +1034,7 @@ function WorkspaceSwitcher(props: {
 
 export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const { checking, initialized } = useAppState();
+  const { showGlobalLoading, hideGlobalLoading } = useGlobalLoader();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isWindowFullscreen, setIsWindowFullscreen] = useState(false);
   const [recentTasks, setRecentTasks] = useState<SidebarTask[]>([]);
@@ -1457,14 +1459,23 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   };
 
   const handleSwitchWorkspace = async (workspaceId: string) => {
-    const workspace = workspaces.find((entry) => entry.id === workspaceId);
-    const result = await window.electronAPI.bustlySetActiveWorkspace(workspaceId, workspace?.name);
-    if (!result.success) {
+    if (workspaceId === activeWorkspaceId) {
       return;
     }
-    setActiveWorkspaceId(workspaceId);
-    void navigate("/chat", { replace: true });
-    notifySidebarTasksRefresh();
+    const workspace = workspaces.find((entry) => entry.id === workspaceId);
+    showGlobalLoading(`Loading ${workspace?.name?.trim() || "workspace"}...`, "workspace-switch", "loading", 10);
+    try {
+      const result = await window.electronAPI.bustlySetActiveWorkspace(workspaceId, workspace?.name);
+      if (!result.success) {
+        hideGlobalLoading("workspace-switch");
+        return;
+      }
+      setActiveWorkspaceId(workspaceId);
+      void navigate("/chat", { replace: true });
+      notifySidebarTasksRefresh();
+    } catch {
+      hideGlobalLoading("workspace-switch");
+    }
   };
 
   const handleSignOut = async () => {

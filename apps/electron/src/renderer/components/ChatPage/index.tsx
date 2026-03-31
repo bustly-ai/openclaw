@@ -41,6 +41,7 @@ import { recoverSessionViewState } from "./runtime-recovery";
 import { collapseProcessedTurn, collapseStreamingEvents, resolveToolDisplay, formatToolDetail } from "./utils";
 import type { TimelineArtifact, TimelineNode } from "./types";
 import { useAppState } from "../../providers/AppStateProvider";
+import { useGlobalLoader } from "../../providers/GlobalLoaderProvider";
 
 type ChatRole = "user" | "assistant" | "thinking" | "system";
 
@@ -783,6 +784,7 @@ function PlaceholderTicker({ items }: { items: string[] }) {
 
 export default function ChatPage() {
   const { ensureGatewayReady, gatewayReady } = useAppState();
+  const { showGlobalLoading, hideGlobalLoading } = useGlobalLoader();
   const location = useLocation();
   const navigate = useNavigate();
   const [connected, setConnected] = useState(false);
@@ -2121,6 +2123,7 @@ export default function ChatPage() {
     let disposed = false;
 
     const loadWorkspaceState = async (options?: { force?: boolean }) => {
+      const shouldShowGlobalLoading = options?.force === true;
       if (!disposed) {
         setWorkspaceStateLoading(true);
       }
@@ -2143,6 +2146,9 @@ export default function ChatPage() {
           setCanManageSubscription(false);
         }
       } finally {
+        if (shouldShowGlobalLoading) {
+          hideGlobalLoading("workspace-switch");
+        }
         if (!disposed) {
           setWorkspaceStateLoading(false);
         }
@@ -2158,7 +2164,7 @@ export default function ChatPage() {
       disposed = true;
       unsubscribe();
     };
-  }, []);
+  }, [hideGlobalLoading]);
 
   useEffect(() => {
     if (!gatewayReady) {

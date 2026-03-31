@@ -10,19 +10,30 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { CircleNotch } from "@phosphor-icons/react";
+import GlobalLoading from "../components/ui/GlobalLoading";
 
 type GlobalLoaderContextValue = {
   showLoader: (text?: string, durationMs?: number) => void;
   hideLoader: () => void;
+  showGlobalLoading: (text?: string, key?: string, tone?: "loading" | "error", priority?: number) => void;
+  hideGlobalLoading: (key?: string) => void;
+};
+
+type GlobalLoaderEntry = {
+  key: string;
+  text: string;
+  tone: "loading" | "error";
+  priority: number;
 };
 
 const GlobalLoaderContext = createContext<GlobalLoaderContextValue | null>(null);
 
 export function GlobalLoaderProvider({ children }: { children: ReactNode }) {
-  const [loaderState, setLoaderState] = useState({
+  const [bannerState, setBannerState] = useState({
     isVisible: false,
     text: "",
   });
+  const [globalLoaders, setGlobalLoaders] = useState<GlobalLoaderEntry[]>([]);
   const timerRef = useRef<number | null>(null);
 
   const hideLoader = useCallback(() => {
@@ -30,7 +41,7 @@ export function GlobalLoaderProvider({ children }: { children: ReactNode }) {
       window.clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    setLoaderState((prev) => ({ ...prev, isVisible: false }));
+    setBannerState((prev) => ({ ...prev, isVisible: false }));
   }, []);
 
   const showLoader = useCallback((text = "Loading...", durationMs = 3_000) => {
@@ -38,7 +49,7 @@ export function GlobalLoaderProvider({ children }: { children: ReactNode }) {
       window.clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    setLoaderState({ isVisible: true, text });
+    setBannerState({ isVisible: true, text });
     if (durationMs > 0) {
       timerRef.current = window.setTimeout(() => {
         timerRef.current = null;
@@ -46,6 +57,27 @@ export function GlobalLoaderProvider({ children }: { children: ReactNode }) {
       }, durationMs);
     }
   }, [hideLoader]);
+
+  const showGlobalLoading = useCallback((
+    text = "Loading...",
+    key = "default",
+    tone: "loading" | "error" = "loading",
+    priority = 0,
+  ) => {
+    setGlobalLoaders((prev) => {
+      const existingIndex = prev.findIndex((entry) => entry.key === key);
+      if (existingIndex === -1) {
+        return [...prev, { key, text, tone, priority }];
+      }
+      const next = [...prev];
+      next[existingIndex] = { key, text, tone, priority };
+      return next;
+    });
+  }, []);
+
+  const hideGlobalLoading = useCallback((key = "default") => {
+    setGlobalLoaders((prev) => prev.filter((entry) => entry.key !== key));
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -58,12 +90,32 @@ export function GlobalLoaderProvider({ children }: { children: ReactNode }) {
   const value = useMemo<GlobalLoaderContextValue>(() => ({
     showLoader,
     hideLoader,
-  }), [hideLoader, showLoader]);
+    showGlobalLoading,
+    hideGlobalLoading,
+  }), [hideGlobalLoading, hideLoader, showGlobalLoading, showLoader]);
+
+  const activeGlobalLoader = useMemo(() => {
+    if (globalLoaders.length === 0) {
+      return null;
+    }
+    return globalLoaders.reduce((best, entry) => {
+      if (!best) {
+        return entry;
+      }
+      return entry.priority >= best.priority ? entry : best;
+    }, null as GlobalLoaderEntry | null);
+  }, [globalLoaders]);
 
   return (
     <GlobalLoaderContext.Provider value={value}>
       {children}
-      <GlobalLoaderBanner isVisible={loaderState.isVisible} text={loaderState.text} />
+      <GlobalLoaderBanner isVisible={bannerState.isVisible} text={bannerState.text} />
+      {activeGlobalLoader ? (
+        <GlobalLoading
+          text={activeGlobalLoader.text || "Loading..."}
+          tone={activeGlobalLoader.tone || "loading"}
+        />
+      ) : null}
     </GlobalLoaderContext.Provider>
   );
 }
