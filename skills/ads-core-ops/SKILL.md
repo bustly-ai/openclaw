@@ -1,6 +1,6 @@
 ---
 name: ads-core-ops
-description: Use the Bustly ads CLI to inspect auth, check connectivity, read entities, write supported entities, and invoke native provider APIs for Klaviyo and Google Ads.
+description: Use the Bustly ads CLI to inspect auth, check connectivity, read entities, write supported entities, and invoke native provider APIs for Klaviyo, Google Ads, and Google Analytics.
 metadata:
   {
     "openclaw":
@@ -18,6 +18,7 @@ Supported platforms
 
 - `klaviyo`
 - `google-ads`
+- `google-analytics`
 
 CLI shape
 
@@ -37,6 +38,7 @@ Browser auth
 ```bash
 bustly auth klaviyo
 bustly auth google-ads
+bustly auth google-analytics
 ```
 
 - `bustly auth` opens the desktop browser flow for supported providers
@@ -72,6 +74,7 @@ Status
 ```bash
 bustly ops klaviyo status
 bustly ops google-ads status
+bustly ops google-analytics status
 ```
 
 Auth
@@ -153,12 +156,49 @@ bustly ops google-ads write --entity search --action update --payload '{"request
 bustly ops google-ads invoke --method POST --path /customers/8922277297/googleAds:search --body '{"query":"SELECT campaign.id FROM campaign LIMIT 10"}'
 ```
 
+Google Analytics
+
+Readable entities
+
+- `accounts`
+- `properties`
+- `audiences`
+- `custom_dimensions`
+- `reports`
+
+Writable actions
+
+- `properties`: `create`, `update`, `delete`
+- `audiences`: `create`, `update`, `delete`
+- `custom_dimensions`: `create`, `update`, `delete`
+
+Google Analytics notes
+
+- `accounts` read uses `GET /accountSummaries`
+- `properties` supports `--account-id <account-id>` or `--property-id <property-id>`
+- `audiences`, `custom_dimensions`, and `reports` require `--property-id <property-id>`
+- `reports` defaults to GA4 Data API `runReport` with `date`, `activeUsers`, and `sessions` when no explicit report body is passed
+- Native Google Analytics requests sent through `write` and `invoke` are restricted to Admin API resources plus supported Data API report endpoints
+
+Examples
+
+```bash
+bustly ops google-analytics help
+bustly ops google-analytics read --entity accounts
+bustly ops google-analytics read --entity properties --account-id 123456
+bustly ops google-analytics read --entity audiences --property-id 483291314
+bustly ops google-analytics read --entity reports --property-id 483291314 --metrics activeUsers,sessions --dimensions date
+bustly ops google-analytics write --entity properties --action update --payload '{"request":{"method":"GET","path":"/properties/483291314"}}'
+bustly ops google-analytics invoke --method POST --path /properties/483291314:runReport --body '{"dateRanges":[{"startDate":"7daysAgo","endDate":"today"}],"dimensions":[{"name":"date"}],"metrics":[{"name":"activeUsers"}],"limit":"10"}'
+```
+
 Platform notes
 
 - Klaviyo aliases: `klaviyo`
 - Klaviyo `campaigns` read defaults to `channel=email` when no `filter` or `channel` is provided
 - Google Ads aliases: `google-ads`, `googleads`
-- Both platforms route through `ads-core-ops`
+- Google Analytics aliases: `google-analytics`, `googleanalytics`, `ga4`
+- All three platforms route through `ads-core-ops`
 - `invoke` is the escape hatch for native provider-relative requests
 - `write` can be used with `payload.request` when a native request shape is required
 
