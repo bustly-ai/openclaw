@@ -67,6 +67,7 @@ interface GatewayExitData {
 interface GatewayLifecycleData {
   phase: "starting" | "stopping" | "ready" | "error";
   message: string | null;
+  canRestoreLastGoodConfig: boolean;
 }
 interface MainLogData {
   message: string;
@@ -122,6 +123,7 @@ interface ElectronAPI {
   // Gateway management
   gatewayStart: (apiKey?: string) => Promise<{ success: boolean; error?: string }>;
   gatewayStop: () => Promise<{ success: boolean; error?: string }>;
+  gatewayRestoreLastGoodConfig: () => Promise<{ success: boolean; error?: string }>;
   gatewayStatus: () => Promise<GatewayStatus>;
   gatewayConnectConfig: () => Promise<GatewayConnectConfig>;
   gatewayPatchSession: (

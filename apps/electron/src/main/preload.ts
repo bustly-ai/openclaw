@@ -15,6 +15,7 @@ type UpdateStatusPayload = { event: string };
 type GatewayLifecyclePayload = {
   phase: "starting" | "stopping" | "ready" | "error";
   message: string | null;
+  canRestoreLastGoodConfig: boolean;
 };
 
 /**
@@ -30,6 +31,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Gateway management
   gatewayStart: (apiKey?: string) => ipcRenderer.invoke("gateway-start", apiKey),
   gatewayStop: () => ipcRenderer.invoke("gateway-stop"),
+  gatewayRestoreLastGoodConfig: () => ipcRenderer.invoke("gateway-restore-last-good-config"),
   gatewayStatus: () => ipcRenderer.invoke("gateway-status"),
   gatewayConnectConfig: () => ipcRenderer.invoke("gateway-connect-config"),
   gatewayPatchSession: (key: string, patch: { label?: string | null; icon?: string | null }) =>

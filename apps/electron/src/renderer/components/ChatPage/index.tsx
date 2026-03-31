@@ -107,7 +107,6 @@ type SessionUsageSummary = {
 };
 
 type RunTerminalState = "final" | "aborted" | "error";
-type ConnectionNoticeTone = "warning" | "error";
 type ReconnectStatus = {
   runId: string;
 };
@@ -784,7 +783,7 @@ function PlaceholderTicker({ items }: { items: string[] }) {
 
 export default function ChatPage() {
   const { ensureGatewayReady, gatewayReady } = useAppState();
-  const { showGlobalLoading, hideGlobalLoading } = useGlobalLoader();
+  const { showGlobalLoading, hideGlobalLoading, showLoader, hideLoader } = useGlobalLoader();
   const location = useLocation();
   const navigate = useNavigate();
   const [connected, setConnected] = useState(false);
@@ -795,10 +794,6 @@ export default function ChatPage() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [contextPaths, setContextPaths] = useState<ContextPath[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [connectionNotice, setConnectionNotice] = useState<{
-    message: string;
-    tone: ConnectionNoticeTone;
-  } | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [compactingRunId, setCompactingRunId] = useState<string | null>(null);
   const [reconnectStatus, setReconnectStatus] = useState<ReconnectStatus | null>(null);
@@ -1074,6 +1069,16 @@ export default function ChatPage() {
     const status = await window.electronAPI.gatewayStatus();
     return status;
   }, []);
+
+  useEffect(() => {
+    if (error) {
+      showLoader(error, 0, "error");
+      return;
+    }
+    if (connected) {
+      hideLoader();
+    }
+  }, [connected, error, hideLoader, showLoader]);
 
   const loadSessionUsage = useCallback(async (client: GatewayBrowserClient, sessionKey: string) => {
     const res = await client.request<{
@@ -1721,13 +1726,10 @@ export default function ChatPage() {
     async (status: GatewayStatus) => {
       if (!status.running) {
         setConnected(false);
-        setConnectionNotice({
-          message: "Gateway unavailable. Reconnecting...",
-          tone: "warning",
-        });
+        showLoader("Gateway unavailable. Reconnecting...", 0);
         return;
       }
-      setConnectionNotice(null);
+      hideLoader();
       let connectConfig: GatewayConnectConfig;
       try {
         connectConfig = await window.electronAPI.gatewayConnectConfig();
@@ -1758,7 +1760,7 @@ export default function ChatPage() {
         onHello: () => {
           setConnected(true);
           setError(null);
-          setConnectionNotice(null);
+          hideLoader();
           const sessionKey = currentSessionKeyRef.current;
           reloadSessionHistory(client, sessionKey, { recoverTransientState: true });
           void loadSessionUsage(client, sessionKey).catch((err) => {
@@ -1777,14 +1779,11 @@ export default function ChatPage() {
         onClose: ({ code, reason, error: closeError }) => {
           setConnected(false);
           if (closeError) {
-            setConnectionNotice(null);
+            hideLoader();
             setError(closeError.message);
           } else {
             setError(null);
-            setConnectionNotice({
-              message: "Gateway disconnected. Reconnecting...",
-              tone: "warning",
-            });
+            showLoader("Gateway disconnected. Reconnecting...", 0);
           }
           console.warn("[electron-chat] gateway disconnected", {
             code,
@@ -2170,7 +2169,6 @@ export default function ChatPage() {
     if (!gatewayReady) {
       setConnected(false);
       setSessionLoading(currentSessionKeyRef.current, true);
-      setConnectionNotice(null);
       return;
     }
 
@@ -2198,10 +2196,7 @@ export default function ChatPage() {
         .then((status) => {
           if (!status.running) {
             setConnected(false);
-            setConnectionNotice({
-              message: "Gateway unavailable. Reconnecting...",
-              tone: "warning",
-            });
+            showLoader("Gateway unavailable. Reconnecting...", 0);
           }
         })
         .catch(() => {});
@@ -2211,6 +2206,7 @@ export default function ChatPage() {
       cancelled = true;
       window.clearInterval(interval);
       clientRef.current?.stop();
+      hideLoader();
       clientRef.current = null;
       for (const runtime of sessionRuntimesRef.current.values()) {
         for (const timer of runtime.toolTimers.values()) {
@@ -2219,7 +2215,7 @@ export default function ChatPage() {
         runtime.toolTimers.clear();
       }
     };
-  }, [connectGateway, ensureGatewayReady, gatewayReady, loadGatewayStatus, setSessionLoading]);
+  }, [connectGateway, ensureGatewayReady, gatewayReady, hideLoader, loadGatewayStatus, setSessionLoading, showLoader]);
 
   useEffect(() => {
     const client = clientRef.current;
@@ -3153,18 +3149,6 @@ export default function ChatPage() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-white text-gray-900">
       <div className="sticky top-0 z-20 h-8 flex-none bg-white [-webkit-app-region:drag]" />
-
-      {error || connectionNotice ? (
-        <div
-          className={`mx-auto mt-4 w-full max-w-3xl rounded-2xl px-4 py-3 text-sm ${
-            error != null || connectionNotice?.tone === "error"
-              ? "border border-red-100 bg-red-50 text-red-600"
-              : "border border-amber-100 bg-amber-50 text-amber-700"
-          }`}
-        >
-          {error ?? connectionNotice?.message}
-        </div>
-      ) : null}
 
       <div className="relative flex-1 overflow-hidden">
         <div ref={scrollRef} className="chat-page-timeline h-full">

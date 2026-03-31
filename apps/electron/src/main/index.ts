@@ -20,6 +20,7 @@ import {
   readFileSync,
   writeFileSync,
   mkdirSync,
+  copyFileSync,
   cpSync,
   statSync,
   rmSync,
@@ -342,11 +343,20 @@ const DEEP_LINK_CHANNEL = "deep-link";
 app.setName(APP_DISPLAY_NAME);
 
 let gatewayProcess: ChildProcess | null = null;
+let gatewayStartPromise: Promise<boolean> | null = null;
 let mainWindow: BrowserWindow | null = null;
 let needsOnboardAtLaunch = false;
 let gatewayPort: number = 17999;
 let gatewayBind: string = "loopback";
 let gatewayToken: string | null = null;
+let gatewayStartupInFlight = false;
+let gatewayShutdownExpected = false;
+let gatewayAutoRestartAttempt = 0;
+let gatewayAutoRestartTimer: NodeJS.Timeout | null = null;
+let gatewayLastWorkerFailure: {
+  kind: "config" | "runtime";
+  message: string;
+} | null = null;
 let bustlyLoginCancelled = false;
 let bustlyLoginAttemptId = 0;
 
@@ -356,13 +366,18 @@ setMainLogSink((entry) => {
   }
 });
 
-function emitGatewayLifecycle(phase: "starting" | "stopping" | "ready" | "error", message?: string): void {
+function emitGatewayLifecycle(
+  phase: "starting" | "stopping" | "ready" | "error",
+  message?: string,
+  opts?: { canRestoreLastGoodConfig?: boolean },
+): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
   }
   mainWindow.webContents.send("gateway-lifecycle", {
     phase,
     message: message ?? null,
+    canRestoreLastGoodConfig: opts?.canRestoreLastGoodConfig === true,
   });
 }
 
@@ -900,6 +915,75 @@ function resolveElectronStateDir(): string {
 
 function resolveElectronConfigPath(): string {
   return resolveElectronIsolatedConfigPath();
+}
+
+function resolveGatewayLastGoodConfigPath(): string {
+  return join(resolveElectronStateDir(), "electron", "gateway", "openclaw.last-good.json");
+}
+
+function hasGatewayLastGoodConfigSnapshot(): boolean {
+  return existsSync(resolveGatewayLastGoodConfigPath());
+}
+
+function snapshotGatewayLastGoodConfig(): void {
+  const configPath = resolveElectronConfigPath();
+  if (!existsSync(configPath)) {
+    return;
+  }
+  const snapshotPath = resolveGatewayLastGoodConfigPath();
+  mkdirSync(dirname(snapshotPath), { recursive: true, mode: 0o700 });
+  copyFileSync(configPath, snapshotPath);
+  writeMainLog(`[Gateway] Saved last-good config snapshot to ${snapshotPath}`);
+}
+
+function restoreGatewayLastGoodConfigSnapshot(): void {
+  const snapshotPath = resolveGatewayLastGoodConfigPath();
+  if (!existsSync(snapshotPath)) {
+    throw new Error("No last working gateway config is available");
+  }
+  const configPath = resolveElectronConfigPath();
+  mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 });
+  copyFileSync(snapshotPath, configPath);
+  writeMainLog(`[Gateway] Restored last-good config snapshot from ${snapshotPath}`);
+}
+
+function clearGatewayAutoRestartTimer(): void {
+  if (gatewayAutoRestartTimer) {
+    clearTimeout(gatewayAutoRestartTimer);
+    gatewayAutoRestartTimer = null;
+  }
+}
+
+function isLikelyGatewayConfigError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("invalid config") ||
+    normalized.includes("legacy config") ||
+    normalized.includes("requires gateway.") ||
+    normalized.includes("requires gateway ") ||
+    normalized.includes("gateway.bind=") ||
+    normalized.includes("refusing to bind gateway") ||
+    normalized.includes("tailscale") ||
+    normalized.includes("allowedorigins") ||
+    normalized.includes("trusted-proxy")
+  );
+}
+
+function scheduleGatewayAutoRestart(reason: string): void {
+  if (gatewayAutoRestartTimer || gatewayShutdownExpected || gatewayStartupInFlight || gatewayProcess) {
+    return;
+  }
+  const attempt = gatewayAutoRestartAttempt + 1;
+  const delayMs = Math.min(1_000 * 2 ** (attempt - 1), 10_000);
+  gatewayAutoRestartAttempt = attempt;
+  writeMainWarn(`[Gateway] Unexpected exit. Restart attempt ${attempt} in ${delayMs}ms: ${reason}`);
+  emitGatewayLifecycle("starting", `Gateway interrupted. Recovering${attempt > 1 ? ` (attempt ${attempt})` : ""}...`);
+  gatewayAutoRestartTimer = setTimeout(() => {
+    gatewayAutoRestartTimer = null;
+    void startGateway().catch((error) => {
+      writeMainError("[Gateway] Auto-restart failed:", error);
+    });
+  }, delayMs);
 }
 
 function resolveBustlyWorkspaceAgentWorkspaceDir(
@@ -2026,6 +2110,10 @@ async function resolveGatewayStartupPort(
  * Start the OpenClaw Gateway process
  */
 async function startGateway(): Promise<boolean> {
+  if (gatewayStartPromise) {
+    return gatewayStartPromise;
+  }
+  gatewayStartPromise = (async () => {
   const oauthCallbackPort = await startOAuthCallbackServer();
   writeMainInfo(`[Bustly] OAuth callback server started on port ${oauthCallbackPort}`);
 
@@ -2036,6 +2124,10 @@ async function startGateway(): Promise<boolean> {
     return true;
   }
 
+  clearGatewayAutoRestartTimer();
+  gatewayShutdownExpected = false;
+  gatewayStartupInFlight = true;
+  gatewayLastWorkerFailure = null;
   emitGatewayLifecycle("starting", "Starting gateway...");
 
   const cliPath = resolveOpenClawCliPath({
@@ -2173,6 +2265,36 @@ async function startGateway(): Promise<boolean> {
       silent: true,
     });
 
+    gatewayProcess.on("message", (payload: unknown) => {
+      if (!payload || typeof payload !== "object") {
+        return;
+      }
+      const message = payload as { type?: unknown; kind?: unknown; message?: unknown };
+      if (
+        message.type === "gateway-worker-startup-error" &&
+        (message.kind === "config" || message.kind === "runtime") &&
+        typeof message.message === "string"
+      ) {
+        gatewayLastWorkerFailure = {
+          kind: message.kind,
+          message: message.message,
+        };
+        writeMainWarn(`[Gateway worker startup error] ${message.kind}: ${message.message}`);
+        return;
+      }
+      if (
+        message.type === "gateway-worker-fatal" &&
+        message.kind === "runtime" &&
+        typeof message.message === "string"
+      ) {
+        gatewayLastWorkerFailure = {
+          kind: "runtime",
+          message: message.message,
+        };
+        writeMainError(`[Gateway worker fatal] ${message.message}`);
+      }
+    });
+
     gatewayProcess.stdout?.on("data", (data) => {
       const output = data.toString().trim();
       if (output) {
@@ -2193,21 +2315,35 @@ async function startGateway(): Promise<boolean> {
 
     gatewayProcess.on("error", (error) => {
       writeMainError("[Gateway error]:", error);
+      gatewayStartupInFlight = false;
       gatewayProcess = null;
       reject(error);
     });
 
     gatewayProcess.on("exit", (code, signal) => {
+      const exitReason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
       writeMainLog(
-        `Gateway exited during startup: code=${code ?? "null"} signal=${signal ?? "null"}`,
+        `Gateway exited: ${exitReason}`,
       );
       if (recentStderr.length > 0) {
         writeMainLog(`Gateway stderr tail:\n${recentStderr.join("\n")}`);
       } else if (recentStdout.length > 0) {
         writeMainLog(`Gateway stdout tail:\n${recentStdout.join("\n")}`);
       }
+      const startupFailure = gatewayStartupInFlight;
+      gatewayStartupInFlight = false;
       gatewayProcess = null;
       mainWindow?.webContents.send("gateway-exit", { code, signal });
+      if (!startupFailure && !gatewayShutdownExpected) {
+        const failureMessage = gatewayLastWorkerFailure?.message || `Gateway exited unexpectedly (${exitReason})`;
+        if (gatewayLastWorkerFailure?.kind === "config" || isLikelyGatewayConfigError(failureMessage)) {
+          emitGatewayLifecycle("error", failureMessage, {
+            canRestoreLastGoodConfig: hasGatewayLastGoodConfigSnapshot(),
+          });
+          return;
+        }
+        scheduleGatewayAutoRestart(failureMessage);
+      }
     });
 
     const exitPromise = new Promise<never>((_resolve, rejectExit) => {
@@ -2229,12 +2365,17 @@ async function startGateway(): Promise<boolean> {
       .then(() => {
         const elapsedMs = Date.now() - startAt;
         writeMainLog(`Gateway startup ready in ${elapsedMs}ms`);
+        gatewayStartupInFlight = false;
+        gatewayAutoRestartAttempt = 0;
+        gatewayLastWorkerFailure = null;
+        snapshotGatewayLastGoodConfig();
         emitGatewayLifecycle("ready", null);
         resolvePromise(true);
       })
       .catch((error) => {
         const elapsedMs = Date.now() - startAt;
         writeMainLog(`Gateway startup failed after ${elapsedMs}ms`);
+        gatewayStartupInFlight = false;
         const stderrTail = recentStderr.length > 0 ? recentStderr.join("\n") : "";
         const stdoutTail = recentStdout.length > 0 ? recentStdout.join("\n") : "";
         if (stderrTail) {
@@ -2242,15 +2383,27 @@ async function startGateway(): Promise<boolean> {
         } else if (stdoutTail) {
           writeMainLog(`Gateway startup stdout:\n${stdoutTail}`);
         }
+        const lifecycleMessage =
+          gatewayLastWorkerFailure?.message ||
+          (error instanceof Error ? error.message : String(error));
+        const configFailure =
+          gatewayLastWorkerFailure?.kind === "config" ||
+          isLikelyGatewayConfigError([lifecycleMessage, stderrTail, stdoutTail].filter(Boolean).join("\n"));
         if (gatewayProcess && !gatewayProcess.killed) {
+          gatewayShutdownExpected = true;
           gatewayProcess.kill("SIGTERM");
         }
         emitGatewayLifecycle(
           "error",
-          error instanceof Error ? error.message : String(error),
+          lifecycleMessage,
+          { canRestoreLastGoodConfig: configFailure && hasGatewayLastGoodConfigSnapshot() },
         );
         reject(error);
       });
+  });
+  })();
+  return await gatewayStartPromise.finally(() => {
+    gatewayStartPromise = null;
   });
 }
 
@@ -2265,6 +2418,8 @@ function stopGateway(): Promise<boolean> {
       return;
     }
 
+    clearGatewayAutoRestartTimer();
+    gatewayShutdownExpected = true;
     writeMainInfo("Stopping gateway");
     emitGatewayLifecycle("stopping", "Restarting gateway...");
 
@@ -2798,6 +2953,27 @@ function setupIpcHandlers(): void {
       return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle("gateway-restore-last-good-config", async () => {
+    try {
+      clearGatewayAutoRestartTimer();
+      if (gatewayProcess) {
+        await stopGateway();
+      }
+      restoreGatewayLastGoodConfigSnapshot();
+      gatewayLastWorkerFailure = null;
+      gatewayAutoRestartAttempt = 0;
+      emitGatewayLifecycle("starting", "Restoring last working gateway config...");
+      await startGateway();
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      emitGatewayLifecycle("error", message, {
+        canRestoreLastGoodConfig: hasGatewayLastGoodConfigSnapshot(),
+      });
+      return { success: false, error: message };
     }
   });
 

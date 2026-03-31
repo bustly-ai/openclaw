@@ -17,8 +17,10 @@ function AppShell() {
     error,
     gatewayPhase,
     gatewayMessage,
+    gatewayCanRestoreLastGoodConfig,
     gatewayReady,
     refreshAppState,
+    restoreGatewayLastGoodConfig,
   } = useAppState();
   const { showGlobalLoading, hideGlobalLoading } = useGlobalLoader();
   const location = useLocation();
@@ -50,16 +52,40 @@ function AppShell() {
     loggedIn &&
     !hasCompletedInitialGatewayBootRef.current &&
     gatewayPhase !== "error";
-  const appLoadingMessage = (error?.trim() || gatewayMessage?.trim() || "Loading...");
+  const shouldShowGatewayRecovery =
+    Boolean(error?.trim()) && gatewayCanRestoreLastGoodConfig;
+  const appLoadingMessage = shouldShowGatewayRecovery
+    ? "Bustly configuration is corrupted. Restore from backup?"
+    : (error?.trim() || gatewayMessage?.trim() || "Loading...");
   const appLoadingTone = error?.trim() ? "error" : "loading";
+  const appLoadingActions =
+    shouldShowGatewayRecovery
+      ? [
+          {
+            label: "Restore",
+            onClick: () => {
+              void restoreGatewayLastGoodConfig();
+            },
+          },
+        ]
+      : undefined;
 
   useEffect(() => {
     if (checking || showGatewayLoading || Boolean(error?.trim())) {
-      showGlobalLoading(appLoadingMessage, "app-shell", appLoadingTone);
+      showGlobalLoading(appLoadingMessage, "app-shell", appLoadingTone, 0, appLoadingActions);
       return;
     }
     hideGlobalLoading("app-shell");
-  }, [appLoadingMessage, appLoadingTone, checking, error, hideGlobalLoading, showGatewayLoading, showGlobalLoading]);
+  }, [
+    appLoadingActions,
+    appLoadingMessage,
+    appLoadingTone,
+    checking,
+    error,
+    hideGlobalLoading,
+    showGatewayLoading,
+    showGlobalLoading,
+  ]);
 
   const renderLoginRoute = () => {
     if (checking) {
