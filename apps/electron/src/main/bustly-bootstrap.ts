@@ -3,9 +3,9 @@ import { homedir } from "node:os";
 import * as path from "node:path";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
-  isWorkspaceOnboardingCompleted,
   loadWorkspaceTemplate,
 } from "../../../../src/agents/workspace";
+import { normalizeBustlyAgentName } from "../shared/bustly-agent.js";
 import type { BustlyOAuthState } from "./bustly-types.js";
 import { readBustlyOAuthState } from "./bustly-oauth.js";
 
@@ -936,9 +936,25 @@ function buildTemplateValues(context: BustlyBootstrapContext): Record<string, st
 async function loadRenderedTemplate(
   name: string,
   values: Record<string, string>,
+  opts?: {
+    agentName?: string;
+  },
 ): Promise<string> {
-  const template = await loadWorkspaceTemplate(name);
-  return `${MANAGED_MARKER}\n${renderTemplate(template, values).trim()}\n`;
+  const candidateNames = opts?.agentName
+    ? [`agents/${normalizeBustlyAgentName(opts.agentName)}/${name}`, name]
+    : [name];
+  for (const candidateName of candidateNames) {
+    try {
+      const template = await loadWorkspaceTemplate(candidateName);
+      return `${MANAGED_MARKER}\n${renderTemplate(template, values).trim()}\n`;
+    } catch (error) {
+      if (candidateName !== name) {
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Missing Bustly template for ${name}`);
 }
 
 async function writeManagedFile(filePath: string, content: string): Promise<void> {
@@ -963,13 +979,9 @@ export async function initializeBustlyWorkspaceBootstrap(params: {
   workspaceDir: string;
   workspaceId: string;
   workspaceName?: string;
+  agentName?: string;
   force?: boolean;
 }): Promise<void> {
-  const completed = await isWorkspaceOnboardingCompleted(params.workspaceDir);
-  if (completed && !params.force) {
-    return;
-  }
-
   const context = await buildBustlyBootstrapContext({
     workspaceId: params.workspaceId,
     workspaceName: params.workspaceName,
@@ -979,14 +991,13 @@ export async function initializeBustlyWorkspaceBootstrap(params: {
 
   await fs.mkdir(workspaceDir, { recursive: true });
 
-  const [agents, soul, identity, user, tools, heartbeat, bootstrap] = await Promise.all([
-    loadRenderedTemplate("AGENTS.md", values),
-    loadRenderedTemplate("SOUL.md", values),
-    loadRenderedTemplate("IDENTITY.md", values),
-    loadRenderedTemplate("USER.md", values),
-    loadRenderedTemplate("TOOLS.md", values),
-    loadRenderedTemplate("HEARTBEAT.md", values),
-    loadRenderedTemplate("BOOTSTRAP.md", values),
+  const [agents, soul, identity, user, tools, heartbeat] = await Promise.all([
+    loadRenderedTemplate("AGENTS.md", values, { agentName: params.agentName }),
+    loadRenderedTemplate("SOUL.md", values, { agentName: params.agentName }),
+    loadRenderedTemplate("IDENTITY.md", values, { agentName: params.agentName }),
+    loadRenderedTemplate("USER.md", values, { agentName: params.agentName }),
+    loadRenderedTemplate("TOOLS.md", values, { agentName: params.agentName }),
+    loadRenderedTemplate("HEARTBEAT.md", values, { agentName: params.agentName }),
   ]);
 
   await Promise.all([
@@ -996,6 +1007,6 @@ export async function initializeBustlyWorkspaceBootstrap(params: {
     writeManagedFile(path.join(workspaceDir, "USER.md"), user),
     writeManagedFile(path.join(workspaceDir, "TOOLS.md"), tools),
     writeManagedFile(path.join(workspaceDir, "HEARTBEAT.md"), heartbeat),
-    writeManagedFile(path.join(workspaceDir, "BOOTSTRAP.md"), bootstrap),
+    fs.rm(path.join(workspaceDir, "BOOTSTRAP.md"), { force: true }),
   ]);
 }
