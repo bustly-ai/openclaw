@@ -11,7 +11,7 @@ import {
 import * as Sentry from "@sentry/electron/main";
 import JSZip from "jszip";
 import { randomUUID } from "node:crypto";
-import { resolve, dirname, basename, join } from "node:path";
+import { resolve, dirname, basename, join, relative } from "node:path";
 import { spawn, spawnSync, ChildProcess } from "node:child_process";
 import {
   existsSync,
@@ -23,6 +23,7 @@ import {
   appendFileSync,
   cpSync,
   statSync,
+  rmSync,
 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
@@ -84,6 +85,7 @@ import {
   normalizeBustlyAgentName,
   normalizeBustlyWorkspaceId,
 } from "../shared/bustly-agent.js";
+import { normalizeAgentId } from "../../../../src/routing/session-key.js";
 import {
   loadBustlyMainAgentPreset,
   loadBustlyRemoteAgentPresets,
@@ -930,6 +932,28 @@ function resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir: string): str
   return join(agentWorkspaceDir, ".bustly-agent.json");
 }
 
+function isPathInsideDir(parentDir: string, candidatePath: string): boolean {
+  const parent = resolve(parentDir);
+  const candidate = resolve(candidatePath);
+  const rel = relative(parent, candidate);
+  return rel === "" || (!rel.startsWith("..") && !rel.startsWith("../"));
+}
+
+function removeDirIfWithinRoot(targetDir: string | undefined, rootDir: string): void {
+  const trimmed = targetDir?.trim();
+  if (!trimmed) {
+    return;
+  }
+  const resolvedTarget = resolve(trimmed);
+  if (!isPathInsideDir(rootDir, resolvedTarget)) {
+    console.warn(
+      `[Workspace] Refusing to delete path outside allowed root target=${resolvedTarget} root=${resolve(rootDir)}`,
+    );
+    return;
+  }
+  rmSync(resolvedTarget, { recursive: true, force: true });
+}
+
 function loadBustlyAgentMetadata(agentWorkspaceDir: string): BustlyAgentMetadata {
   const metadataPath = resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir);
   if (!existsSync(metadataPath)) {
@@ -1375,8 +1399,10 @@ async function deleteBustlyWorkspaceAgent(params: {
   workspaceId: string;
   agentId: string;
 }): Promise<void> {
-  const mainAgentId = buildBustlyWorkspaceAgentId(params.workspaceId);
-  if (params.agentId === mainAgentId) {
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(params.workspaceId);
+  const normalizedAgentId = normalizeAgentId(params.agentId);
+  const mainAgentId = buildBustlyWorkspaceAgentId(normalizedWorkspaceId);
+  if (normalizedAgentId === mainAgentId) {
     throw new Error("The main workspace agent cannot be deleted.");
   }
 
@@ -1385,11 +1411,32 @@ async function deleteBustlyWorkspaceAgent(params: {
     throw new Error(`OpenClaw config not found at ${configPath}`);
   }
   const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
-  const result = pruneAgentConfig(config, params.agentId);
-  const synchronizedConfig = applyBustlyWorkspaceCollaborationConfig(result.config, params.workspaceId);
+  const entry = listAgentEntries(config).find(
+    (candidate) => normalizeAgentId(candidate.id) === normalizedAgentId,
+  );
+  if (!entry) {
+    throw new Error(`Agent "${params.agentId}" not found.`);
+  }
+
+  const agentName =
+    normalizeBustlyAgentName(
+      entry.id.slice(buildBustlyWorkspaceAgentPrefix(normalizedWorkspaceId).length),
+    ) || DEFAULT_BUSTLY_AGENT_NAME;
+  const workspaceDir =
+    entry.workspace?.trim() ||
+    resolveBustlyWorkspaceAgentWorkspaceDir(normalizedWorkspaceId, agentName);
+  const stateDir = resolveElectronStateDir();
+  const workspaceAgentsRoot = join(stateDir, "workspaces", normalizedWorkspaceId, "agents");
+  const agentStateDir = join(stateDir, "agents", normalizedAgentId);
+
+  const result = pruneAgentConfig(config, entry.id);
+  const synchronizedConfig = applyBustlyWorkspaceCollaborationConfig(result.config, normalizedWorkspaceId);
   if (JSON.stringify(synchronizedConfig) !== JSON.stringify(config)) {
     writeFileSync(configPath, JSON.stringify(synchronizedConfig, null, 2));
   }
+
+  removeDirIfWithinRoot(workspaceDir, workspaceAgentsRoot);
+  removeDirIfWithinRoot(agentStateDir, join(stateDir, "agents"));
 }
 
 async function syncBustlyWorkspaceAgent(params: {
