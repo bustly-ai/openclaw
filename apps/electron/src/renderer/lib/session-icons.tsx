@@ -186,19 +186,28 @@ export function deriveScenarioLabel(sessionKey: string, rawLabel?: string | null
   if (trimmed) {
     return trimmed;
   }
+  if (!sessionKey.trim()) {
+    return "Conversation";
+  }
   if (sessionKey === DEFAULT_SESSION_KEY || /^agent:[a-z0-9_-]+:main$/i.test(sessionKey)) {
     return "Overview";
   }
-  return "Scenario";
+  return "Conversation";
 }
 
 export function buildChatRoute(params: {
-  sessionKey: string;
+  agentId?: string | null;
+  sessionKey?: string | null;
   label?: string | null;
   icon?: string | null;
 }) {
   const searchParams = new URLSearchParams();
-  searchParams.set("session", params.sessionKey);
+  if (params.agentId?.trim()) {
+    searchParams.set("agent", params.agentId.trim());
+  }
+  if (params.sessionKey?.trim()) {
+    searchParams.set("session", params.sessionKey.trim());
+  }
   if (params.label?.trim()) {
     searchParams.set("label", params.label.trim());
   }

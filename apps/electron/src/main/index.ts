@@ -65,7 +65,6 @@ import {
   setOpenrouterApiKey,
 } from "../../../../src/commands/onboard-auth";
 import { applyPrimaryModel } from "../../../../src/commands/model-picker";
-import { buildAgentMainSessionKey } from "../../../../src/routing/session-key";
 import {
   ELECTRON_DEFAULT_MODEL,
   ELECTRON_OPENCLAW_PROFILE,
@@ -76,9 +75,11 @@ import {
   resolveElectronBustlyWorkspaceTemplateBaseUrl,
 } from "./defaults.js";
 import {
+  buildBustlyAgentConversationSessionKey,
   buildBustlyWorkspaceAgentPrefix,
   DEFAULT_BUSTLY_AGENT_NAME,
   buildBustlyWorkspaceAgentId,
+  isBustlyAgentConversationSessionKey,
   normalizeBustlyAgentName,
   normalizeBustlyWorkspaceId,
 } from "../shared/bustly-agent.js";
@@ -90,11 +91,22 @@ import {
 type BustlyWorkspaceAgentSummary = {
   agentId: string;
   agentName: string;
-  sessionKey: string;
   name: string;
   icon?: string;
   isMain: boolean;
   updatedAt: number | null;
+};
+
+type BustlyWorkspaceAgentSessionSummary = {
+  agentId: string;
+  sessionKey: string;
+  name: string;
+  icon?: string;
+  updatedAt: number | null;
+};
+
+type BustlyAgentMetadata = {
+  icon?: string;
 };
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
@@ -832,11 +844,50 @@ function resolveBustlyWorkspaceAgentWorkspaceDir(
   return join(stateDir, "workspaces", normalizedWorkspaceId, "agents", normalizedAgentName);
 }
 
-function resolveBustlyWorkspaceAgentSessionKey(
-  workspaceId: string,
-  agentName: string = DEFAULT_BUSTLY_AGENT_NAME,
-): string {
-  return buildAgentMainSessionKey({ agentId: buildBustlyWorkspaceAgentId(workspaceId, agentName) });
+function resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir: string): string {
+  return join(agentWorkspaceDir, ".bustly-agent.json");
+}
+
+function loadBustlyAgentMetadata(agentWorkspaceDir: string): BustlyAgentMetadata {
+  const metadataPath = resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir);
+  if (!existsSync(metadataPath)) {
+    return {};
+  }
+  try {
+    const raw = readFileSync(metadataPath, "utf-8");
+    const parsed = JSON.parse(raw) as BustlyAgentMetadata;
+    return {
+      icon: parsed.icon?.trim() || undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function saveBustlyAgentMetadata(agentWorkspaceDir: string, metadata: BustlyAgentMetadata): void {
+  mkdirSync(agentWorkspaceDir, { recursive: true });
+  writeFileSync(
+    resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir),
+    JSON.stringify(metadata, null, 2),
+    "utf-8",
+  );
+}
+
+function buildBustlyConversationSessionKey(agentId: string): string {
+  return buildBustlyAgentConversationSessionKey(agentId, randomUUID());
+}
+
+function listBustlyAgentConversationSessions(agentId: string): BustlyWorkspaceAgentSessionSummary[] {
+  const store = loadSessionStore(resolveDefaultSessionStorePath(agentId));
+  return Object.entries(store)
+    .filter(([sessionKey]) => isBustlyAgentConversationSessionKey(sessionKey, agentId))
+    .map(([sessionKey, entry]) => ({
+      agentId,
+      sessionKey,
+      name: entry.label?.trim() || "New conversation",
+      icon: entry.icon?.trim() || undefined,
+      updatedAt: entry.updatedAt ?? null,
+    }));
 }
 
 function listBustlyWorkspaceAgentIds(cfg: OpenClawConfig, workspaceId: string): string[] {
@@ -924,72 +975,24 @@ function hasMissingBustlyWorkspaceSetup(workspaceId: string): boolean {
   if (!workspaceAgentIds.has(mainAgentId)) {
     return true;
   }
-  const mainStore = loadSessionStore(resolveDefaultSessionStorePath(mainAgentId));
-  const mainSessionKey = buildAgentMainSessionKey({ agentId: mainAgentId });
-  if (!mainStore[mainSessionKey]) {
-    return true;
-  }
   return listEnabledBustlyPresetChannels().some((preset) => {
     const agentId = buildBustlyWorkspaceAgentId(workspaceId, preset.slug);
-    if (!workspaceAgentIds.has(agentId)) {
-      return true;
-    }
-    const store = loadSessionStore(resolveDefaultSessionStorePath(agentId));
-    return !store[buildAgentMainSessionKey({ agentId })];
+    return !workspaceAgentIds.has(agentId);
   });
 }
 
-async function ensureBustlyMainSession(params: { agentId: string }): Promise<void> {
-  const storePath = resolveDefaultSessionStorePath(params.agentId);
-  const mainSessionKey = buildAgentMainSessionKey({ agentId: params.agentId });
-  await updateSessionStore(storePath, (store) => {
-    const existing = store[mainSessionKey];
-    if (!existing) {
-      store[mainSessionKey] = {
-        sessionId: randomUUID(),
-        updatedAt: Date.now(),
-        label: BUSTLY_MAIN_AGENT_PRESET.label,
-        icon: BUSTLY_MAIN_AGENT_PRESET.icon,
-      };
-      return store;
-    }
-    const label = existing.label?.trim();
-    if (!label) {
-      existing.label = BUSTLY_MAIN_AGENT_PRESET.label;
-    }
-    const icon = existing.icon?.trim();
-    if (!icon) {
-      existing.icon = BUSTLY_MAIN_AGENT_PRESET.icon;
-    }
-    return store;
-  });
-}
-
-async function setBustlyAgentMainSessionMetadata(params: {
-  agentId: string;
-  label?: string;
+function setBustlyAgentMetadata(params: {
+  workspaceDir: string;
   icon?: string;
-}): Promise<void> {
-  const nextLabel = params.label?.trim();
+}): void {
   const nextIcon = params.icon?.trim();
-  if (!nextLabel && !nextIcon) {
+  if (!nextIcon) {
     return;
   }
-
-  const storePath = resolveDefaultSessionStorePath(params.agentId);
-  const mainSessionKey = buildAgentMainSessionKey({ agentId: params.agentId });
-  await updateSessionStore(storePath, (store) => {
-    const existing = store[mainSessionKey] ?? {
-      sessionId: randomUUID(),
-      updatedAt: Date.now(),
-    };
-    store[mainSessionKey] = {
-      ...existing,
-      updatedAt: Date.now(),
-      ...(nextLabel ? { label: nextLabel } : {}),
-      ...(nextIcon ? { icon: nextIcon } : {}),
-    };
-    return store;
+  const current = loadBustlyAgentMetadata(params.workspaceDir);
+  saveBustlyAgentMetadata(params.workspaceDir, {
+    ...current,
+    icon: nextIcon,
   });
 }
 
@@ -1010,10 +1013,9 @@ async function ensureBustlyPresetAgents(params: {
       });
       continue;
     }
-    await ensureBustlyMainSession({ agentId });
-    await setBustlyAgentMainSessionMetadata({
-      agentId,
-      label: preset.label,
+    const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(params.workspaceId, preset.slug);
+    setBustlyAgentMetadata({
+      workspaceDir,
       icon: preset.icon,
     });
   }
@@ -1023,7 +1025,7 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
   workspaceId: string;
   workspaceName?: string;
   agentName?: string;
-}): Promise<{ agentId: string; sessionKey: string; workspaceDir: string }> {
+}): Promise<{ agentId: string; workspaceDir: string }> {
   const workspaceId = params.workspaceId.trim();
   if (!workspaceId) {
     throw new Error("Bustly workspaceId is required.");
@@ -1036,7 +1038,6 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
 
   const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId, agentName);
   const agentId = buildBustlyWorkspaceAgentId(workspaceId, agentName);
-  const sessionKey = resolveBustlyWorkspaceAgentSessionKey(workspaceId, agentName);
   const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
   const providedWorkspaceName = params.workspaceName?.trim();
   const nextName =
@@ -1082,14 +1083,17 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
     workspaceId,
     workspaceName: providedWorkspaceName,
   });
+  setBustlyAgentMetadata({
+    workspaceDir,
+    icon: agentName === DEFAULT_BUSTLY_AGENT_NAME ? BUSTLY_MAIN_AGENT_PRESET.icon : undefined,
+  });
 
-  await ensureBustlyMainSession({ agentId });
   await ensureBustlyPresetAgents({
     workspaceId,
     workspaceName: providedWorkspaceName,
   });
 
-  return { agentId, sessionKey, workspaceDir };
+  return { agentId, workspaceDir };
 }
 
 async function createBustlyWorkspaceAgent(params: {
@@ -1098,7 +1102,7 @@ async function createBustlyWorkspaceAgent(params: {
   agentName: string;
   displayName?: string;
   icon?: string;
-}): Promise<{ agentId: string; sessionKey: string; workspaceDir: string }> {
+}): Promise<{ agentId: string; workspaceDir: string }> {
   const workspaceId = params.workspaceId.trim();
   if (!workspaceId) {
     throw new Error("Bustly workspaceId is required.");
@@ -1113,7 +1117,6 @@ async function createBustlyWorkspaceAgent(params: {
 
   const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId, agentName);
   const agentId = buildBustlyWorkspaceAgentId(workspaceId, agentName);
-  const sessionKey = resolveBustlyWorkspaceAgentSessionKey(workspaceId, agentName);
   const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
 
   if (listAgentEntries(config).some((entry) => entry.id === agentId)) {
@@ -1139,14 +1142,12 @@ async function createBustlyWorkspaceAgent(params: {
     workspaceId,
     workspaceName: params.workspaceName,
   });
-  await ensureBustlyMainSession({ agentId });
-  await setBustlyAgentMainSessionMetadata({
-    agentId,
-    label: displayName,
+  setBustlyAgentMetadata({
+    workspaceDir,
     icon,
   });
 
-  return { agentId, sessionKey, workspaceDir };
+  return { agentId, workspaceDir };
 }
 
 function listBustlyWorkspaceAgents(workspaceId: string): BustlyWorkspaceAgentSummary[] {
@@ -1165,18 +1166,17 @@ function listBustlyWorkspaceAgents(workspaceId: string): BustlyWorkspaceAgentSum
         agentId === `bustly-${normalizedWorkspaceId}`
           ? DEFAULT_BUSTLY_AGENT_NAME
           : normalizeBustlyAgentName(agentId.slice(prefix.length) || DEFAULT_BUSTLY_AGENT_NAME);
-      const sessionKey = buildAgentMainSessionKey({ agentId });
-      const store = loadSessionStore(resolveDefaultSessionStorePath(agentId));
-      const sessionEntry = store[sessionKey];
-      const displayName = sessionEntry?.label?.trim() || entry.name?.trim() || agentName;
+      const workspaceDir = entry.workspace?.trim() || resolveBustlyWorkspaceAgentWorkspaceDir(normalizedWorkspaceId, agentName);
+      const metadata = loadBustlyAgentMetadata(workspaceDir);
+      const sessions = listBustlyAgentConversationSessions(agentId);
+      const displayName = entry.name?.trim() || agentName;
       return {
         agentId,
         agentName,
-        sessionKey,
         name: displayName,
-        icon: sessionEntry?.icon?.trim() || undefined,
+        icon: metadata.icon || (agentName === DEFAULT_BUSTLY_AGENT_NAME ? BUSTLY_MAIN_AGENT_PRESET.icon : undefined),
         isMain: agentName === DEFAULT_BUSTLY_AGENT_NAME,
-        updatedAt: sessionEntry?.updatedAt ?? null,
+        updatedAt: sessions[0]?.updatedAt ?? null,
       };
     })
     .sort((left, right) => {
@@ -1186,13 +1186,55 @@ function listBustlyWorkspaceAgents(workspaceId: string): BustlyWorkspaceAgentSum
       if (right.isMain && !left.isMain) {
         return 1;
       }
-      const leftUpdatedAt = left.updatedAt ?? Number.NEGATIVE_INFINITY;
-      const rightUpdatedAt = right.updatedAt ?? Number.NEGATIVE_INFINITY;
-      if (leftUpdatedAt !== rightUpdatedAt) {
-        return rightUpdatedAt - leftUpdatedAt;
-      }
       return left.name.localeCompare(right.name);
     });
+}
+
+function listBustlyWorkspaceAgentSessions(params: {
+  workspaceId: string;
+  agentId: string;
+}): BustlyWorkspaceAgentSessionSummary[] {
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(params.workspaceId);
+  if (!normalizedWorkspaceId) {
+    return [];
+  }
+  const agentId = params.agentId.trim();
+  if (!agentId.startsWith(buildBustlyWorkspaceAgentPrefix(normalizedWorkspaceId))) {
+    return [];
+  }
+  return listBustlyAgentConversationSessions(agentId);
+}
+
+async function createBustlyWorkspaceAgentSession(params: {
+  workspaceId: string;
+  agentId: string;
+  label?: string;
+}): Promise<BustlyWorkspaceAgentSessionSummary> {
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(params.workspaceId);
+  const agentId = params.agentId.trim();
+  const agentPrefix = buildBustlyWorkspaceAgentPrefix(normalizedWorkspaceId);
+  if (!normalizedWorkspaceId || !agentId.startsWith(agentPrefix)) {
+    throw new Error("Agent does not belong to this workspace.");
+  }
+
+  const sessionKey = buildBustlyConversationSessionKey(agentId);
+  const storePath = resolveDefaultSessionStorePath(agentId);
+  const label = params.label?.trim() || "New conversation";
+  const updatedAt = Date.now();
+  await updateSessionStore(storePath, (store) => {
+    store[sessionKey] = {
+      sessionId: randomUUID(),
+      updatedAt,
+      label,
+    };
+    return store;
+  });
+  return {
+    agentId,
+    sessionKey,
+    name: label,
+    updatedAt,
+  };
 }
 
 async function updateBustlyWorkspaceAgent(params: {
@@ -1224,11 +1266,14 @@ async function updateBustlyWorkspaceAgent(params: {
     writeFileSync(configPath, JSON.stringify(nextConfig, null, 2));
   }
 
-  await setBustlyAgentMainSessionMetadata({
-    agentId: params.agentId,
-    label: nextName,
-    icon: nextIcon,
-  });
+  if (nextIcon) {
+    const normalizedWorkspaceId = normalizeBustlyWorkspaceId(params.workspaceId);
+    const agentName = normalizeBustlyAgentName(params.agentId.slice(buildBustlyWorkspaceAgentPrefix(normalizedWorkspaceId).length));
+    setBustlyAgentMetadata({
+      workspaceDir: entry.workspace?.trim() || resolveBustlyWorkspaceAgentWorkspaceDir(normalizedWorkspaceId, agentName),
+      icon: nextIcon,
+    });
+  }
 }
 
 async function deleteBustlyWorkspaceAgent(params: {
@@ -1257,7 +1302,7 @@ async function syncBustlyWorkspaceAgent(params: {
   workspaceName?: string;
   agentName?: string;
   forceInit?: boolean;
-}): Promise<{ agentId: string; sessionKey: string; workspaceDir: string } | null> {
+}): Promise<{ agentId: string; workspaceDir: string } | null> {
   const workspaceId = params.workspaceId?.trim() || resolveBustlyWorkspaceIdFromOAuthState();
   if (!workspaceId) {
     return null;
@@ -1292,7 +1337,7 @@ async function synchronizeBustlyWorkspaceContext(params?: {
   agentName?: string;
   selectedModelInput?: string;
   forceInit?: boolean;
-}): Promise<{ agentId: string; sessionKey: string; workspaceDir: string } | null> {
+}): Promise<{ agentId: string; workspaceDir: string } | null> {
   const agentBinding = await syncBustlyWorkspaceAgent({
     workspaceId: params?.workspaceId,
     workspaceName: params?.workspaceName,
@@ -1305,7 +1350,6 @@ async function synchronizeBustlyWorkspaceContext(params?: {
 
 async function setActiveWorkspaceInternal(workspaceId: string, workspaceName?: string): Promise<{
   agentId?: string;
-  sessionKey?: string;
 }> {
   const nextWorkspaceId = workspaceId.trim();
   if (!nextWorkspaceId) {
@@ -1332,11 +1376,10 @@ async function setActiveWorkspaceInternal(workspaceId: string, workspaceName?: s
     mainWindow.webContents.send("bustly-login-refresh");
   }
   writeMainLog(
-    `[Workspace] set active completed next=${nextWorkspaceId} agentId=${agentBinding?.agentId ?? "(none)"} sessionKey=${agentBinding?.sessionKey ?? "(none)"}`,
+    `[Workspace] set active completed next=${nextWorkspaceId} agentId=${agentBinding?.agentId ?? "(none)"}`,
   );
   return {
     agentId: agentBinding?.agentId,
-    sessionKey: agentBinding?.sessionKey,
   };
 }
 
@@ -3049,7 +3092,6 @@ function setupIpcHandlers(): void {
       return {
         success: true,
         agentId: agentBinding?.agentId,
-        sessionKey: agentBinding?.sessionKey,
       };
     } catch (error) {
       return {
@@ -3067,6 +3109,14 @@ function setupIpcHandlers(): void {
         return [];
       }
       return listBustlyWorkspaceAgents(nextWorkspaceId);
+    } catch {
+      return [];
+    }
+  });
+
+  ipcMain.handle("bustly-list-agent-sessions", async (_event, workspaceId: string, agentId: string) => {
+    try {
+      return listBustlyWorkspaceAgentSessions({ workspaceId, agentId });
     } catch {
       return [];
     }
@@ -3096,6 +3146,26 @@ function setupIpcHandlers(): void {
         return {
           success: true,
           agentId: result.agentId,
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "bustly-create-agent-session",
+    async (
+      _event,
+      params: { workspaceId: string; agentId: string; label?: string },
+    ) => {
+      try {
+        const result = await createBustlyWorkspaceAgentSession(params);
+        return {
+          success: true,
           sessionKey: result.sessionKey,
         };
       } catch (error) {

@@ -20,7 +20,11 @@ import {
   deriveScenarioLabel,
   resolveSessionIconComponent,
 } from "../../lib/session-icons";
-import { buildBustlyWorkspaceMainSessionKey } from "../../../shared/bustly-agent";
+import {
+  buildBustlyAgentDraftViewKey,
+  buildBustlyWorkspaceAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../../../shared/bustly-agent";
 import { resolveBustlyPresetUseCases, type BustlyPresetUseCase } from "../../../shared/bustly-preset-channels";
 import { extractText, extractThinking } from "../../lib/chat-extract";
 import PortalTooltip from "../ui/PortalTooltip";
@@ -843,19 +847,35 @@ export default function ChatPage() {
   const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
   const lastAppliedPromptRef = useRef<string | null>(null);
   const lastAppliedContextRef = useRef<string | null>(null);
+  const defaultAgentId = useMemo(
+    () => buildBustlyWorkspaceAgentId(activeWorkspaceId),
+    [activeWorkspaceId],
+  );
   const currentSessionKey = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
-    return searchParams.get("session") ?? buildBustlyWorkspaceMainSessionKey(activeWorkspaceId);
-  }, [activeWorkspaceId, location.search]);
+    return searchParams.get("session")?.trim() || "";
+  }, [location.search]);
+  const currentAgentId = useMemo(() => {
+    const searchParams = new URLSearchParams(location.search);
+    return (
+      searchParams.get("agent")?.trim() ||
+      resolveAgentIdFromSessionKey(currentSessionKey) ||
+      defaultAgentId
+    );
+  }, [currentSessionKey, defaultAgentId, location.search]);
+  const currentViewKey = useMemo(
+    () => currentSessionKey || buildBustlyAgentDraftViewKey(currentAgentId),
+    [currentAgentId, currentSessionKey],
+  );
   const currentScenarioLabel = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
     return deriveScenarioLabel(currentSessionKey, searchParams.get("label"));
   }, [currentSessionKey, location.search]);
   const currentUseCases = useMemo(
-    () => resolveBustlyPresetUseCases({ sessionKey: currentSessionKey, workspaceId: activeWorkspaceId }),
-    [activeWorkspaceId, currentSessionKey],
+    () => resolveBustlyPresetUseCases({ agentId: currentAgentId, sessionKey: currentSessionKey, workspaceId: activeWorkspaceId }),
+    [activeWorkspaceId, currentAgentId, currentSessionKey],
   );
-  const pageResolving = workspaceStateLoading || loading;
+  const pageResolving = workspaceStateLoading || (Boolean(currentSessionKey) && loading);
   const canSendMessage =
     !pageResolving &&
     connected &&
@@ -985,8 +1005,8 @@ export default function ChatPage() {
     runtime.runSeqBase.clear();
   }, [getSessionRuntime]);
   useEffect(() => {
-    currentSessionKeyRef.current = currentSessionKey;
-    const runtime = getSessionRuntime(currentSessionKey);
+    currentSessionKeyRef.current = currentViewKey;
+    const runtime = getSessionRuntime(currentViewKey);
     setCurrentScenarioIconId(null);
     applyVisibleSessionView(runtime.view);
     shouldStickToBottomRef.current = true;
@@ -1001,7 +1021,7 @@ export default function ChatPage() {
         updateScrollBottomState();
       });
     });
-  }, [applyVisibleSessionView, currentSessionKey, getSessionRuntime, updateScrollBottomState]);
+  }, [applyVisibleSessionView, currentViewKey, getSessionRuntime, updateScrollBottomState]);
 
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search);
@@ -1043,9 +1063,9 @@ export default function ChatPage() {
       resolveSessionIconComponent({
         icon: currentScenarioIconId,
         label: currentScenarioLabel,
-        sessionKey: currentSessionKey,
+        sessionKey: currentSessionKey || currentAgentId,
       }),
-    [currentScenarioIconId, currentScenarioLabel, currentSessionKey],
+    [currentAgentId, currentScenarioIconId, currentScenarioLabel, currentSessionKey],
   );
 
   const loadGatewayStatus = useCallback(async () => {
@@ -2197,6 +2217,11 @@ export default function ChatPage() {
 
   useEffect(() => {
     const client = clientRef.current;
+    if (!currentSessionKey) {
+      setSessionLoading(currentViewKey, false);
+      setSessionUsageState(currentViewKey, { ...INITIAL_SESSION_USAGE });
+      return;
+    }
     const runtime = getSessionRuntime(currentSessionKey);
     const shouldRefreshHistory =
       !runtime.historyLoaded || lastHistoryHydratedSessionKeyRef.current !== currentSessionKey;
@@ -2214,13 +2239,23 @@ export default function ChatPage() {
     void loadSessionUsage(client, currentSessionKey).catch((err) => {
       setError(err instanceof Error ? err.message : String(err));
     });
-  }, [connected, currentSessionKey, getSessionRuntime, loadHistory, loadSessionUsage, location.search, setSessionLoading]);
+  }, [
+    connected,
+    currentSessionKey,
+    currentViewKey,
+    getSessionRuntime,
+    loadHistory,
+    loadSessionUsage,
+    location.search,
+    setSessionLoading,
+    setSessionUsageState,
+  ]);
 
   const appendContextSelections = useCallback((selected: ChatContextPathSelection[]) => {
     if (selected.length > 0) {
       console.log("[electron-chat] context paths added", selected);
     }
-    setSessionContextPaths(currentSessionKey, (prev) => {
+    setSessionContextPaths(currentViewKey, (prev) => {
       const seen = new Set(prev.map((entry) => entry.path));
       const nextEntries = selected
         .filter((entry): entry is ChatContextPathSelection => Boolean(entry?.path && entry?.name))
@@ -2240,11 +2275,11 @@ export default function ChatPage() {
         }));
       return nextEntries.length > 0 ? [...prev, ...nextEntries] : prev;
     });
-  }, [currentSessionKey, setSessionContextPaths]);
+  }, [currentViewKey, setSessionContextPaths]);
 
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search);
-    const explicitSessionKey = searchParams.get("session")?.trim();
+    const explicitSessionKey = searchParams.get("session")?.trim() || currentViewKey;
     const prompt = searchParams.get("prompt")?.trim();
     const contextPath = searchParams.get("contextPath")?.trim();
     const contextName = searchParams.get("contextName")?.trim();
@@ -2298,7 +2333,7 @@ export default function ChatPage() {
       },
       { replace: true },
     );
-  }, [appendContextSelections, location.pathname, location.search, navigate, setSessionDraft]);
+  }, [appendContextSelections, currentViewKey, location.pathname, location.search, navigate, setSessionDraft]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -2313,7 +2348,7 @@ export default function ChatPage() {
     return () => {
       element.removeEventListener("scroll", handleScroll);
     };
-  }, [currentSessionKey, updateScrollBottomState]);
+  }, [currentViewKey, updateScrollBottomState]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const element = scrollRef.current;
@@ -2514,14 +2549,61 @@ export default function ChatPage() {
   ]);
 
   const sendChatMessage = useCallback(async () => {
+    let targetSessionKey = currentSessionKey;
+    if (!targetSessionKey) {
+      const nextLabel = draft.trim().slice(0, 60) || "New conversation";
+      const createSessionResult = await window.electronAPI.bustlyCreateAgentSession({
+        workspaceId: activeWorkspaceId,
+        agentId: currentAgentId,
+        label: nextLabel,
+      });
+      if (!createSessionResult.success || !createSessionResult.sessionKey) {
+        setError(createSessionResult.error ?? "Failed to create conversation.");
+        return;
+      }
+      targetSessionKey = createSessionResult.sessionKey;
+      void navigate(
+        {
+          pathname: location.pathname,
+          search: new URLSearchParams({
+            agent: currentAgentId,
+            session: targetSessionKey,
+            label: currentScenarioLabel,
+            ...(currentScenarioIconId ? { icon: currentScenarioIconId } : {}),
+          }).toString()
+            ? `?${new URLSearchParams({
+              agent: currentAgentId,
+              session: targetSessionKey,
+              label: currentScenarioLabel,
+              ...(currentScenarioIconId ? { icon: currentScenarioIconId } : {}),
+            }).toString()}`
+            : "",
+        },
+        { replace: true },
+      );
+      window.dispatchEvent(new Event("openclaw:sidebar-refresh-tasks"));
+    }
     await sendPreparedChatMessage({
-      sessionKey: currentSessionKey,
+      sessionKey: targetSessionKey,
       draftText: draft,
       attachments,
       contextPaths,
       clearComposer: true,
     });
-  }, [attachments, contextPaths, currentSessionKey, draft, sendPreparedChatMessage]);
+  }, [
+    activeWorkspaceId,
+    attachments,
+    contextPaths,
+    currentAgentId,
+    currentScenarioIconId,
+    currentScenarioLabel,
+    currentSessionKey,
+    draft,
+    location.pathname,
+    navigate,
+    sendPreparedChatMessage,
+    setError,
+  ]);
 
   const handleSend = useCallback(async () => {
     await sendChatMessage();
@@ -2921,9 +3003,9 @@ export default function ChatPage() {
         "[electron-chat] image attachments added",
         next.map((entry) => ({ name: entry.name, mimeType: entry.mimeType })),
       );
-      setSessionAttachments(currentSessionKey, (prev) => [...prev, ...next]);
+      setSessionAttachments(currentViewKey, (prev) => [...prev, ...next]);
     }
-  }, [appendContextSelections, currentSessionKey, setSessionAttachments, subscriptionExpired]);
+  }, [appendContextSelections, currentViewKey, setSessionAttachments, subscriptionExpired]);
 
   const handleSelectContextPaths = useCallback(async () => {
     if (subscriptionExpired) {
@@ -3047,7 +3129,7 @@ export default function ChatPage() {
     return `Context left: ${formatTokenCount(sessionUsage.remainingTokens)} / ${formatTokenCount(sessionUsage.contextTokens)}`;
   }, [sessionUsage.contextTokens, sessionUsage.remainingTokens]);
   const handleUseCaseClick = useCallback((useCase: BustlyPresetUseCase) => {
-    setSessionDraft(currentSessionKey, useCase.prompt);
+    setSessionDraft(currentViewKey, useCase.prompt);
     requestAnimationFrame(() => {
       const textarea = composerRef.current;
       if (!textarea) {
@@ -3057,7 +3139,7 @@ export default function ChatPage() {
       const cursor = useCase.prompt.length;
       textarea.setSelectionRange(cursor, cursor);
     });
-  }, [currentSessionKey, setSessionDraft]);
+  }, [currentViewKey, setSessionDraft]);
   useEffect(() => {
     window.localStorage.setItem(CHAT_MODEL_LEVEL_STORAGE_KEY, modelLevel);
   }, [modelLevel]);
@@ -3154,7 +3236,7 @@ export default function ChatPage() {
                 <div className="grid grid-cols-3 gap-3">
                     {currentUseCases.map((useCase) => (
                       <button
-                        key={`${currentSessionKey}-${useCase.label}`}
+                        key={`${currentViewKey}-${useCase.label}`}
                         type="button"
                         className={`group flex items-center justify-between gap-2 rounded-xl border border-[#EAEAEA] bg-white px-4 py-2.5 transition-all duration-200 hover:border-[#CFCFCF] hover:bg-[#FCFCFC] ${
                           subscriptionExpired ? "pointer-events-none opacity-50" : ""
@@ -3241,7 +3323,7 @@ export default function ChatPage() {
                         }}
                         onRemove={() => {
                           setPreviewImage(null);
-                          setSessionAttachments(currentSessionKey, (prev) => prev.filter((p) => p.id !== att.id));
+                          setSessionAttachments(currentViewKey, (prev) => prev.filter((p) => p.id !== att.id));
                         }}
                       />
                     ))}
@@ -3260,7 +3342,7 @@ export default function ChatPage() {
                             : undefined
                         }
                         onRemove={() => {
-                          setSessionContextPaths(currentSessionKey, (prev) => prev.filter((p) => p.id !== entry.id));
+                          setSessionContextPaths(currentViewKey, (prev) => prev.filter((p) => p.id !== entry.id));
                         }}
                       />
                     ))}
@@ -3285,7 +3367,7 @@ export default function ChatPage() {
                           : "Connect to gateway to chat..."
                     }
                     className="min-h-[44px] max-h-[200px] w-full resize-none border-none bg-transparent px-1 py-1 pr-14 text-base font-normal leading-6 text-text-main outline-none placeholder:text-text-sub/70 disabled:cursor-not-allowed disabled:text-[#8B93AA]"
-                    onChange={(e) => setSessionDraft(currentSessionKey, e.target.value)}
+                    onChange={(e) => setSessionDraft(currentViewKey, e.target.value)}
                     onCompositionStart={() => {
                       composerIsComposingRef.current = true;
                     }}

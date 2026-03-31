@@ -44,11 +44,31 @@ export function buildBustlyWorkspaceAgentId(
   return `${prefix}${normalizeBustlyAgentName(agentName)}`;
 }
 
-export function buildBustlyWorkspaceMainSessionKey(
+export function resolveBustlyAgentNameFromAgentId(
   workspaceId: string | undefined | null,
-  agentName: string | undefined | null = DEFAULT_BUSTLY_AGENT_NAME,
+  agentId: string | undefined | null,
+): string | null {
+  const normalizedAgentId = normalizeToken(agentId);
+  const prefix = buildBustlyWorkspaceAgentPrefix(workspaceId);
+  if (!normalizedAgentId || !prefix || !normalizedAgentId.startsWith(prefix)) {
+    return null;
+  }
+  const agentName = normalizedAgentId.slice(prefix.length).trim();
+  return normalizeBustlyAgentName(agentName);
+}
+
+export function buildBustlyAgentConversationSessionKey(
+  agentId: string | undefined | null,
+  conversationId: string | undefined | null,
 ): string {
-  return `agent:${buildBustlyWorkspaceAgentId(workspaceId, agentName)}:main`;
+  const normalizedAgentId = normalizeToken(agentId) || "main";
+  const normalizedConversationId = normalizeToken(conversationId) || "conversation";
+  return `agent:${normalizedAgentId}:conversation:${normalizedConversationId}`;
+}
+
+export function buildBustlyAgentDraftViewKey(agentId: string | undefined | null): string {
+  const normalizedAgentId = normalizeToken(agentId) || "main";
+  return `draft:${normalizedAgentId}`;
 }
 
 export function resolveBustlyAgentNameFromSessionKey(
@@ -56,12 +76,7 @@ export function resolveBustlyAgentNameFromSessionKey(
   sessionKey: string | undefined | null,
 ): string | null {
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const prefix = buildBustlyWorkspaceAgentPrefix(workspaceId);
-  if (!agentId || !prefix || !agentId.startsWith(prefix)) {
-    return null;
-  }
-  const agentName = agentId.slice(prefix.length).trim();
-  return normalizeBustlyAgentName(agentName);
+  return resolveBustlyAgentNameFromAgentId(workspaceId, agentId);
 }
 
 function normalizeSessionSlug(value: string | undefined | null): string {
@@ -79,6 +94,18 @@ export function buildBustlyAgentPresetChannelSessionKey(
 export function isAgentMainSessionKey(sessionKey: string, agentId: string): boolean {
   const normalizedAgentId = normalizeToken(agentId) || "main";
   return sessionKey === `agent:${normalizedAgentId}:main`;
+}
+
+export function isBustlyAgentConversationSessionKey(sessionKey: string, agentId?: string): boolean {
+  const normalizedSessionKey = (sessionKey ?? "").trim().toLowerCase();
+  if (!normalizedSessionKey.startsWith("agent:")) {
+    return false;
+  }
+  if (agentId) {
+    const normalizedAgentId = normalizeToken(agentId) || "main";
+    return normalizedSessionKey.startsWith(`agent:${normalizedAgentId}:conversation:`);
+  }
+  return /^agent:[^:]+:conversation:[^:]+$/i.test(normalizedSessionKey);
 }
 
 export function isAgentChannelSessionKey(sessionKey: string, agentId: string): boolean {

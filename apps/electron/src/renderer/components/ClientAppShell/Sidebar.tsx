@@ -33,7 +33,6 @@ import { listWorkspaceSummaries, type WorkspaceSummary } from "../../lib/bustly-
 import { useAppState } from "../../providers/AppStateProvider";
 import {
   buildBustlyWorkspaceAgentId,
-  buildBustlyWorkspaceMainSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../../shared/bustly-agent";
 import Skeleton from "../ui/Skeleton";
@@ -50,6 +49,14 @@ type SidebarTask = {
   name: string;
   icon?: string;
   isMain?: boolean;
+  updatedAt?: number | null;
+};
+
+type SidebarSession = {
+  id: string;
+  agentId: string;
+  name: string;
+  icon?: string;
   running?: boolean;
   updatedAt?: number | null;
 };
@@ -67,9 +74,9 @@ function SpinnerIcon({ className }: { className?: string }) {
 
 function sortSidebarAgents(
   agents: BustlyWorkspaceAgent[],
-  options: { pendingSessionKey?: string | null },
+  options: { pendingAgentId?: string | null },
 ): BustlyWorkspaceAgent[] {
-  const pendingSessionKey = options?.pendingSessionKey?.trim() || null;
+  const pendingAgentId = options?.pendingAgentId?.trim() || null;
   return [...agents].sort((left, right) => {
     if (left.isMain && !right.isMain) {
       return -1;
@@ -77,18 +84,13 @@ function sortSidebarAgents(
     if (right.isMain && !left.isMain) {
       return 1;
     }
-    if (pendingSessionKey) {
-      if (left.sessionKey === pendingSessionKey && right.sessionKey !== pendingSessionKey) {
+    if (pendingAgentId) {
+      if (left.agentId === pendingAgentId && right.agentId !== pendingAgentId) {
         return -1;
       }
-      if (right.sessionKey === pendingSessionKey && left.sessionKey !== pendingSessionKey) {
+      if (right.agentId === pendingAgentId && left.agentId !== pendingAgentId) {
         return 1;
       }
-    }
-    const leftUpdatedAt = left.updatedAt ?? Number.NEGATIVE_INFINITY;
-    const rightUpdatedAt = right.updatedAt ?? Number.NEGATIVE_INFINITY;
-    if (leftUpdatedAt !== rightUpdatedAt) {
-      return rightUpdatedAt - leftUpdatedAt;
     }
     return left.name.localeCompare(right.name);
   });
@@ -302,35 +304,29 @@ function TaskItem(props: {
         onClick={props.onClick}
         collapsed={props.collapsed}
         showTooltip
-        rightSlotVisible={props.task.running || isHovered || menuOpen}
+        rightSlotVisible={isHovered || menuOpen}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         rightSlot={
           !props.collapsed ? (
             <div className="flex h-5 w-5 items-center justify-center">
-              {props.task.running && !isHovered && !menuOpen ? (
-                <div className="text-[#666F8D]">
-                  <SpinnerIcon className="h-[13px] w-[13px] animate-spin" />
-                </div>
-              ) : (
-                <button
-                  ref={triggerRef}
-                  type="button"
-                  className={`rounded-md p-1 transition-all ${
-                    isHovered || menuOpen ? "opacity-100" : "pointer-events-none opacity-0"
-                  } ${
-                    menuOpen ? "bg-white/88 shadow-sm backdrop-blur-sm" : ""
-                  } ${
-                    props.active ? "text-[#1A162F] hover:bg-[#1A162F]/6" : "text-text-sub hover:bg-black/[0.04]"
-                  }`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setMenuOpen((prev) => !prev);
-                  }}
-                >
-                  <DotsThreeIcon className="h-4 w-4" />
-                </button>
-              )}
+              <button
+                ref={triggerRef}
+                type="button"
+                className={`rounded-md p-1 transition-all ${
+                  isHovered || menuOpen ? "opacity-100" : "pointer-events-none opacity-0"
+                } ${
+                  menuOpen ? "bg-white/88 shadow-sm backdrop-blur-sm" : ""
+                } ${
+                  props.active ? "text-[#1A162F] hover:bg-[#1A162F]/6" : "text-text-sub hover:bg-black/[0.04]"
+                }`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setMenuOpen((prev) => !prev);
+                }}
+              >
+                <DotsThreeIcon className="h-4 w-4" />
+              </button>
             </div>
           ) : null
         }
@@ -1040,6 +1036,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isWindowFullscreen, setIsWindowFullscreen] = useState(false);
   const [recentTasks, setRecentTasks] = useState<SidebarTask[]>([]);
+  const [sessionsByAgent, setSessionsByAgent] = useState<Record<string, SidebarSession[]>>({});
   const [tasksLoading, setTasksLoading] = useState(true);
   const [hasLoadedTasks, setHasLoadedTasks] = useState(false);
   const [bustlyUserInfo, setBustlyUserInfo] = useState<BustlyUserInfo | null>(null);
@@ -1061,7 +1058,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedIcon, setSelectedIcon] = useState<SessionIconId>("SquaresFour");
   const [iconPickerMode, setIconPickerMode] = useState<"create" | "edit">("edit");
-  const [pendingSessionKey, setPendingSessionKey] = useState<string | null>(null);
+  const [pendingAgentId, setPendingAgentId] = useState<string | null>(null);
   const [runningTasks, setRunningTasks] = useState<Record<string, boolean>>({});
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const userMenuTriggerRef = useRef<HTMLDivElement | null>(null);
@@ -1077,26 +1074,27 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     () => buildBustlyWorkspaceAgentId(effectiveWorkspaceId),
     [effectiveWorkspaceId],
   );
-  const defaultWorkspaceMainSessionKey = useMemo(
-    () => buildBustlyWorkspaceMainSessionKey(effectiveWorkspaceId),
-    [effectiveWorkspaceId],
-  );
   const activeSessionKey = useMemo(() => {
-    // Skills is a separate top-level destination, so it should not leave the main
-    // workspace session highlighted in the scenario list.
     if (isSkillPage) {
       return "";
     }
     const searchParams = new URLSearchParams(location.search);
-    return searchParams.get("session") ?? defaultWorkspaceMainSessionKey;
-  }, [defaultWorkspaceMainSessionKey, isSkillPage, location.search]);
-  const activeSessionAgentId = useMemo(
-    () => resolveAgentIdFromSessionKey(activeSessionKey) ?? defaultWorkspaceAgentId,
-    [activeSessionKey, defaultWorkspaceAgentId],
-  );
+    return searchParams.get("session")?.trim() || "";
+  }, [isSkillPage, location.search]);
+  const activeAgentId = useMemo(() => {
+    if (isSkillPage) {
+      return "";
+    }
+    const searchParams = new URLSearchParams(location.search);
+    return (
+      searchParams.get("agent")?.trim() ||
+      resolveAgentIdFromSessionKey(activeSessionKey) ||
+      defaultWorkspaceAgentId
+    );
+  }, [activeSessionKey, defaultWorkspaceAgentId, isSkillPage, location.search]);
   const activeTaskId = useMemo(
-    () => recentTasks.find((task) => task.agentId === activeSessionAgentId)?.id ?? activeSessionKey,
-    [activeSessionAgentId, activeSessionKey, recentTasks],
+    () => recentTasks.find((task) => task.agentId === activeAgentId)?.id ?? activeAgentId,
+    [activeAgentId, recentTasks],
   );
 
   useEffect(() => {
@@ -1256,23 +1254,44 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
         if (disposed) {
           return;
         }
+        const sortedAgents = sortSidebarAgents(agents, { pendingAgentId });
+        const sessionRows = await Promise.all(
+          sortedAgents.map(async (agent) => {
+            const sessions = await window.electronAPI.bustlyListAgentSessions(effectiveWorkspaceId, agent.agentId);
+            return [
+              agent.agentId,
+              sessions.map((session) => ({
+                id: session.sessionKey,
+                agentId: session.agentId,
+                name: session.name,
+                icon: session.icon,
+                updatedAt: session.updatedAt,
+                running: runningTasks[session.sessionKey] === true,
+              })),
+            ] as const;
+          }),
+        );
+        if (disposed) {
+          return;
+        }
         setRecentTasks(
-          sortSidebarAgents(agents, { pendingSessionKey }).map((agent) => ({
-            id: agent.sessionKey,
+          sortedAgents.map((agent) => ({
+            id: agent.agentId,
             agentId: agent.agentId,
             name: agent.name,
             icon: agent.icon,
             isMain: agent.isMain,
             updatedAt: agent.updatedAt,
-            running: runningTasks[agent.sessionKey] === true,
           })),
         );
+        setSessionsByAgent(Object.fromEntries(sessionRows));
         setHasLoadedTasks(true);
         setTasksLoading(false);
       } catch {
         if (!disposed) {
           if (!hasLoadedTasks) {
             setRecentTasks([]);
+            setSessionsByAgent({});
           }
           setTasksLoading(false);
         }
@@ -1297,7 +1316,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     initialized,
     location.pathname,
     location.search,
-    pendingSessionKey,
+    pendingAgentId,
     runningTasks,
   ]);
 
@@ -1310,15 +1329,15 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     if (!fallbackTask) {
       return;
     }
-    const activeSessionKey = searchParams.get("session");
-    if (activeSessionKey && pendingSessionKey === activeSessionKey) {
+    const activeAgentKey = searchParams.get("agent")?.trim();
+    if (activeAgentKey && pendingAgentId === activeAgentKey) {
       return;
     }
-    if (activeSessionKey && recentTasks.some((task) => task.id === activeSessionKey)) {
+    if (activeAgentKey && recentTasks.some((task) => task.agentId === activeAgentKey)) {
       return;
     }
     const nextSearchParams = new URLSearchParams();
-    nextSearchParams.set("session", fallbackTask.id);
+    nextSearchParams.set("agent", fallbackTask.agentId);
     if (fallbackTask.name?.trim()) {
       nextSearchParams.set("label", fallbackTask.name.trim());
     }
@@ -1344,16 +1363,16 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     void navigate(`/chat?${nextSearchParams.toString()}`, {
       replace: true,
     });
-  }, [location.pathname, location.search, navigate, pendingSessionKey, recentTasks]);
+  }, [location.pathname, location.search, navigate, pendingAgentId, recentTasks]);
 
   useEffect(() => {
-    if (!pendingSessionKey) {
+    if (!pendingAgentId) {
       return;
     }
-    if (recentTasks.some((task) => task.id === pendingSessionKey)) {
-      setPendingSessionKey(null);
+    if (recentTasks.some((task) => task.agentId === pendingAgentId)) {
+      setPendingAgentId(null);
     }
-  }, [pendingSessionKey, recentTasks]);
+  }, [pendingAgentId, recentTasks]);
 
   useEffect(() => {
     let disposed = false;
@@ -1517,29 +1536,28 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
         setCreateError(result.error ?? "Failed to create agent.");
         return;
       }
-      const nextSessionKey = result.sessionKey ?? buildBustlyWorkspaceMainSessionKey(effectiveWorkspaceId, name);
       const nextAgentId = result.agentId ?? buildBustlyWorkspaceAgentId(effectiveWorkspaceId, name);
-      setPendingSessionKey(nextSessionKey);
+      setPendingAgentId(nextAgentId);
       setHasLoadedTasks(true);
       setRecentTasks((prev) => {
         const nextTask: SidebarTask = {
-          id: nextSessionKey,
+          id: nextAgentId,
           agentId: nextAgentId,
           name,
           icon: selectedIcon,
           isMain: false,
-          running: false,
         };
-        const remainingTasks = prev.filter((entry) => entry.id !== nextSessionKey);
+        const remainingTasks = prev.filter((entry) => entry.id !== nextAgentId);
         const mainTask = remainingTasks.find((entry) => entry.isMain) ?? null;
         const otherTasks = remainingTasks.filter((entry) => !entry.isMain);
         return mainTask ? [mainTask, nextTask, ...otherTasks] : [nextTask, ...otherTasks];
       });
+      setSessionsByAgent((prev) => ({ ...prev, [nextAgentId]: [] }));
       setDraftScenarioName("");
       setSelectedIcon("SquaresFour");
       setCreateModalOpen(false);
       notifySidebarTasksRefresh();
-      void navigate(buildChatRoute({ sessionKey: nextSessionKey, label: name, icon: selectedIcon }));
+      void navigate(buildChatRoute({ agentId: nextAgentId, label: name, icon: selectedIcon }));
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1575,9 +1593,14 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       setRenameModalOpen(false);
       setSelectedTaskId(null);
       setDraftScenarioName("");
-      if (selectedTask.agentId === activeSessionAgentId) {
+      if (selectedTask.agentId === activeAgentId) {
         void navigate(
-          buildChatRoute({ sessionKey: selectedTask.id, label: name, icon: selectedTask.icon }),
+          buildChatRoute({
+            agentId: selectedTask.agentId,
+            sessionKey: activeSessionKey || undefined,
+            label: name,
+            icon: selectedTask.icon,
+          }),
           { replace: true },
         );
       }
@@ -1605,9 +1628,14 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
         return;
       }
       setRecentTasks((prev) => prev.filter((entry) => entry.id !== selectedTask.id));
+      setSessionsByAgent((prev) => {
+        const next = { ...prev };
+        delete next[selectedTask.agentId];
+        return next;
+      });
       setDeleteModalOpen(false);
       setSelectedTaskId(null);
-      if (selectedTask.agentId === activeSessionAgentId) {
+      if (selectedTask.agentId === activeAgentId) {
         void navigate("/chat", { replace: true });
       }
       notifySidebarTasksRefresh();
@@ -1641,9 +1669,14 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     setRecentTasks((prev) => prev.map((entry) => (entry.id === selectedTaskId ? { ...entry, icon } : entry)));
     setIconModalOpen(false);
     setSelectedTaskId(null);
-    if (selectedTask.agentId === activeSessionAgentId) {
+    if (selectedTask.agentId === activeAgentId) {
       void navigate(
-        buildChatRoute({ sessionKey: selectedTask.id, label: selectedTask.name, icon }),
+        buildChatRoute({
+          agentId: selectedTask.agentId,
+          sessionKey: activeSessionKey || undefined,
+          label: selectedTask.name,
+          icon,
+        }),
         { replace: true },
       );
     }
@@ -1748,25 +1781,56 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                 </>
               ) : (
                 recentTasks.map((task) => (
-                  <TaskItem
-                    key={task.id}
-                    task={task}
-                    active={activeTaskId === task.id}
-                    collapsed={false}
-                    onClick={() => {
-                      void navigate(buildChatRoute({ sessionKey: task.id, label: task.name, icon: task.icon }));
-                    }}
-                    onRename={() => {
-                      openRenameModal(task);
-                    }}
-                    onDelete={() => {
-                      setSelectedTaskId(task.id);
-                      setDeleteModalOpen(true);
-                    }}
-                    onChangeIcon={() => {
-                      openIconModal(task);
-                    }}
-                  />
+                  <div key={task.id}>
+                    <TaskItem
+                      task={task}
+                      active={!activeSessionKey && activeTaskId === task.id}
+                      collapsed={false}
+                      onClick={() => {
+                        void navigate(buildChatRoute({ agentId: task.agentId, label: task.name, icon: task.icon }));
+                      }}
+                      onRename={() => {
+                        openRenameModal(task);
+                      }}
+                      onDelete={() => {
+                        setSelectedTaskId(task.id);
+                        setDeleteModalOpen(true);
+                      }}
+                      onChangeIcon={() => {
+                        openIconModal(task);
+                      }}
+                    />
+                    {(sessionsByAgent[task.agentId] ?? []).length > 0 ? (
+                      <div className="mt-1 mb-2 max-h-40 space-y-0.5 overflow-y-auto pr-3 pl-10">
+                        {(sessionsByAgent[task.agentId] ?? []).map((session) => {
+                          return (
+                            <button
+                              key={session.id}
+                              type="button"
+                              onClick={() => {
+                                void navigate(
+                                  buildChatRoute({
+                                    agentId: task.agentId,
+                                    sessionKey: session.id,
+                                    label: task.name,
+                                    icon: task.icon,
+                                  }),
+                                );
+                              }}
+                              className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors ${
+                                activeSessionKey === session.id
+                                  ? "bg-[#1A162F]/10 font-semibold text-[#1A162F] hover:bg-[#1A162F]/15"
+                                  : "text-[#666F8D] hover:bg-[#1A162F]/4 hover:text-[#1A162F]"
+                              }`}
+                            >
+                              <span className="min-w-0 flex-1 truncate">{session.name}</span>
+                              {session.running ? <SpinnerIcon className="h-3.5 w-3.5 animate-spin" /> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
                 ))
               )}
               </div>
@@ -1807,7 +1871,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                   tasks={recentTasks}
                   activeTaskId={activeTaskId}
                   onOpenTask={(task) => {
-                    void navigate(buildChatRoute({ sessionKey: task.id, label: task.name, icon: task.icon }));
+                    void navigate(buildChatRoute({ agentId: task.agentId, label: task.name, icon: task.icon }));
                   }}
                   onRenameClick={openRenameModal}
                   onDeleteClick={(task) => {

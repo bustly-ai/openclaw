@@ -99,10 +99,17 @@ interface BustlySupabaseConfig {
 interface BustlyWorkspaceAgent {
   agentId: string;
   agentName: string;
-  sessionKey: string;
   name: string;
   icon?: string;
   isMain: boolean;
+  updatedAt: number | null;
+}
+
+interface BustlyWorkspaceAgentSession {
+  agentId: string;
+  sessionKey: string;
+  name: string;
+  icon?: string;
   updatedAt: number | null;
 }
 
@@ -149,14 +156,20 @@ interface ElectronAPI {
   bustlySetActiveWorkspace: (
     workspaceId: string,
     workspaceName?: string,
-  ) => Promise<{ success: boolean; agentId?: string; sessionKey?: string; error?: string }>;
+  ) => Promise<{ success: boolean; agentId?: string; error?: string }>;
   bustlyListAgents: (workspaceId?: string) => Promise<BustlyWorkspaceAgent[]>;
+  bustlyListAgentSessions: (workspaceId: string, agentId: string) => Promise<BustlyWorkspaceAgentSession[]>;
   bustlyCreateAgent: (
     workspaceId: string,
     name: string,
     icon?: string,
     workspaceName?: string,
-  ) => Promise<{ success: boolean; agentId?: string; sessionKey?: string; error?: string }>;
+  ) => Promise<{ success: boolean; agentId?: string; error?: string }>;
+  bustlyCreateAgentSession: (params: {
+    workspaceId: string;
+    agentId: string;
+    label?: string;
+  }) => Promise<{ success: boolean; sessionKey?: string; error?: string }>;
   bustlyUpdateAgent: (params: {
     workspaceId: string;
     agentId: string;
