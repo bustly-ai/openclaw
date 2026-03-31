@@ -12,7 +12,7 @@ import * as Sentry from "@sentry/electron/main";
 import JSZip from "jszip";
 import { randomUUID } from "node:crypto";
 import { resolve, dirname, basename, join, relative } from "node:path";
-import { spawn, spawnSync, ChildProcess } from "node:child_process";
+import { fork, spawnSync, ChildProcess } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -37,7 +37,7 @@ import {
 import {
   ensureBundledOpenClawShim,
   resolveBundledBustlyBinDir,
-  resolveCliInvocation,
+  resolveNodeBinary,
   resolveOpenClawCliPath,
 } from "./cli-utils.js";
 import {
@@ -1701,6 +1701,21 @@ function buildElectronCliEnv(params?: {
   };
 }
 
+function resolveGatewayWorkerPath(): string {
+  const candidates = [
+    resolve(__dirname, "gateway-worker.js"),
+    resolve(__dirname, "gateway-worker-dev.js"),
+    resolve(__dirname, "..", "gateway-worker.js"),
+    resolve(__dirname, "..", "gateway-worker-dev.js"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return resolve(__dirname, app.isPackaged ? "gateway-worker.js" : "gateway-worker-dev.js");
+}
+
 function sendUpdateStatus(event: string, payload?: Record<string, unknown>) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(UPDATE_STATUS_CHANNEL, { event, ...payload });
@@ -2038,8 +2053,13 @@ async function startGateway(): Promise<boolean> {
   if (!cliPath) {
     throw new Error("OpenClaw CLI not found");
   }
+  const gatewayWorkerPath = resolveGatewayWorkerPath();
+  if (!existsSync(gatewayWorkerPath)) {
+    throw new Error(`Gateway worker not found at ${gatewayWorkerPath}`);
+  }
 
   writeMainInfo(`Starting gateway with CLI: ${cliPath}`);
+  writeMainInfo(`Starting gateway worker: ${gatewayWorkerPath}`);
 
   // Try to load config first, otherwise use initialization result or defaults
   const loadedConfig = loadGatewayConfig();
@@ -2073,18 +2093,9 @@ async function startGateway(): Promise<boolean> {
     writeMainInfo(`Starting gateway on port ${gatewayPort} with bind=${gatewayBind}`);
     writeMainInfo(`Authentication: ${loadedConfig?.token ? "token" : "none (local development mode)"}`);
 
-    const args = [
-      "gateway",
-      "run",
-      "--port", String(gatewayPort),
-      "--bind", gatewayBind,
-      "--allow-unconfigured",
-    ];
-
     // Store token for WS URL
     if (gatewayToken) {
       writeMainInfo(`Using token: ${gatewayToken.slice(0, 8)}...`);
-      args.push("--token", gatewayToken);
     }
 
     const recentStdout: string[] = [];
@@ -2096,28 +2107,6 @@ async function startGateway(): Promise<boolean> {
       }
     };
 
-    const invocation = resolveCliInvocation(cliPath, args, { includeBundledNode: true });
-    if (!invocation) {
-      writeMainLog("Failed to locate node binary in bundled resources.");
-      reject(new Error("Node binary not found for OpenClaw CLI"));
-      return;
-    }
-    const nodePath = invocation.nodePath ?? null;
-    if (invocation.isMjs && nodePath) {
-      try {
-        const nodeVersion = spawnSync(nodePath, ["-v"], { encoding: "utf-8" }).stdout?.trim();
-        const nodeArch = spawnSync(nodePath, ["-p", "process.arch"], { encoding: "utf-8" })
-          .stdout?.trim();
-        writeMainLog(`Gateway node runtime: path=${nodePath} version=${nodeVersion ?? "unknown"} arch=${nodeArch ?? "unknown"}`);
-      } catch (error) {
-        writeMainLog(`Gateway node runtime probe failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    writeMainLog(
-      `Gateway launch inputs: cli=${cliPath} node=${nodePath ?? "n/a"} port=${gatewayPort} bind=${gatewayBind}`,
-    );
-    const spawnCommand = invocation.command;
-    const spawnArgs = invocation.args;
     const appPath = app.getAppPath();
     const resourcesPath = process.resourcesPath || appPath;
     const bundledPluginsDir = ensureBundledExtensionsDir({
@@ -2169,21 +2158,47 @@ async function startGateway(): Promise<boolean> {
       .filter((value) => Boolean(value && value.length > 0))
       .map((value) => `${value}(${existsSync(value!) ? "exists" : "missing"})`)
       .join(" | ");
+    const nodePath = resolveNodeBinary({ includeBundled: true });
+    if (!nodePath) {
+      writeMainLog("Failed to locate node binary in bundled resources.");
+      reject(new Error("Node binary not found for gateway worker"));
+      return;
+    }
+    try {
+      const nodeVersion = spawnSync(nodePath, ["-v"], { encoding: "utf-8" }).stdout?.trim();
+      const nodeArch = spawnSync(nodePath, ["-p", "process.arch"], { encoding: "utf-8" })
+        .stdout?.trim();
+      writeMainLog(
+        `Gateway node runtime: path=${nodePath} version=${nodeVersion ?? "unknown"} arch=${nodeArch ?? "unknown"}`,
+      );
+    } catch (error) {
+      writeMainLog(
+        `Gateway node runtime probe failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
 
     const spawnEnv = buildElectronCliEnv({ cliPath, oauthCallbackPort });
     if (existsSync(bundledPluginsDir)) {
       spawnEnv.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
     }
+    spawnEnv.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
+    spawnEnv.OPENCLAW_ELECTRON_GATEWAY_BIND = gatewayBind;
+    if (gatewayToken) {
+      spawnEnv.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+    } else {
+      delete spawnEnv.OPENCLAW_GATEWAY_TOKEN;
+    }
     writeMainLog(
-      `Gateway env: SHELL=${shellPath} OPENCLAW_LOAD_SHELL_ENV=1 NODE_PATH=${effectiveNodePath || "(empty)"} PATH_HEAD=${effectivePath.split(getPathDelimiter())[0] ?? "(empty)"} cliShim=${bundledCliShim?.shimPath ?? "(none)"} appPath=${appPath} resourcesPath=${resourcesPath} candidates=${nodePathStatus || "(none)"} rawOpenClawNodeModules=${openclawNodeModules} rawResourcesNodeModules=${resourcesNodeModules} rawAppNodeModules=${appNodeModules} inheritedNodePath=${inheritedNodePath ?? "(none)"}`,
+      `Gateway env: SHELL=${shellPath} OPENCLAW_LOAD_SHELL_ENV=1 NODE_PATH=${effectiveNodePath || "(empty)"} PATH_HEAD=${effectivePath.split(getPathDelimiter())[0] ?? "(empty)"} cliShim=${bundledCliShim?.shimPath ?? "(none)"} appPath=${appPath} resourcesPath=${resourcesPath} candidates=${nodePathStatus || "(none)"} rawOpenClawNodeModules=${openclawNodeModules} rawResourcesNodeModules=${resourcesNodeModules} rawAppNodeModules=${appNodeModules} inheritedNodePath=${inheritedNodePath ?? "(none)"} worker=${gatewayWorkerPath}`,
     );
 
     writeMainLog(
-      `Gateway spawn: command=${spawnCommand} args=${spawnArgs.join(" ")}`,
+      `Gateway fork: execPath=${nodePath} module=${gatewayWorkerPath} port=${gatewayPort} bind=${gatewayBind}`,
     );
-    gatewayProcess = spawn(spawnCommand, spawnArgs, {
+    gatewayProcess = fork(gatewayWorkerPath, [], {
       env: spawnEnv,
-      stdio: "pipe",
+      execPath: nodePath,
+      silent: true,
     });
 
     gatewayProcess.stdout?.on("data", (data) => {
