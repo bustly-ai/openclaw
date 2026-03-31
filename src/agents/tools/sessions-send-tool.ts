@@ -14,12 +14,10 @@ import { jsonResult, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
-  extractAssistantText,
   isResolvedSessionVisibleToRequester,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
-  stripToolMessages,
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
@@ -193,9 +191,10 @@ export function createSessionsSendTool(opts?: {
       const timeoutSeconds =
         typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
           ? Math.max(0, Math.floor(params.timeoutSeconds))
-          : 30;
-      const timeoutMs = timeoutSeconds * 1000;
-      const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
+          : 0;
+      // sessions_send now reports success once the target session accepts the run.
+      // timeoutSeconds only caps the background agent-to-agent follow-up flow.
+      const announceTimeoutMs = timeoutSeconds > 0 ? timeoutSeconds * 1000 : 30_000;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
       const visibilityGuard = await createSessionVisibilityGuard({
@@ -237,6 +236,11 @@ export function createSessionsSendTool(opts?: {
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
+      const acceptance = {
+        status: "received" as const,
+        replyStatus: "pending" as const,
+        note: "The target session received the message and may reply later.",
+      };
       const delivery = { status: "pending", mode: "announce" as const };
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
         void runSessionsSendA2AFlow({
@@ -251,35 +255,6 @@ export function createSessionsSendTool(opts?: {
           waitRunId,
         });
       };
-
-      if (timeoutSeconds === 0) {
-        try {
-          const response = await callGateway<{ runId: string }>({
-            method: "agent",
-            params: sendParams,
-            timeoutMs: 10_000,
-          });
-          if (typeof response?.runId === "string" && response.runId) {
-            runId = response.runId;
-          }
-          startA2AFlow(undefined, runId);
-          return jsonResult({
-            runId,
-            status: "accepted",
-            sessionKey: displayKey,
-            delivery,
-          });
-        } catch (err) {
-          const messageText =
-            err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-          return jsonResult({
-            runId,
-            status: "error",
-            error: messageText,
-            sessionKey: displayKey,
-          });
-        }
-      }
 
       try {
         const response = await callGateway<{ runId: string }>({
@@ -300,62 +275,12 @@ export function createSessionsSendTool(opts?: {
           sessionKey: displayKey,
         });
       }
-
-      let waitStatus: string | undefined;
-      let waitError: string | undefined;
-      try {
-        const wait = await callGateway<{ status?: string; error?: string }>({
-          method: "agent.wait",
-          params: {
-            runId,
-            timeoutMs,
-          },
-          timeoutMs: timeoutMs + 2000,
-        });
-        waitStatus = typeof wait?.status === "string" ? wait.status : undefined;
-        waitError = typeof wait?.error === "string" ? wait.error : undefined;
-      } catch (err) {
-        const messageText =
-          err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-        return jsonResult({
-          runId,
-          status: messageText.includes("gateway timeout") ? "timeout" : "error",
-          error: messageText,
-          sessionKey: displayKey,
-        });
-      }
-
-      if (waitStatus === "timeout") {
-        return jsonResult({
-          runId,
-          status: "timeout",
-          error: waitError,
-          sessionKey: displayKey,
-        });
-      }
-      if (waitStatus === "error") {
-        return jsonResult({
-          runId,
-          status: "error",
-          error: waitError ?? "agent error",
-          sessionKey: displayKey,
-        });
-      }
-
-      const history = await callGateway<{ messages: Array<unknown> }>({
-        method: "chat.history",
-        params: { sessionKey: resolvedKey, limit: 50 },
-      });
-      const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
-      const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
-      const reply = last ? extractAssistantText(last) : undefined;
-      startA2AFlow(reply ?? undefined);
-
+      startA2AFlow(undefined, runId);
       return jsonResult({
         runId,
         status: "ok",
-        reply,
         sessionKey: displayKey,
+        acceptance,
         delivery,
       });
     },

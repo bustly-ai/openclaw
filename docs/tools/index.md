@@ -463,7 +463,7 @@ Core parameters:
 
 - `sessions_list`: `kinds?`, `limit?`, `activeMinutes?`, `messageLimit?` (0 = none)
 - `sessions_history`: `sessionKey` (or `sessionId`), `limit?`, `includeTools?`
-- `sessions_send`: `sessionKey` (or `sessionId`), `message`, `timeoutSeconds?` (0 = fire-and-forget)
+- `sessions_send`: `sessionKey` (or `sessionId`), `message`, `timeoutSeconds?` (optional background follow-up budget)
 - `sessions_spawn`: `task`, `label?`, `agentId?`, `model?`, `thinking?`, `runTimeoutSeconds?`, `thread?`, `mode?`, `cleanup?`
 - `session_status`: `sessionKey?` (default current; accepts `sessionId`), `model?` (`default` clears override)
 
@@ -472,8 +472,9 @@ Notes:
 - `main` is the canonical direct-chat key; global/unknown are hidden.
 - `messageLimit > 0` fetches last N messages per session (tool messages filtered).
 - Session targeting is controlled by `tools.sessions.visibility` (default `agent`: any session in the current agent id). If you run a shared agent for multiple users, consider setting `tools.sessions.visibility: "self"` to prevent cross-session browsing.
-- `sessions_send` waits for final completion when `timeoutSeconds > 0`.
-- Delivery/announce happens after completion and is best-effort; `status: "ok"` confirms the agent run finished, not that the announce was delivered.
+- `sessions_send` returns success as soon as the target session accepts the message.
+- Successful `sessions_send` results include `acceptance.status = "received"` and `acceptance.replyStatus = "pending"` to indicate the other session has the message and may reply later.
+- `timeoutSeconds` only limits the background follow-up/announce flow; delivery/announce remains best-effort and `status: "ok"` does not guarantee the announce was delivered.
 - `sessions_spawn` starts a sub-agent run and posts an announce reply back to the requester chat.
   - Supports one-shot mode (`mode: "run"`) and persistent thread-bound mode (`mode: "session"` with `thread: true`).
   - If `thread: true` and `mode` is omitted, mode defaults to `session`.

@@ -1,5 +1,8 @@
 import type { SessionIconId } from "../renderer/lib/session-icons.js";
-import { buildBustlyWorkspaceMainSessionKey } from "./bustly-agent.js";
+import {
+  buildBustlyWorkspaceMainSessionKey,
+  resolveBustlyAgentNameFromSessionKey,
+} from "./bustly-agent.js";
 
 export type BustlyPresetUseCase = {
   icon: string;
@@ -143,6 +146,7 @@ export function resolveBustlyPresetUseCases(params: {
   if (params.sessionKey === workspaceMainSessionKey) {
     return BUSTLY_MAIN_AGENT_PRESET.useCases;
   }
-  const channel = BUSTLY_PRESET_CHANNELS.find((entry) => params.sessionKey.endsWith(`:channel:${entry.slug}`));
-  return channel?.useCases ?? [];
+  const agentName = resolveBustlyAgentNameFromSessionKey(params.workspaceId, params.sessionKey);
+  const scenario = BUSTLY_PRESET_CHANNELS.find((entry) => entry.slug === agentName);
+  return scenario?.useCases ?? [];
 }

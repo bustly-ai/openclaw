@@ -830,6 +830,7 @@ export default function ChatPage() {
   const gatewayInstanceIdRef = useRef(createGatewayInstanceId("chat"));
   const sessionRuntimesRef = useRef<Map<string, SessionRuntimeState>>(new Map());
   const currentSessionKeyRef = useRef("");
+  const lastHistoryHydratedSessionKeyRef = useRef("");
   const previewViewportRef = useRef<HTMLDivElement | null>(null);
   const previewImageRef = useRef<HTMLImageElement | null>(null);
   const previewWheelDeltaRef = useRef(0);
@@ -2197,11 +2198,14 @@ export default function ChatPage() {
   useEffect(() => {
     const client = clientRef.current;
     const runtime = getSessionRuntime(currentSessionKey);
+    const shouldRefreshHistory =
+      !runtime.historyLoaded || lastHistoryHydratedSessionKeyRef.current !== currentSessionKey;
     if (!connected || !client) {
       setSessionLoading(currentSessionKey, false);
       return;
     }
-    if (!runtime.historyLoaded) {
+    if (shouldRefreshHistory) {
+      lastHistoryHydratedSessionKeyRef.current = currentSessionKey;
       setSessionLoading(currentSessionKey, true);
       void loadHistory(client, currentSessionKey).catch((err) => {
         setError(err instanceof Error ? err.message : String(err));

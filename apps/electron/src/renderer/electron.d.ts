@@ -96,6 +96,16 @@ interface BustlySupabaseConfig {
   userName: string;
 }
 
+interface BustlyWorkspaceAgent {
+  agentId: string;
+  agentName: string;
+  sessionKey: string;
+  name: string;
+  icon?: string;
+  isMain: boolean;
+  updatedAt: number | null;
+}
+
 interface ElectronAPI {
   // OpenClaw initialization
   openclawInit: (options?: PresetConfigOptions) => Promise<InitializationResult>;
@@ -140,6 +150,23 @@ interface ElectronAPI {
     workspaceId: string,
     workspaceName?: string,
   ) => Promise<{ success: boolean; agentId?: string; sessionKey?: string; error?: string }>;
+  bustlyListAgents: (workspaceId?: string) => Promise<BustlyWorkspaceAgent[]>;
+  bustlyCreateAgent: (
+    workspaceId: string,
+    name: string,
+    icon?: string,
+    workspaceName?: string,
+  ) => Promise<{ success: boolean; agentId?: string; sessionKey?: string; error?: string }>;
+  bustlyUpdateAgent: (params: {
+    workspaceId: string;
+    agentId: string;
+    name?: string;
+    icon?: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+  bustlyDeleteAgent: (params: {
+    workspaceId: string;
+    agentId: string;
+  }) => Promise<{ success: boolean; error?: string }>;
   bustlyLogout: () => Promise<{ success: boolean; error?: string }>;
   bustlyOpenLogin: () => Promise<{ success: boolean; error?: string }>;
   bustlyOpenSettings: () => Promise<{ success: boolean; error?: string }>;

@@ -57,7 +57,6 @@ import { resolveDefaultSessionStorePath } from "../../../../src/config/sessions/
 import { applyAgentConfig, listAgentEntries, pruneAgentConfig } from "../../../../src/commands/agents.config";
 import { GatewayClient } from "../../../../src/gateway/client";
 import type { SessionsPatchResult } from "../../../../src/gateway/protocol";
-import { applySessionsPatchToStore } from "../../../../src/gateway/sessions-patch";
 import type { OpenClawConfig } from "../../../../src/config/types";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../../../src/utils/message-channel";
 import {
@@ -77,13 +76,26 @@ import {
   resolveElectronBustlyWorkspaceTemplateBaseUrl,
 } from "./defaults.js";
 import {
-  buildBustlyAgentPresetChannelSessionKey,
+  buildBustlyWorkspaceAgentPrefix,
+  DEFAULT_BUSTLY_AGENT_NAME,
   buildBustlyWorkspaceAgentId,
+  normalizeBustlyAgentName,
+  normalizeBustlyWorkspaceId,
 } from "../shared/bustly-agent.js";
 import {
   BUSTLY_MAIN_AGENT_PRESET,
   BUSTLY_PRESET_CHANNELS,
 } from "../shared/bustly-preset-channels.js";
+
+type BustlyWorkspaceAgentSummary = {
+  agentId: string;
+  agentName: string;
+  sessionKey: string;
+  name: string;
+  icon?: string;
+  isMain: boolean;
+  updatedAt: number | null;
+};
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 const SENTRY_DSN =
@@ -810,14 +822,88 @@ function resolveElectronConfigPath(): string {
   return resolveElectronIsolatedConfigPath();
 }
 
-function resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId: string): string {
-  const agentId = buildBustlyWorkspaceAgentId(workspaceId);
+function resolveBustlyWorkspaceAgentWorkspaceDir(
+  workspaceId: string,
+  agentName: string = DEFAULT_BUSTLY_AGENT_NAME,
+): string {
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(workspaceId);
+  const normalizedAgentName = normalizeBustlyAgentName(agentName);
   const stateDir = resolveElectronStateDir();
-  return join(stateDir, "workspaces", agentId);
+  return join(stateDir, "workspaces", normalizedWorkspaceId, "agents", normalizedAgentName);
 }
 
-function resolveBustlyWorkspaceAgentSessionKey(workspaceId: string): string {
-  return buildAgentMainSessionKey({ agentId: buildBustlyWorkspaceAgentId(workspaceId) });
+function resolveBustlyWorkspaceAgentSessionKey(
+  workspaceId: string,
+  agentName: string = DEFAULT_BUSTLY_AGENT_NAME,
+): string {
+  return buildAgentMainSessionKey({ agentId: buildBustlyWorkspaceAgentId(workspaceId, agentName) });
+}
+
+function listBustlyWorkspaceAgentIds(cfg: OpenClawConfig, workspaceId: string): string[] {
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(workspaceId);
+  if (!normalizedWorkspaceId) {
+    return [];
+  }
+  const prefix = buildBustlyWorkspaceAgentPrefix(normalizedWorkspaceId);
+  return listAgentEntries(cfg)
+    .filter((entry) => entry.id === `bustly-${normalizedWorkspaceId}` || entry.id.startsWith(prefix))
+    .map((entry) => entry.id);
+}
+
+function applyBustlyWorkspaceCollaborationConfig(
+  cfg: OpenClawConfig,
+  workspaceId: string,
+): OpenClawConfig {
+  const workspaceAgentIds = listBustlyWorkspaceAgentIds(cfg, workspaceId);
+  if (workspaceAgentIds.length === 0) {
+    return cfg;
+  }
+
+  const workspaceAgentIdSet = new Set(workspaceAgentIds);
+  const allConfiguredBustlyAgentIds = new Set(
+    listAgentEntries(cfg)
+      .map((entry) => entry.id)
+      .filter((agentId) => agentId.startsWith("bustly-")),
+  );
+
+  const nextAgentList = listAgentEntries(cfg).map((entry) => {
+    if (!workspaceAgentIdSet.has(entry.id)) {
+      return entry;
+    }
+    const nextAllowAgents = workspaceAgentIds.filter((agentId) => agentId !== entry.id);
+    return {
+      ...entry,
+      subagents: {
+        ...entry.subagents,
+        allowAgents: nextAllowAgents,
+      },
+    };
+  });
+
+  const preservedAllow = (cfg.tools?.agentToAgent?.allow ?? []).filter(
+    (entry) => !allConfiguredBustlyAgentIds.has(entry),
+  );
+  const nextAgentToAgentAllow = Array.from(new Set([...preservedAllow, ...workspaceAgentIds]));
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      list: nextAgentList,
+    },
+    tools: {
+      ...cfg.tools,
+      agentToAgent: {
+        ...cfg.tools?.agentToAgent,
+        enabled: true,
+        allow: nextAgentToAgentAllow,
+      },
+      sessions: {
+        ...cfg.tools?.sessions,
+        visibility: "all",
+      },
+    },
+  };
 }
 
 function resolveBustlyWorkspaceIdFromOAuthState(): string {
@@ -831,16 +917,25 @@ function listEnabledBustlyPresetChannels() {
     .toSorted((a, b) => a.order - b.order);
 }
 
-function hasMissingBustlyWorkspaceSessions(agentId: string): boolean {
-  const presets = listEnabledBustlyPresetChannels();
-  const store = loadSessionStore(resolveDefaultSessionStorePath(agentId));
-  const mainSessionKey = buildAgentMainSessionKey({ agentId });
-  if (!store[mainSessionKey]) {
+function hasMissingBustlyWorkspaceSetup(workspaceId: string): boolean {
+  const cfg = loadConfig();
+  const workspaceAgentIds = new Set(listBustlyWorkspaceAgentIds(cfg, workspaceId));
+  const mainAgentId = buildBustlyWorkspaceAgentId(workspaceId);
+  if (!workspaceAgentIds.has(mainAgentId)) {
     return true;
   }
-  return presets.some((preset) => {
-    const storeKey = buildBustlyAgentPresetChannelSessionKey(agentId, preset.slug);
-    return !store[storeKey];
+  const mainStore = loadSessionStore(resolveDefaultSessionStorePath(mainAgentId));
+  const mainSessionKey = buildAgentMainSessionKey({ agentId: mainAgentId });
+  if (!mainStore[mainSessionKey]) {
+    return true;
+  }
+  return listEnabledBustlyPresetChannels().some((preset) => {
+    const agentId = buildBustlyWorkspaceAgentId(workspaceId, preset.slug);
+    if (!workspaceAgentIds.has(agentId)) {
+      return true;
+    }
+    const store = loadSessionStore(resolveDefaultSessionStorePath(agentId));
+    return !store[buildAgentMainSessionKey({ agentId })];
   });
 }
 
@@ -870,84 +965,84 @@ async function ensureBustlyMainSession(params: { agentId: string }): Promise<voi
   });
 }
 
-async function ensureBustlyPresetChannels(params: { agentId: string }): Promise<void> {
-  const legacyPresetLabels = new Map<string, string>([
-    ["daily-ops", "Daily Ops"],
-    ["campaigns", "Campaigns"],
-    ["inventory", "Inventory"],
-    ["support", "Support"],
-  ]);
-  const legacyPresetIcons = new Set(["ChartBar", "TrendUp", "ChatCircleText", "Package", "Storefront", "User", "Tag"]);
-  const presets = listEnabledBustlyPresetChannels();
-  if (presets.length === 0) {
+async function setBustlyAgentMainSessionMetadata(params: {
+  agentId: string;
+  label?: string;
+  icon?: string;
+}): Promise<void> {
+  const nextLabel = params.label?.trim();
+  const nextIcon = params.icon?.trim();
+  if (!nextLabel && !nextIcon) {
     return;
   }
 
-  const cfg = loadConfig();
   const storePath = resolveDefaultSessionStorePath(params.agentId);
-
-  await updateSessionStore(storePath, async (store) => {
-    for (const preset of presets) {
-      const storeKey = buildBustlyAgentPresetChannelSessionKey(params.agentId, preset.slug);
-      const existing = store[storeKey];
-      const nextPatch: {
-        key: string;
-        label?: string;
-        icon?: string;
-        model?: string;
-      } = { key: storeKey };
-
-      const existingLabel = existing?.label?.trim();
-      const shouldReplaceLegacyLabel =
-        existingLabel != null &&
-        existingLabel.length > 0 &&
-        existingLabel === legacyPresetLabels.get(preset.slug);
-      if (!existingLabel || shouldReplaceLegacyLabel) {
-        nextPatch.label = preset.label;
-      }
-      if (shouldReplaceLegacyLabel || !existing?.icon?.trim() || legacyPresetIcons.has(existing.icon.trim())) {
-        nextPatch.icon = preset.icon;
-      }
-      if (!existing?.modelOverride?.trim() && preset.model?.trim()) {
-        nextPatch.model = preset.model.trim();
-      }
-      if (!("label" in nextPatch) && !("icon" in nextPatch) && !("model" in nextPatch)) {
-        continue;
-      }
-
-      const applied = await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey,
-        patch: nextPatch,
-      });
-      if (!applied.ok) {
-        throw new Error(applied.error.message);
-      }
-    }
+  const mainSessionKey = buildAgentMainSessionKey({ agentId: params.agentId });
+  await updateSessionStore(storePath, (store) => {
+    const existing = store[mainSessionKey] ?? {
+      sessionId: randomUUID(),
+      updatedAt: Date.now(),
+    };
+    store[mainSessionKey] = {
+      ...existing,
+      updatedAt: Date.now(),
+      ...(nextLabel ? { label: nextLabel } : {}),
+      ...(nextIcon ? { icon: nextIcon } : {}),
+    };
     return store;
   });
+}
+
+async function ensureBustlyPresetAgents(params: {
+  workspaceId: string;
+  workspaceName?: string;
+}): Promise<void> {
+  for (const preset of listEnabledBustlyPresetChannels()) {
+    const agentId = buildBustlyWorkspaceAgentId(params.workspaceId, preset.slug);
+    const config = loadConfig();
+    if (!listAgentEntries(config).some((entry) => entry.id === agentId)) {
+      await createBustlyWorkspaceAgent({
+        workspaceId: params.workspaceId,
+        workspaceName: params.workspaceName,
+        agentName: preset.slug,
+        displayName: preset.label,
+        icon: preset.icon,
+      });
+      continue;
+    }
+    await ensureBustlyMainSession({ agentId });
+    await setBustlyAgentMainSessionMetadata({
+      agentId,
+      label: preset.label,
+      icon: preset.icon,
+    });
+  }
 }
 
 async function ensureBustlyWorkspaceAgentConfig(params: {
   workspaceId: string;
   workspaceName?: string;
+  agentName?: string;
 }): Promise<{ agentId: string; sessionKey: string; workspaceDir: string }> {
   const workspaceId = params.workspaceId.trim();
   if (!workspaceId) {
     throw new Error("Bustly workspaceId is required.");
   }
+  const agentName = normalizeBustlyAgentName(params.agentName);
   const configPath = resolveElectronConfigPath();
   if (!existsSync(configPath)) {
     throw new Error(`OpenClaw config not found at ${configPath}`);
   }
 
-  const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId);
-  const agentId = buildBustlyWorkspaceAgentId(workspaceId);
-  const sessionKey = resolveBustlyWorkspaceAgentSessionKey(workspaceId);
+  const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId, agentName);
+  const agentId = buildBustlyWorkspaceAgentId(workspaceId, agentName);
+  const sessionKey = resolveBustlyWorkspaceAgentSessionKey(workspaceId, agentName);
   const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
   const providedWorkspaceName = params.workspaceName?.trim();
-  const nextName = providedWorkspaceName || workspaceId;
+  const nextName =
+    agentName === DEFAULT_BUSTLY_AGENT_NAME
+      ? BUSTLY_MAIN_AGENT_PRESET.label
+      : providedWorkspaceName || agentName;
   const configWithoutMain =
     listAgentEntries(config).some((entry) => entry.id === "main")
       ? pruneAgentConfig(config, "main").config
@@ -976,9 +1071,10 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
       list: normalizedNextList,
     },
   };
+  const synchronizedConfig = applyBustlyWorkspaceCollaborationConfig(nextConfig, workspaceId);
 
-  if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
-    writeFileSync(configPath, JSON.stringify(nextConfig, null, 2));
+  if (JSON.stringify(synchronizedConfig) !== JSON.stringify(config)) {
+    writeFileSync(configPath, JSON.stringify(synchronizedConfig, null, 2));
   }
 
   await initializeBustlyWorkspaceBootstrap({
@@ -988,22 +1084,187 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
   });
 
   await ensureBustlyMainSession({ agentId });
-  await ensureBustlyPresetChannels({ agentId });
+  await ensureBustlyPresetAgents({
+    workspaceId,
+    workspaceName: providedWorkspaceName,
+  });
 
   return { agentId, sessionKey, workspaceDir };
+}
+
+async function createBustlyWorkspaceAgent(params: {
+  workspaceId: string;
+  workspaceName?: string;
+  agentName: string;
+  displayName?: string;
+  icon?: string;
+}): Promise<{ agentId: string; sessionKey: string; workspaceDir: string }> {
+  const workspaceId = params.workspaceId.trim();
+  if (!workspaceId) {
+    throw new Error("Bustly workspaceId is required.");
+  }
+  const agentName = normalizeBustlyAgentName(params.agentName);
+  const displayName = params.displayName?.trim() || agentName;
+  const icon = params.icon?.trim() || "SquaresFour";
+  const configPath = resolveElectronConfigPath();
+  if (!existsSync(configPath)) {
+    throw new Error(`OpenClaw config not found at ${configPath}`);
+  }
+
+  const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId, agentName);
+  const agentId = buildBustlyWorkspaceAgentId(workspaceId, agentName);
+  const sessionKey = resolveBustlyWorkspaceAgentSessionKey(workspaceId, agentName);
+  const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+
+  if (listAgentEntries(config).some((entry) => entry.id === agentId)) {
+    throw new Error(`Agent "${agentName}" already exists in this workspace.`);
+  }
+
+  const configWithoutMain =
+    listAgentEntries(config).some((entry) => entry.id === "main")
+      ? pruneAgentConfig(config, "main").config
+      : config;
+  const updated = applyAgentConfig(configWithoutMain, {
+    agentId,
+    name: displayName,
+    workspace: workspaceDir,
+  });
+  const synchronizedConfig = applyBustlyWorkspaceCollaborationConfig(updated, workspaceId);
+  if (JSON.stringify(synchronizedConfig) !== JSON.stringify(config)) {
+    writeFileSync(configPath, JSON.stringify(synchronizedConfig, null, 2));
+  }
+
+  await initializeBustlyWorkspaceBootstrap({
+    workspaceDir,
+    workspaceId,
+    workspaceName: params.workspaceName,
+  });
+  await ensureBustlyMainSession({ agentId });
+  await setBustlyAgentMainSessionMetadata({
+    agentId,
+    label: displayName,
+    icon,
+  });
+
+  return { agentId, sessionKey, workspaceDir };
+}
+
+function listBustlyWorkspaceAgents(workspaceId: string): BustlyWorkspaceAgentSummary[] {
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(workspaceId);
+  if (!normalizedWorkspaceId) {
+    return [];
+  }
+
+  const cfg = loadConfig();
+  const prefix = buildBustlyWorkspaceAgentPrefix(normalizedWorkspaceId);
+  return listAgentEntries(cfg)
+    .filter((entry) => entry.id === `bustly-${normalizedWorkspaceId}` || entry.id.startsWith(prefix))
+    .map((entry) => {
+      const agentId = entry.id;
+      const agentName =
+        agentId === `bustly-${normalizedWorkspaceId}`
+          ? DEFAULT_BUSTLY_AGENT_NAME
+          : normalizeBustlyAgentName(agentId.slice(prefix.length) || DEFAULT_BUSTLY_AGENT_NAME);
+      const sessionKey = buildAgentMainSessionKey({ agentId });
+      const store = loadSessionStore(resolveDefaultSessionStorePath(agentId));
+      const sessionEntry = store[sessionKey];
+      const displayName = sessionEntry?.label?.trim() || entry.name?.trim() || agentName;
+      return {
+        agentId,
+        agentName,
+        sessionKey,
+        name: displayName,
+        icon: sessionEntry?.icon?.trim() || undefined,
+        isMain: agentName === DEFAULT_BUSTLY_AGENT_NAME,
+        updatedAt: sessionEntry?.updatedAt ?? null,
+      };
+    })
+    .sort((left, right) => {
+      if (left.isMain && !right.isMain) {
+        return -1;
+      }
+      if (right.isMain && !left.isMain) {
+        return 1;
+      }
+      const leftUpdatedAt = left.updatedAt ?? Number.NEGATIVE_INFINITY;
+      const rightUpdatedAt = right.updatedAt ?? Number.NEGATIVE_INFINITY;
+      if (leftUpdatedAt !== rightUpdatedAt) {
+        return rightUpdatedAt - leftUpdatedAt;
+      }
+      return left.name.localeCompare(right.name);
+    });
+}
+
+async function updateBustlyWorkspaceAgent(params: {
+  workspaceId: string;
+  agentId: string;
+  displayName?: string;
+  icon?: string;
+}): Promise<void> {
+  const configPath = resolveElectronConfigPath();
+  if (!existsSync(configPath)) {
+    throw new Error(`OpenClaw config not found at ${configPath}`);
+  }
+  const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+  const entry = listAgentEntries(config).find((candidate) => candidate.id === params.agentId);
+  if (!entry) {
+    throw new Error(`Agent "${params.agentId}" not found.`);
+  }
+
+  const nextName = params.displayName?.trim();
+  const nextIcon = params.icon?.trim();
+  let nextConfig = config;
+  if (nextName) {
+    nextConfig = applyAgentConfig(nextConfig, {
+      agentId: params.agentId,
+      name: nextName,
+    });
+  }
+  if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
+    writeFileSync(configPath, JSON.stringify(nextConfig, null, 2));
+  }
+
+  await setBustlyAgentMainSessionMetadata({
+    agentId: params.agentId,
+    label: nextName,
+    icon: nextIcon,
+  });
+}
+
+async function deleteBustlyWorkspaceAgent(params: {
+  workspaceId: string;
+  agentId: string;
+}): Promise<void> {
+  const mainAgentId = buildBustlyWorkspaceAgentId(params.workspaceId);
+  if (params.agentId === mainAgentId) {
+    throw new Error("The main workspace agent cannot be deleted.");
+  }
+
+  const configPath = resolveElectronConfigPath();
+  if (!existsSync(configPath)) {
+    throw new Error(`OpenClaw config not found at ${configPath}`);
+  }
+  const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+  const result = pruneAgentConfig(config, params.agentId);
+  const synchronizedConfig = applyBustlyWorkspaceCollaborationConfig(result.config, params.workspaceId);
+  if (JSON.stringify(synchronizedConfig) !== JSON.stringify(config)) {
+    writeFileSync(configPath, JSON.stringify(synchronizedConfig, null, 2));
+  }
 }
 
 async function syncBustlyWorkspaceAgent(params: {
   workspaceId?: string;
   workspaceName?: string;
+  agentName?: string;
   forceInit?: boolean;
 }): Promise<{ agentId: string; sessionKey: string; workspaceDir: string } | null> {
   const workspaceId = params.workspaceId?.trim() || resolveBustlyWorkspaceIdFromOAuthState();
   if (!workspaceId) {
     return null;
   }
+  const agentName = normalizeBustlyAgentName(params.agentName);
   const configPath = resolveElectronConfigPath();
-  const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId);
+  const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId, agentName);
   if (params.forceInit === true || !existsSync(configPath)) {
     const result = await initializeOpenClaw({
       force: params.forceInit === true,
@@ -1021,18 +1282,21 @@ async function syncBustlyWorkspaceAgent(params: {
   return await ensureBustlyWorkspaceAgentConfig({
     workspaceId,
     workspaceName: params.workspaceName,
+    agentName,
   });
 }
 
 async function synchronizeBustlyWorkspaceContext(params?: {
   workspaceId?: string;
   workspaceName?: string;
+  agentName?: string;
   selectedModelInput?: string;
   forceInit?: boolean;
 }): Promise<{ agentId: string; sessionKey: string; workspaceDir: string } | null> {
   const agentBinding = await syncBustlyWorkspaceAgent({
     workspaceId: params?.workspaceId,
     workspaceName: params?.workspaceName,
+    agentName: params?.agentName,
     forceInit: params?.forceInit,
   });
   syncBustlyConfigFile(resolveElectronConfigPath(), params?.selectedModelInput?.trim());
@@ -2796,6 +3060,91 @@ function setupIpcHandlers(): void {
     },
   );
 
+  ipcMain.handle("bustly-list-agents", async (_event, workspaceId?: string) => {
+    try {
+      const nextWorkspaceId = workspaceId?.trim() || resolveBustlyWorkspaceIdFromOAuthState();
+      if (!nextWorkspaceId) {
+        return [];
+      }
+      return listBustlyWorkspaceAgents(nextWorkspaceId);
+    } catch {
+      return [];
+    }
+  });
+
+  ipcMain.handle(
+    "bustly-create-agent",
+    async (
+      _event,
+      workspaceId: string,
+      name: string,
+      icon?: string,
+      workspaceName?: string,
+    ) => {
+      try {
+        const trimmedName = typeof name === "string" ? name.trim() : "";
+        if (!trimmedName) {
+          return { success: false, error: "Agent name is required." };
+        }
+        const result = await createBustlyWorkspaceAgent({
+          workspaceId,
+          workspaceName,
+          agentName: trimmedName,
+          displayName: trimmedName,
+          icon,
+        });
+        return {
+          success: true,
+          agentId: result.agentId,
+          sessionKey: result.sessionKey,
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "bustly-update-agent",
+    async (
+      _event,
+      params: { workspaceId: string; agentId: string; name?: string; icon?: string },
+    ) => {
+      try {
+        await updateBustlyWorkspaceAgent({
+          workspaceId: params.workspaceId,
+          agentId: params.agentId,
+          displayName: params.name,
+          icon: params.icon,
+        });
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "bustly-delete-agent",
+    async (_event, params: { workspaceId: string; agentId: string }) => {
+      try {
+        await deleteBustlyWorkspaceAgent(params);
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
   // Open Bustly login page (standalone)
   ipcMain.handle("bustly-open-login", () => {
     try {
@@ -3244,18 +3593,17 @@ void app.whenReady().then(async () => {
     writeMainLog("Configuration already exists and is valid");
     if (bustlyLoggedIn) {
       const workspaceId = resolveBustlyWorkspaceIdFromOAuthState();
-      const agentId = workspaceId ? buildBustlyWorkspaceAgentId(workspaceId) : "";
-      if (agentId && hasMissingBustlyWorkspaceSessions(agentId)) {
+      if (workspaceId && hasMissingBustlyWorkspaceSetup(workspaceId)) {
         try {
           await synchronizeBustlyWorkspaceContext();
-          writeMainLog("Synchronized Bustly workspace context for missing main session or preset channels");
+          writeMainLog("Synchronized Bustly workspace context for missing main session or preset agents");
         } catch (error) {
           writeMainLog(
-            `Bustly workspace sync failed while restoring main session or preset channels: ${error instanceof Error ? error.message : String(error)}`,
+            `Bustly workspace sync failed while restoring main session or preset agents: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
       } else {
-        writeMainLog("Skipped Bustly workspace sync; main session and preset channels already exist");
+        writeMainLog("Skipped Bustly workspace sync; main session and preset agents already exist");
       }
     }
     // Load existing config to get port and token

@@ -464,7 +464,7 @@ describe("sessions tools", () => {
     expect(details.error).toMatch(/Session not found|No session found/);
   });
 
-  it("sessions_send supports fire-and-forget and wait", async () => {
+  it("sessions_send returns success immediately and continues the background flow", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
     let _historyCallCount = 0;
@@ -540,8 +540,12 @@ describe("sessions tools", () => {
       timeoutSeconds: 0,
     });
     expect(fire.details).toMatchObject({
-      status: "accepted",
+      status: "ok",
       runId: "run-1",
+      acceptance: {
+        status: "received",
+        replyStatus: "pending",
+      },
       delivery: { status: "pending", mode: "announce" },
     });
     await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 4);
@@ -556,10 +560,13 @@ describe("sessions tools", () => {
     const waited = await waitPromise;
     expect(waited.details).toMatchObject({
       status: "ok",
-      reply: "done",
+      runId: "run-5",
+      acceptance: {
+        status: "received",
+        replyStatus: "pending",
+      },
       delivery: { status: "pending", mode: "announce" },
     });
-    expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
     await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 8);
     await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 8);
     await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 8);
@@ -645,7 +652,7 @@ describe("sessions tools", () => {
       timeoutSeconds: 0,
     });
     const details = result.details as { status?: string };
-    expect(details.status).toBe("accepted");
+    expect(details.status).toBe("ok");
     const agentCall = callGatewayMock.mock.calls.find(
       (call) => (call[0] as { method?: string }).method === "agent",
     );
@@ -653,6 +660,59 @@ describe("sessions tools", () => {
       method: "agent",
       params: { sessionKey: targetKey },
     });
+  });
+
+  it("sessions_send stays ok even if background follow-up times out", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as {
+        method?: string;
+        params?: Record<string, unknown>;
+      };
+      if (request.method === "agent") {
+        return { runId: "run-timeout", acceptedAt: 321 };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      if (request.method === "chat.history") {
+        throw new Error("chat.history should not run after a wait timeout");
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "main",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-timeout", {
+      sessionKey: "main",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    expect(result.details).toMatchObject({
+      runId: "run-timeout",
+      status: "ok",
+      acceptance: {
+        status: "received",
+        replyStatus: "pending",
+      },
+      delivery: { status: "pending", mode: "announce" },
+    });
+    await waitForCalls(() => {
+      return callGatewayMock.mock.calls.filter(
+        (call) => (call[0] as { method?: string }).method === "agent.wait",
+      ).length;
+    }, 1);
+    expect(
+      callGatewayMock.mock.calls.some(
+        (call) => (call[0] as { method?: string }).method === "chat.history",
+      ),
+    ).toBe(false);
   });
 
   it("sessions_send runs ping-pong then announces", async () => {
@@ -737,7 +797,11 @@ describe("sessions tools", () => {
     });
     expect(waited.details).toMatchObject({
       status: "ok",
-      reply: "initial",
+      runId: "run-1",
+      acceptance: {
+        status: "received",
+        replyStatus: "pending",
+      },
     });
     await vi.waitFor(
       () => {

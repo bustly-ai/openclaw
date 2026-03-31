@@ -15,6 +15,8 @@ import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 const log = createSubsystemLogger("agent-scope");
 const BUSTLY_AGENT_PREFIX = "bustly-";
 const BUSTLY_WORKSPACES_DIRNAME = "workspaces";
+const BUSTLY_AGENTS_DIRNAME = "agents";
+const DEFAULT_BUSTLY_AGENT_NAME = "overview";
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {
@@ -123,12 +125,96 @@ function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | u
   return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
 }
 
-function buildBustlyWorkspaceAgentId(workspaceId: string | undefined): string | null {
+function normalizeBustlyToken(value: string | undefined): string {
+  const trimmed = value?.trim().toLowerCase() ?? "";
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+}
+
+function buildBustlyWorkspaceAgentId(
+  workspaceId: string | undefined,
+  agentName: string = DEFAULT_BUSTLY_AGENT_NAME,
+): string | null {
   const trimmed = workspaceId?.trim();
   if (!trimmed) {
     return null;
   }
-  return normalizeAgentId(`${BUSTLY_AGENT_PREFIX}${trimmed}`);
+  const normalizedWorkspaceId = normalizeBustlyToken(trimmed);
+  if (!normalizedWorkspaceId) {
+    return null;
+  }
+  const normalizedAgentName = normalizeBustlyToken(agentName) || DEFAULT_BUSTLY_AGENT_NAME;
+  return normalizeAgentId(`${BUSTLY_AGENT_PREFIX}${normalizedWorkspaceId}-${normalizedAgentName}`);
+}
+
+function resolveDynamicBustlyWorkspaceDirFromStateDir(agentId: string): string | null {
+  const stateDir = resolveStateDir(process.env);
+  const workspacesDir = path.join(stateDir, BUSTLY_WORKSPACES_DIRNAME);
+  try {
+    const workspaceEntries = fs.readdirSync(workspacesDir, { withFileTypes: true });
+    for (const workspaceEntry of workspaceEntries) {
+      if (!workspaceEntry.isDirectory()) {
+        continue;
+      }
+      if (workspaceEntry.name.startsWith(BUSTLY_AGENT_PREFIX)) {
+        if (normalizeAgentId(workspaceEntry.name) === agentId) {
+          return path.join(workspacesDir, workspaceEntry.name);
+        }
+        continue;
+      }
+      const agentsDir = path.join(workspacesDir, workspaceEntry.name, BUSTLY_AGENTS_DIRNAME);
+      let agentEntries: fs.Dirent[];
+      try {
+        agentEntries = fs.readdirSync(agentsDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const agentEntry of agentEntries) {
+        if (!agentEntry.isDirectory()) {
+          continue;
+        }
+        if (buildBustlyWorkspaceAgentId(workspaceEntry.name, agentEntry.name) === agentId) {
+          return path.join(agentsDir, agentEntry.name);
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function resolveOAuthBustlyWorkspaceAgentDir(agentId: string): string | null {
+  try {
+    const statePath = path.join(resolveStateDir(process.env), "bustlyOauth.json");
+    const raw = fs.readFileSync(statePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      user?: {
+        workspaceId?: unknown;
+      };
+    };
+    const workspaceId =
+      typeof parsed.user?.workspaceId === "string" ? parsed.user.workspaceId : undefined;
+    const oauthAgentId = buildBustlyWorkspaceAgentId(workspaceId);
+    if (!workspaceId || oauthAgentId !== agentId) {
+      return null;
+    }
+    const normalizedWorkspaceId = normalizeBustlyToken(workspaceId);
+    if (!normalizedWorkspaceId) {
+      return null;
+    }
+    return path.join(
+      resolveStateDir(process.env),
+      BUSTLY_WORKSPACES_DIRNAME,
+      normalizedWorkspaceId,
+      BUSTLY_AGENTS_DIRNAME,
+      DEFAULT_BUSTLY_AGENT_NAME,
+    );
+  } catch {
+    return null;
+  }
 }
 
 function listDynamicBustlyWorkspaceAgentIds(): string[] {
@@ -145,9 +231,28 @@ function listDynamicBustlyWorkspaceAgentIds(): string[] {
       if (!entry.isDirectory()) {
         continue;
       }
-      const id = normalizeAgentId(entry.name);
-      if (id.startsWith(BUSTLY_AGENT_PREFIX) && id.length > BUSTLY_AGENT_PREFIX.length) {
-        ids.add(id);
+      if (entry.name.startsWith(BUSTLY_AGENT_PREFIX)) {
+        const id = normalizeAgentId(entry.name);
+        if (id.length > BUSTLY_AGENT_PREFIX.length) {
+          ids.add(id);
+        }
+        continue;
+      }
+      const agentsDir = path.join(workspacesDir, entry.name, BUSTLY_AGENTS_DIRNAME);
+      let agentEntries: fs.Dirent[];
+      try {
+        agentEntries = fs.readdirSync(agentsDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const agentEntry of agentEntries) {
+        if (!agentEntry.isDirectory()) {
+          continue;
+        }
+        const id = buildBustlyWorkspaceAgentId(entry.name, agentEntry.name);
+        if (id) {
+          ids.add(id);
+        }
       }
     }
   } catch {
@@ -283,9 +388,12 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
     return stripNullBytes(resolveUserPath(configured));
   }
   if (id.startsWith(BUSTLY_AGENT_PREFIX) && id.length > BUSTLY_AGENT_PREFIX.length) {
-    return stripNullBytes(
-      path.join(resolveStateDir(process.env), BUSTLY_WORKSPACES_DIRNAME, id),
-    );
+    const dynamicWorkspaceDir =
+      resolveDynamicBustlyWorkspaceDirFromStateDir(id) ?? resolveOAuthBustlyWorkspaceAgentDir(id);
+    if (dynamicWorkspaceDir) {
+      return stripNullBytes(dynamicWorkspaceDir);
+    }
+    return stripNullBytes(path.join(resolveStateDir(process.env), BUSTLY_WORKSPACES_DIRNAME, id));
   }
   const defaultAgentId = resolveDefaultAgentId(cfg);
   if (id === defaultAgentId) {

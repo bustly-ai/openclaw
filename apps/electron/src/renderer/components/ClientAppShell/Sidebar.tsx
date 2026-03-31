@@ -24,21 +24,17 @@ import openSidebarIcon from "../../assets/imgs/open_sidebar.svg";
 import {
   buildChatRoute,
   CollapsedScenariosIcon,
-  deriveScenarioLabel,
   getSessionIconComponent,
   resolveSessionIconComponent,
   SESSION_ICON_OPTIONS,
   type SessionIconId,
 } from "../../lib/session-icons";
 import { listWorkspaceSummaries, type WorkspaceSummary } from "../../lib/bustly-supabase";
-import { GatewayBrowserClient } from "../../lib/gateway-client";
-import { createGatewayInstanceId } from "../../lib/gateway-instance-id";
 import { useAppState } from "../../providers/AppStateProvider";
 import {
   buildBustlyWorkspaceAgentId,
   buildBustlyWorkspaceMainSessionKey,
-  isAgentChannelSessionKey,
-  isAgentMainSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../../../shared/bustly-agent";
 import Skeleton from "../ui/Skeleton";
 import PortalTooltip from "../ui/PortalTooltip";
@@ -50,28 +46,16 @@ type ClientAppSidebarProps = {
 
 type SidebarTask = {
   id: string;
+  agentId: string;
   name: string;
   icon?: string;
   isMain?: boolean;
   running?: boolean;
-};
-
-type GatewaySessionRow = {
-  key: string;
-  label?: string;
-  icon?: string;
-  displayName?: string;
-  derivedTitle?: string;
-  updatedAt: number | null;
-};
-
-type SessionsListResult = {
-  sessions: GatewaySessionRow[];
+  updatedAt?: number | null;
 };
 
 const SIDEBAR_TASKS_REFRESH_EVENT = "openclaw:sidebar-refresh-tasks";
 const SIDEBAR_TASK_RUN_STATE_EVENT = "openclaw:sidebar-task-run-state";
-const SIDEBAR_CUSTOM_LABELS_STORAGE_KEY = "bustly.sidebar.custom-labels.v1";
 
 function notifySidebarTasksRefresh() {
   window.dispatchEvent(new Event(SIDEBAR_TASKS_REFRESH_EVENT));
@@ -81,82 +65,23 @@ function SpinnerIcon({ className }: { className?: string }) {
   return <CircleNotch size={14} weight="bold" className={className} />;
 }
 
-function readCustomSessionLabels(): Record<string, string> {
-  try {
-    const raw = window.localStorage.getItem(SIDEBAR_CUSTOM_LABELS_STORAGE_KEY);
-    if (!raw) {
-      return {};
-    }
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed as Record<string, string> : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeCustomSessionLabels(value: Record<string, string>) {
-  window.localStorage.setItem(SIDEBAR_CUSTOM_LABELS_STORAGE_KEY, JSON.stringify(value));
-}
-
-function isMainChannelSessionKey(sessionKey: string, agentId: string): boolean {
-  return isAgentMainSessionKey(sessionKey, agentId) || isAgentChannelSessionKey(sessionKey, agentId);
-}
-
-function stripLeadingMessageTimestamp(text: string): string {
-  const cleaned = text.replace(/^\[[^\]]+\]\s*/, "").trim();
-  return cleaned || text.trim();
-}
-
-function sanitizeSessionTitle(text: string | undefined): string | null {
-  if (!text?.trim()) {
-    return null;
-  }
-  const cleaned = stripLeadingMessageTimestamp(text).trim();
-  if (!cleaned) {
-    return null;
-  }
-  return cleaned;
-}
-
-function resolveSessionDisplayName(
-  session: Pick<GatewaySessionRow, "key" | "label" | "displayName" | "derivedTitle">,
-  customSessionLabels: Record<string, string>,
-): string {
-  return (
-    sanitizeSessionTitle(session.label) ||
-    sanitizeSessionTitle(session.displayName) ||
-    sanitizeSessionTitle(session.derivedTitle) ||
-    customSessionLabels[session.key] ||
-    deriveScenarioLabel(session.key)
-  );
-}
-
-function resolveChannelBaseSessionKey(sessionKey: string): string {
-  return sessionKey.replace(/:(thread|topic|channel|group):[^:]+$/i, "");
-}
-
-function buildChannelSessionKey(sessionKey: string): string {
-  return `${resolveChannelBaseSessionKey(sessionKey)}:channel:${globalThis.crypto.randomUUID()}`;
-}
-
-function sortSidebarSessions(
-  sessions: GatewaySessionRow[],
-  options: { mainSessionKey: string; pendingSessionKey?: string | null },
-): GatewaySessionRow[] {
-  const mainSessionKey = options.mainSessionKey;
+function sortSidebarAgents(
+  agents: BustlyWorkspaceAgent[],
+  options: { pendingSessionKey?: string | null },
+): BustlyWorkspaceAgent[] {
   const pendingSessionKey = options?.pendingSessionKey?.trim() || null;
-  return [...sessions].sort((left, right) => {
-    if (left.key === mainSessionKey && right.key !== mainSessionKey) {
+  return [...agents].sort((left, right) => {
+    if (left.isMain && !right.isMain) {
       return -1;
     }
-    if (right.key === mainSessionKey && left.key !== mainSessionKey) {
+    if (right.isMain && !left.isMain) {
       return 1;
     }
     if (pendingSessionKey) {
-      if (left.key === pendingSessionKey && right.key !== pendingSessionKey) {
+      if (left.sessionKey === pendingSessionKey && right.sessionKey !== pendingSessionKey) {
         return -1;
       }
-      if (right.key === pendingSessionKey && left.key !== pendingSessionKey) {
+      if (right.sessionKey === pendingSessionKey && left.sessionKey !== pendingSessionKey) {
         return 1;
       }
     }
@@ -165,7 +90,7 @@ function sortSidebarSessions(
     if (leftUpdatedAt !== rightUpdatedAt) {
       return rightUpdatedAt - leftUpdatedAt;
     }
-    return left.key.localeCompare(right.key);
+    return left.name.localeCompare(right.name);
   });
 }
 
@@ -1111,13 +1036,12 @@ function WorkspaceSwitcher(props: {
 }
 
 export function ClientAppSidebar(props: ClientAppSidebarProps) {
-  const { checking, gatewayReady, initialized } = useAppState();
+  const { checking, initialized } = useAppState();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isWindowFullscreen, setIsWindowFullscreen] = useState(false);
   const [recentTasks, setRecentTasks] = useState<SidebarTask[]>([]);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [hasLoadedTasks, setHasLoadedTasks] = useState(false);
-  const [customSessionLabels, setCustomSessionLabels] = useState<Record<string, string>>(() => readCustomSessionLabels());
   const [bustlyUserInfo, setBustlyUserInfo] = useState<BustlyUserInfo | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
@@ -1141,7 +1065,6 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [runningTasks, setRunningTasks] = useState<Record<string, boolean>>({});
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const userMenuTriggerRef = useRef<HTMLDivElement | null>(null);
-  const gatewayInstanceIdRef = useRef(createGatewayInstanceId("sidebar"));
   const workspaceLoadingRef = useRef(false);
   const hasLoadedWorkspacesRef = useRef(false);
   const [userMenuLayout, setUserMenuLayout] = useState({ top: 0, left: 0, width: 224 });
@@ -1150,23 +1073,31 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const isSettingsPage = false;
   const isSkillPage = location.pathname === "/skill";
   const effectiveWorkspaceId = activeWorkspaceId || bustlyUserInfo?.workspaceId || "";
-  const activeAgentId = useMemo(
+  const defaultWorkspaceAgentId = useMemo(
     () => buildBustlyWorkspaceAgentId(effectiveWorkspaceId),
     [effectiveWorkspaceId],
   );
-  const activeMainSessionKey = useMemo(
+  const defaultWorkspaceMainSessionKey = useMemo(
     () => buildBustlyWorkspaceMainSessionKey(effectiveWorkspaceId),
     [effectiveWorkspaceId],
   );
-  const activeTaskId = useMemo(() => {
+  const activeSessionKey = useMemo(() => {
     // Skills is a separate top-level destination, so it should not leave the main
     // workspace session highlighted in the scenario list.
     if (isSkillPage) {
       return "";
     }
     const searchParams = new URLSearchParams(location.search);
-    return searchParams.get("session") ?? activeMainSessionKey;
-  }, [activeMainSessionKey, isSkillPage, location.search]);
+    return searchParams.get("session") ?? defaultWorkspaceMainSessionKey;
+  }, [defaultWorkspaceMainSessionKey, isSkillPage, location.search]);
+  const activeSessionAgentId = useMemo(
+    () => resolveAgentIdFromSessionKey(activeSessionKey) ?? defaultWorkspaceAgentId,
+    [activeSessionKey, defaultWorkspaceAgentId],
+  );
+  const activeTaskId = useMemo(
+    () => recentTasks.find((task) => task.agentId === activeSessionAgentId)?.id ?? activeSessionKey,
+    [activeSessionAgentId, activeSessionKey, recentTasks],
+  );
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -1310,99 +1241,34 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   }, []);
 
   useEffect(() => {
-    if (checking || !initialized || !gatewayReady) {
+    if (checking || !initialized || !effectiveWorkspaceId) {
       return;
     }
 
     let disposed = false;
-    const clientRef: { current: GatewayBrowserClient | null } = { current: null };
-    let requestSettled = false;
 
     const loadTasks = async () => {
-      requestSettled = false;
       if (!disposed) {
         setTasksLoading(!hasLoadedTasks);
       }
       try {
-        const status = await window.electronAPI.gatewayStatus();
-        if (!status.running) {
-          if (!disposed) {
-            if (!hasLoadedTasks) {
-              setRecentTasks([]);
-            }
-            setTasksLoading(false);
-          }
+        const agents = await window.electronAPI.bustlyListAgents(effectiveWorkspaceId);
+        if (disposed) {
           return;
         }
-        const connectConfig = await window.electronAPI.gatewayConnectConfig();
-        if (!connectConfig.token || !connectConfig.wsUrl) {
-          if (!disposed) {
-            if (!hasLoadedTasks) {
-              setRecentTasks([]);
-            }
-            setTasksLoading(false);
-          }
-          return;
-        }
-
-        const client = new GatewayBrowserClient({
-          url: connectConfig.wsUrl,
-          token: connectConfig.token ?? undefined,
-          clientName: "openclaw-control-ui",
-          mode: "webchat",
-          instanceId: gatewayInstanceIdRef.current,
-          onHello: () => {
-            if (disposed) {
-              return;
-            }
-            void client
-              .request<SessionsListResult>("sessions.list", {
-                limit: 500,
-                includeGlobal: false,
-                includeUnknown: false,
-                includeDerivedTitles: true,
-                includeLastMessage: false,
-                agentId: activeAgentId,
-              })
-              .then((result) => {
-                if (disposed) {
-                  return;
-                }
-                requestSettled = true;
-                setRecentTasks(
-                  sortSidebarSessions(
-                    result.sessions.filter((session) => isMainChannelSessionKey(session.key, activeAgentId)),
-                    { mainSessionKey: activeMainSessionKey, pendingSessionKey },
-                  ).map((session) => ({
-                    id: session.key,
-                    name: resolveSessionDisplayName(session, customSessionLabels),
-                    icon: session.icon,
-                    isMain: session.key === activeMainSessionKey,
-                    running: runningTasks[session.key] === true,
-                  })),
-                );
-                setHasLoadedTasks(true);
-                setTasksLoading(false);
-              })
-              .catch(() => {
-                if (disposed) {
-                  return;
-                }
-                requestSettled = true;
-                if (!hasLoadedTasks) {
-                  setRecentTasks([]);
-                }
-                setTasksLoading(false);
-              });
-          },
-          onClose: () => {
-            if (!disposed && requestSettled) {
-              setTasksLoading(false);
-            }
-          },
-        });
-        clientRef.current = client;
-        client.start();
+        setRecentTasks(
+          sortSidebarAgents(agents, { pendingSessionKey }).map((agent) => ({
+            id: agent.sessionKey,
+            agentId: agent.agentId,
+            name: agent.name,
+            icon: agent.icon,
+            isMain: agent.isMain,
+            updatedAt: agent.updatedAt,
+            running: runningTasks[agent.sessionKey] === true,
+          })),
+        );
+        setHasLoadedTasks(true);
+        setTasksLoading(false);
       } catch {
         if (!disposed) {
           if (!hasLoadedTasks) {
@@ -1423,15 +1289,10 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     return () => {
       disposed = true;
       window.removeEventListener(SIDEBAR_TASKS_REFRESH_EVENT, handleRefreshTasks);
-      clientRef.current?.stop();
-      clientRef.current = null;
     };
   }, [
-    activeAgentId,
-    activeMainSessionKey,
     checking,
-    customSessionLabels,
-    gatewayReady,
+    effectiveWorkspaceId,
     hasLoadedTasks,
     initialized,
     location.pathname,
@@ -1639,37 +1500,39 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
 
   const handleCreateScenario = async () => {
     const name = draftScenarioName.trim() || "New agent";
-    if (createSaving) {
+    if (createSaving || !effectiveWorkspaceId) {
       return;
     }
-    const nextSessionKey = buildChannelSessionKey(activeMainSessionKey);
     setCreateSaving(true);
     setCreateError(null);
     try {
-      const result = await window.electronAPI.gatewayPatchSession(nextSessionKey, {
-        label: name,
-        icon: selectedIcon,
-      });
+      const workspace = workspaces.find((entry) => entry.id === effectiveWorkspaceId);
+      const result = await window.electronAPI.bustlyCreateAgent(
+        effectiveWorkspaceId,
+        name,
+        selectedIcon,
+        workspace?.name,
+      );
       if (!result.success) {
         setCreateError(result.error ?? "Failed to create agent.");
         return;
       }
-      const nextLabels = { ...customSessionLabels, [nextSessionKey]: name };
-      setCustomSessionLabels(nextLabels);
-      writeCustomSessionLabels(nextLabels);
+      const nextSessionKey = result.sessionKey ?? buildBustlyWorkspaceMainSessionKey(effectiveWorkspaceId, name);
+      const nextAgentId = result.agentId ?? buildBustlyWorkspaceAgentId(effectiveWorkspaceId, name);
       setPendingSessionKey(nextSessionKey);
       setHasLoadedTasks(true);
       setRecentTasks((prev) => {
         const nextTask: SidebarTask = {
           id: nextSessionKey,
+          agentId: nextAgentId,
           name,
           icon: selectedIcon,
           isMain: false,
           running: false,
         };
         const remainingTasks = prev.filter((entry) => entry.id !== nextSessionKey);
-        const mainTask = remainingTasks.find((entry) => entry.id === activeMainSessionKey) ?? null;
-        const otherTasks = remainingTasks.filter((entry) => entry.id !== activeMainSessionKey);
+        const mainTask = remainingTasks.find((entry) => entry.isMain) ?? null;
+        const otherTasks = remainingTasks.filter((entry) => !entry.isMain);
         return mainTask ? [mainTask, nextTask, ...otherTasks] : [nextTask, ...otherTasks];
       });
       setDraftScenarioName("");
@@ -1688,6 +1551,10 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     if (!selectedTaskId) {
       return;
     }
+    const selectedTask = recentTasks.find((entry) => entry.id === selectedTaskId);
+    if (!selectedTask || !effectiveWorkspaceId) {
+      return;
+    }
     const name = draftScenarioName.trim();
     if (!name || renameSaving) {
       return;
@@ -1695,22 +1562,22 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     setRenameSaving(true);
     setRenameError(null);
     try {
-      const result = await window.electronAPI.gatewayPatchSession(selectedTaskId, { label: name });
+      const result = await window.electronAPI.bustlyUpdateAgent({
+        workspaceId: effectiveWorkspaceId,
+        agentId: selectedTask.agentId,
+        name,
+      });
       if (!result.success) {
         setRenameError(result.error ?? "Failed to save agent name.");
         return;
       }
-      const nextLabels = { ...customSessionLabels, [selectedTaskId]: name };
-      setCustomSessionLabels(nextLabels);
-      writeCustomSessionLabels(nextLabels);
       setRecentTasks((prev) => prev.map((entry) => (entry.id === selectedTaskId ? { ...entry, name } : entry)));
       setRenameModalOpen(false);
       setSelectedTaskId(null);
       setDraftScenarioName("");
-      if (activeTaskId === selectedTaskId) {
-        const activeTask = recentTasks.find((entry) => entry.id === selectedTaskId);
+      if (selectedTask.agentId === activeSessionAgentId) {
         void navigate(
-          buildChatRoute({ sessionKey: selectedTaskId, label: name, icon: activeTask?.icon }),
+          buildChatRoute({ sessionKey: selectedTask.id, label: name, icon: selectedTask.icon }),
           { replace: true },
         );
       }
@@ -1723,25 +1590,24 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   };
 
   const handleDeleteScenario = async () => {
-    if (!selectedTask || selectedTask.isMain) {
+    if (!selectedTask || selectedTask.isMain || !effectiveWorkspaceId) {
       setDeleteModalOpen(false);
       setSelectedTaskId(null);
       return;
     }
     try {
-      const result = await window.electronAPI.gatewayDeleteSession(selectedTask.id);
+      const result = await window.electronAPI.bustlyDeleteAgent({
+        workspaceId: effectiveWorkspaceId,
+        agentId: selectedTask.agentId,
+      });
       if (!result.success) {
         setDeleteModalOpen(false);
         return;
       }
-      const nextLabels = { ...customSessionLabels };
-      delete nextLabels[selectedTask.id];
-      setCustomSessionLabels(nextLabels);
-      writeCustomSessionLabels(nextLabels);
       setRecentTasks((prev) => prev.filter((entry) => entry.id !== selectedTask.id));
       setDeleteModalOpen(false);
       setSelectedTaskId(null);
-      if (activeTaskId === selectedTask.id) {
+      if (selectedTask.agentId === activeSessionAgentId) {
         void navigate("/chat", { replace: true });
       }
       notifySidebarTasksRefresh();
@@ -1760,17 +1626,24 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     if (!selectedTaskId) {
       return;
     }
-    const result = await window.electronAPI.gatewayPatchSession(selectedTaskId, { icon });
+    const selectedTask = recentTasks.find((entry) => entry.id === selectedTaskId);
+    if (!selectedTask || !effectiveWorkspaceId) {
+      return;
+    }
+    const result = await window.electronAPI.bustlyUpdateAgent({
+      workspaceId: effectiveWorkspaceId,
+      agentId: selectedTask.agentId,
+      icon,
+    });
     if (!result.success) {
       return;
     }
     setRecentTasks((prev) => prev.map((entry) => (entry.id === selectedTaskId ? { ...entry, icon } : entry)));
     setIconModalOpen(false);
     setSelectedTaskId(null);
-    if (activeTaskId === selectedTaskId) {
-      const activeTask = recentTasks.find((entry) => entry.id === selectedTaskId);
+    if (selectedTask.agentId === activeSessionAgentId) {
       void navigate(
-        buildChatRoute({ sessionKey: selectedTaskId, label: activeTask?.name, icon }),
+        buildChatRoute({ sessionKey: selectedTask.id, label: selectedTask.name, icon }),
         { replace: true },
       );
     }

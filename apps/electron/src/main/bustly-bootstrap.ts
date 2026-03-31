@@ -543,39 +543,39 @@ async function buildBustlyBootstrapContext(params: {
     klaviyoMappings,
     aliexpressMappings,
   ] = await Promise.all([
-      fetchMany<ShopifyMappingRow>(
+      fetchManyOptional<ShopifyMappingRow>(
         client.from("workspace_shopify_mappings").select("shopify_shop_id, role, status").eq("workspace_id", workspaceId),
-        "workspace_shopify_mappings lookup failed",
+        { label: "workspace_shopify_mappings lookup failed", warnings },
       ),
-    fetchMany<BigCommerceMappingRow>(
+    fetchManyOptional<BigCommerceMappingRow>(
       client.from("workspace_bigcommerce_mappings").select("store_hash, role, status").eq("workspace_id", workspaceId),
-      "workspace_bigcommerce_mappings lookup failed",
+      { label: "workspace_bigcommerce_mappings lookup failed", warnings },
     ),
-    fetchMany<WooMappingRow>(
+    fetchManyOptional<WooMappingRow>(
       client
         .from("workspace_woocommerce_mappings")
         .select("woocommerce_account_id, site_url, site_id, role, status")
         .eq("workspace_id", workspaceId),
-      "workspace_woocommerce_mappings lookup failed",
+      { label: "workspace_woocommerce_mappings lookup failed", warnings },
     ),
-    fetchMany<MagentoMappingRow>(
+    fetchManyOptional<MagentoMappingRow>(
       client.from("workspace_magento_mappings").select("magento_account_id, role, status").eq("workspace_id", workspaceId),
-      "workspace_magento_mappings lookup failed",
+      { label: "workspace_magento_mappings lookup failed", warnings },
     ),
-    fetchMany<GoogleAdsMappingRow>(
+    fetchManyOptional<GoogleAdsMappingRow>(
       client.from("workspace_google_ads_mappings").select("customer_id, role, status").eq("workspace_id", workspaceId),
-      "workspace_google_ads_mappings lookup failed",
+      { label: "workspace_google_ads_mappings lookup failed", warnings },
     ),
-    fetchMany<KlaviyoMappingRow>(
+    fetchManyOptional<KlaviyoMappingRow>(
       client.from("workspace_klaviyo_mappings").select("klaviyo_account_id, role, status").eq("workspace_id", workspaceId),
-      "workspace_klaviyo_mappings lookup failed",
+      { label: "workspace_klaviyo_mappings lookup failed", warnings },
     ),
-    fetchMany<AliExpressMappingRow>(
+    fetchManyOptional<AliExpressMappingRow>(
       client
         .from("workspace_aliexpress_mappings")
         .select("aliexpress_account_id, account_id, account_name, shop_name, role, status")
         .eq("workspace_id", workspaceId),
-      "workspace_aliexpress_mappings lookup failed",
+      { label: "workspace_aliexpress_mappings lookup failed", warnings },
     ),
   ]);
 
