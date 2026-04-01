@@ -652,6 +652,10 @@ export async function runEmbeddedAttempt(
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
+    let subscriptionDisposed = false;
+    let activeRunCleared = false;
+    let unsubscribeEmbeddedSession: (() => void) | null = null;
+    let queueHandle: EmbeddedPiQueueHandle | null = null;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -1064,8 +1068,9 @@ export async function runEmbeddedAttempt(
         getUsageTotals,
         getCompactionCount,
       } = subscription;
+      unsubscribeEmbeddedSession = unsubscribe;
 
-      const queueHandle: EmbeddedPiQueueHandle = {
+      queueHandle = {
         queueMessage: async (text: string) => {
           await activeSession.steer(text);
         },
@@ -1335,6 +1340,15 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        // pi-coding-agent resolves retry waits on the first successful retried
+        // assistant message, which can be just a tool_use. Wait for the agent
+        // to become truly idle before capturing the final session snapshot or
+        // tearing down the subscription bridge.
+        const waitForIdle = activeSession.agent.waitForIdle;
+        if (typeof waitForIdle === "function") {
+          await abortable(waitForIdle.call(activeSession.agent));
+        }
+
         // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
         // Previously this was before the prompt, which caused a custom entry to be
         // inserted between compaction and the next prompt — breaking the
@@ -1433,17 +1447,6 @@ export async function runEmbeddedAttempt(
             `run cleanup: runId=${params.runId} sessionId=${params.sessionId} aborted=${aborted} timedOut=${timedOut}`,
           );
         }
-        try {
-          unsubscribe();
-        } catch (err) {
-          // unsubscribe() should never throw; if it does, it indicates a serious bug.
-          // Log at error level to ensure visibility, but don't rethrow in finally block
-          // as it would mask any exception from the try block above.
-          log.error(
-            `CRITICAL: unsubscribe failed, possible resource leak: runId=${params.runId} ${String(err)}`,
-          );
-        }
-        clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
@@ -1546,6 +1549,24 @@ export async function runEmbeddedAttempt(
         agent: session?.agent,
         sessionManager,
       });
+      if (!subscriptionDisposed) {
+        try {
+          unsubscribeEmbeddedSession?.();
+        } catch (err) {
+          // unsubscribe() should never throw; if it does, it indicates a serious bug.
+          // Log at error level to ensure visibility, but don't rethrow in finally block
+          // as it would mask any exception from the try block above.
+          log.error(
+            `CRITICAL: unsubscribe failed, possible resource leak: runId=${params.runId} ${String(err)}`,
+          );
+        } finally {
+          subscriptionDisposed = true;
+        }
+      }
+      if (!activeRunCleared && queueHandle) {
+        clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+        activeRunCleared = true;
+      }
       session?.dispose();
       await sessionLock.release();
     }

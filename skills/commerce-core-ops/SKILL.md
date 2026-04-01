@@ -119,6 +119,17 @@ Shopify `pixel_events` interpretation rules
 - Treat store connectivity as broken only when command returns an explicit auth/mapping error (for example 401/403 or "No active Shopify mapping found for this workspace").
 - If rows are empty, retry with a wider time range before concluding data is missing.
 
+Required paging behavior for entity reads
+
+- When querying commerce platform entities, do not assume the first page is complete.
+- Default behavior for list-style entity reads is to continue paging with `--cursor` until one of these is true:
+  - you have enough rows to answer the user request
+  - `result.pagination` is `null`
+  - `result.pagination.next_cursor` is absent
+- If the user asks for "all", "latest", "full list", auditing, reconciliation, or anything that depends on completeness, you must page through results instead of stopping at page 1.
+- If the user asks for a small sample, a single page is acceptable only when you state that the result is a sample/first page.
+- Prefer a reasonable page size on every request, then follow `result.pagination.next_cursor` across subsequent reads.
+
 Pagination rules
 
 - Commerce reads support `--cursor` for follow-up pages.
@@ -135,6 +146,7 @@ Platform-specific pagination behavior
 - WooCommerce uses page-number pagination for CLI reads. Pass `--cursor 2`, `--cursor 3`, and so on.
 - Magento uses page-number pagination for CLI reads. Pass `--cursor 2`, `--cursor 3`, and so on.
 - BigCommerce, WooCommerce, and Magento all normalize their next page into `pagination.next_cursor`, even though the provider APIs expose page numbers or response headers underneath.
+- In practice: entity discovery, listing, export-like reads, and validation passes should be written as repeated `read --entity ... --cursor ...` calls, not as a single first-page read.
 
 Examples
 
@@ -150,6 +162,20 @@ bustly ops woocommerce read --entity order_items --filters '{"order_id":"512"}'
 bustly ops magento read --entity orders --filters '{"id":"2"}'
 bustly ops magento read --entity orders --limit 50 --cursor 3
 bustly ops shopify read --entity pixel_events --limit 50 --since '2026-03-01T00:00:00Z' --filters '{"event_names":["page_viewed","checkout_completed"]}'
+```
+
+Pagination workflow examples
+
+```bash
+# Shopify: use next_cursor from the previous response
+bustly ops shopify read --entity orders --limit 250
+bustly ops shopify read --entity orders --limit 250 --cursor <next_cursor>
+
+# BigCommerce / WooCommerce / Magento: cursor is the next page number
+bustly ops bigcommerce read --entity products --limit 50
+bustly ops bigcommerce read --entity products --limit 50 --cursor 2
+bustly ops woocommerce read --entity customers --limit 50 --cursor 2
+bustly ops magento read --entity orders --limit 50 --cursor 2
 ```
 
 Write

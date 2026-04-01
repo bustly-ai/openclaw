@@ -88,6 +88,10 @@ describe("getSubagentDepthFromSessionStore", () => {
 });
 
 describe("resolveAgentTimeoutMs", () => {
+  it("uses a timer-safe sentinel for the source default no-timeout behavior", () => {
+    expect(resolveAgentTimeoutMs({})).toBe(2_147_000_000);
+  });
+
   it("uses a timer-safe sentinel for no-timeout overrides", () => {
     expect(resolveAgentTimeoutMs({ overrideSeconds: 0 })).toBe(2_147_000_000);
     expect(resolveAgentTimeoutMs({ overrideMs: 0 })).toBe(2_147_000_000);
