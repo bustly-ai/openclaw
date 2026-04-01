@@ -445,6 +445,18 @@ export class OpenClawTelemetryRecorder {
     return duration;
   }
 
+  getOpenClawPreModelMs(): number | undefined {
+    return this.openclawPreModelMs;
+  }
+
+  getOpenClawFirstTokenWaitMs(): number | undefined {
+    return this.openclawFirstTokenWaitMs;
+  }
+
+  getOpenClawStreamTotalMs(): number | undefined {
+    return this.openclawStreamTotalMs;
+  }
+
   async emitRequest(options: EmitRequestOptions): Promise<void> {
     const observedAt = this.clock.now();
     const totalMs = durationMs(this.requestStartedPerf, this.clock.perfNow());

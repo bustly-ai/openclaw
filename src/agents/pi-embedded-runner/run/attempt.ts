@@ -1648,6 +1648,9 @@ export async function runEmbeddedAttempt(
         ),
         attemptUsage: getUsageTotals(),
         compactionCount: getCompactionCount(),
+        openclawPreModelMs: telemetryRecorder.getOpenClawPreModelMs(),
+        openclawFirstTokenWaitMs: telemetryRecorder.getOpenClawFirstTokenWaitMs(),
+        openclawStreamTotalMs: telemetryRecorder.getOpenClawStreamTotalMs(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
       };

@@ -1,5 +1,5 @@
-import type { Skill } from "@mariozechner/pi-coding-agent";
 import crypto from "node:crypto";
+import type { Skill } from "@mariozechner/pi-coding-agent";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
@@ -82,6 +82,9 @@ export type SessionEntry = {
   totalTokensFresh?: boolean;
   cacheRead?: number;
   cacheWrite?: number;
+  latestRunId?: string;
+  latestRunTtftMs?: number;
+  latestRunTtlrMs?: number;
   modelProvider?: string;
   model?: string;
   /**
