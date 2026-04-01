@@ -71,7 +71,6 @@ import {
   resolveElectronBackendLogPath,
   resolveElectronIsolatedConfigPath,
   resolveElectronIsolatedStateDir,
-  resolveElectronBustlyWorkspaceTemplateBaseUrl,
 } from "./defaults.js";
 import {
   buildBustlyAgentConversationSessionKey,
@@ -209,6 +208,7 @@ function loadMainProcessEnvFromDotEnv(): void {
     resolve(__dirname, "../.env"),
     resolve(process.cwd(), ".env"),
   ];
+
   for (const envPath of envPathCandidates) {
     if (!existsSync(envPath)) {
       continue;
@@ -318,19 +318,11 @@ Sentry.init({
 });
 syncSentryBustlyScope();
 
-if (!process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL?.trim()) {
-  const appVersion = app.getVersion();
-  const isDevelopment = !app.isPackaged;
-  const isBetaVersion = !isDevelopment && appVersion.toLowerCase().includes("beta");
-  const prodUrl = process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL_PROD?.trim();
-  const testUrl = process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL_TEST?.trim();
+if (process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL?.trim()) {
   process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL =
-    ((isDevelopment || isBetaVersion) ? testUrl : prodUrl) ||
-    resolveElectronBustlyWorkspaceTemplateBaseUrl(isDevelopment ? "beta" : appVersion);
-  writeMainInfo("[Bustly Prompts] Selected template base URL:", {
-    appVersion,
-    isPackaged: app.isPackaged,
-    channel: isDevelopment ? "test-dev" : isBetaVersion ? "test" : "prod",
+    process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL.trim();
+  writeMainInfo("[Bustly Prompts] Loaded template base URL from env:", {
+    nodeEnv: process.env.NODE_ENV || "production",
     url: process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL,
   });
 }
@@ -3797,9 +3789,9 @@ void app.whenReady().then(async () => {
     const envPaths = [
       // Development: dist/main-dev.js -> ../.env = apps/electron/.env
       // Production: dist/main/index.js -> ../../.env = apps/electron/.env
-      process.env.NODE_ENV === "development"
-        ? resolve(__dirname, "../.env")
-        : resolve(__dirname, "../../.env"),
+      resolve(__dirname, "../../.env"),
+      resolve(__dirname, "../.env"),
+      resolve(process.cwd(), ".env"),
     ];
 
     for (const envPath of envPaths) {
