@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
@@ -13,7 +13,10 @@ import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { readBustlyOAuthState } from "../../../bustly-oauth.js";
-import { consumeCompletedAssistantRequestMetrics } from "../../../infra/assistant-request-metrics.js";
+import {
+  consumeCompletedAssistantRequestMetrics,
+  recordAssistantRequestStart,
+} from "../../../infra/assistant-request-metrics.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { reportSessionCompletionToSupabase } from "../../../infra/supabase-chat-report.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
@@ -118,6 +121,24 @@ import {
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
+
+function wrapStreamFnWithAssistantRequestStart(streamFn: StreamFn, runId: string): StreamFn {
+  const wrapped: StreamFn = (model, context, options) => {
+    let started = false;
+    const originalOnPayload = options?.onPayload;
+    return streamFn(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (!started) {
+          started = true;
+          recordAssistantRequestStart(runId);
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+  return wrapped;
+}
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 const BUSTLY_PROVIDER_ID = "bustly";
@@ -822,6 +843,11 @@ export async function runEmbeddedAttempt(
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
         activeSession.agent.streamFn = streamSimple;
       }
+
+      activeSession.agent.streamFn = wrapStreamFnWithAssistantRequestStart(
+        activeSession.agent.streamFn,
+        params.runId,
+      );
 
       applyExtraParamsToAgent(
         activeSession.agent,

@@ -5,7 +5,6 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   recordAssistantRequestEnd,
   recordAssistantRequestFirstDelta,
-  recordAssistantRequestStart,
 } from "../infra/assistant-request-metrics.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
@@ -77,7 +76,6 @@ export function handleMessageStart(
   // may deliver late text_end updates after message_end, which would otherwise
   // re-trigger block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
-  recordAssistantRequestStart(ctx.params.runId);
   // Use assistant message_start as the earliest "writing" signal for typing.
   void ctx.params.onAssistantMessageStart?.();
 }
