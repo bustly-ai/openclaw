@@ -93,6 +93,11 @@ function sortSidebarAgents(
         return 1;
       }
     }
+    const leftUpdatedAt = left.updatedAt ?? 0;
+    const rightUpdatedAt = right.updatedAt ?? 0;
+    if (leftUpdatedAt !== rightUpdatedAt) {
+      return rightUpdatedAt - leftUpdatedAt;
+    }
     return left.name.localeCompare(right.name);
   });
 }
@@ -1262,14 +1267,23 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
             const sessions = await window.electronAPI.bustlyListAgentSessions(effectiveWorkspaceId, agent.agentId);
             return [
               agent.agentId,
-              sessions.map((session) => ({
-                id: session.sessionKey,
-                agentId: session.agentId,
-                name: session.name,
-                icon: session.icon,
-                updatedAt: session.updatedAt,
-                running: runningTasks[session.sessionKey] === true,
-              })),
+              sessions
+                .map((session) => ({
+                  id: session.sessionKey,
+                  agentId: session.agentId,
+                  name: session.name,
+                  icon: session.icon,
+                  updatedAt: session.updatedAt,
+                  running: runningTasks[session.sessionKey] === true,
+                }))
+                .sort((left, right) => {
+                  const leftUpdatedAt = left.updatedAt ?? 0;
+                  const rightUpdatedAt = right.updatedAt ?? 0;
+                  if (leftUpdatedAt !== rightUpdatedAt) {
+                    return rightUpdatedAt - leftUpdatedAt;
+                  }
+                  return left.name.localeCompare(right.name);
+                }),
             ] as const;
           }),
         );

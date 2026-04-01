@@ -115,6 +115,7 @@ type BustlyWorkspaceAgentSessionSummary = {
 
 type BustlyAgentMetadata = {
   icon?: string;
+  createdAt?: number;
 };
 
 type OpenClawAgentListEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
@@ -1053,6 +1054,10 @@ function loadBustlyAgentMetadata(agentWorkspaceDir: string): BustlyAgentMetadata
     const parsed = JSON.parse(raw) as BustlyAgentMetadata;
     return {
       icon: parsed.icon?.trim() || undefined,
+      createdAt:
+        typeof parsed.createdAt === "number" && Number.isFinite(parsed.createdAt)
+          ? parsed.createdAt
+          : undefined,
     };
   } catch {
     return {};
@@ -1082,7 +1087,15 @@ function listBustlyAgentConversationSessions(agentId: string): BustlyWorkspaceAg
       name: entry.label?.trim() || "New conversation",
       icon: entry.icon?.trim() || undefined,
       updatedAt: entry.updatedAt ?? null,
-    }));
+    }))
+    .sort((left, right) => {
+      const leftUpdatedAt = left.updatedAt ?? 0;
+      const rightUpdatedAt = right.updatedAt ?? 0;
+      if (leftUpdatedAt !== rightUpdatedAt) {
+        return rightUpdatedAt - leftUpdatedAt;
+      }
+      return left.name.localeCompare(right.name);
+    });
 }
 
 function listBustlyWorkspaceAgentIds(cfg: OpenClawConfig, workspaceId: string): string[] {
@@ -1173,15 +1186,21 @@ async function hasMissingBustlyWorkspaceSetup(workspaceId: string): Promise<bool
 function setBustlyAgentMetadata(params: {
   workspaceDir: string;
   icon?: string;
+  createdAt?: number;
 }): void {
   const nextIcon = params.icon?.trim();
-  if (!nextIcon) {
+  const nextCreatedAt =
+    typeof params.createdAt === "number" && Number.isFinite(params.createdAt)
+      ? params.createdAt
+      : undefined;
+  if (!nextIcon && nextCreatedAt === undefined) {
     return;
   }
   const current = loadBustlyAgentMetadata(params.workspaceDir);
   saveBustlyAgentMetadata(params.workspaceDir, {
     ...current,
-    icon: nextIcon,
+    icon: nextIcon ?? current.icon,
+    createdAt: nextCreatedAt ?? current.createdAt,
   });
 }
 
@@ -1353,6 +1372,7 @@ async function createBustlyWorkspaceAgent(params: {
   setBustlyAgentMetadata({
     workspaceDir,
     icon,
+    createdAt: Date.now(),
   });
 
   return { agentId, workspaceDir };
@@ -1384,7 +1404,7 @@ function listBustlyWorkspaceAgents(workspaceId: string): BustlyWorkspaceAgentSum
         name: displayName,
         icon: metadata.icon,
         isMain: agentName === DEFAULT_BUSTLY_AGENT_NAME,
-        updatedAt: sessions[0]?.updatedAt ?? null,
+        updatedAt: sessions[0]?.updatedAt ?? metadata.createdAt ?? null,
       };
     })
     .sort((left, right) => {
@@ -1393,6 +1413,11 @@ function listBustlyWorkspaceAgents(workspaceId: string): BustlyWorkspaceAgentSum
       }
       if (right.isMain && !left.isMain) {
         return 1;
+      }
+      const leftUpdatedAt = left.updatedAt ?? 0;
+      const rightUpdatedAt = right.updatedAt ?? 0;
+      if (leftUpdatedAt !== rightUpdatedAt) {
+        return rightUpdatedAt - leftUpdatedAt;
       }
       return left.name.localeCompare(right.name);
     });
