@@ -86,6 +86,37 @@ const resolvePluginSdkAccountIdAlias = (): string | null => {
   return resolvePluginSdkAliasFile({ srcFile: "account-id.ts", distFile: "account-id.js" });
 };
 
+const resolvePluginSdkCompatAliasFile = (fileName: string): string | null => {
+  try {
+    const modulePath = fileURLToPath(import.meta.url);
+    const isProduction = process.env.NODE_ENV === "production";
+    const isTest = process.env.VITEST || process.env.NODE_ENV === "test";
+    let cursor = path.dirname(modulePath);
+    for (let i = 0; i < 6; i += 1) {
+      const srcCandidate = path.join(cursor, "src", "plugin-sdk-compat", fileName);
+      const distCandidate = path.join(cursor, "dist", "plugin-sdk-compat", fileName);
+      const orderedCandidates = isProduction
+        ? isTest
+          ? [distCandidate, srcCandidate]
+          : [distCandidate]
+        : [srcCandidate, distCandidate];
+      for (const candidate of orderedCandidates) {
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      }
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        break;
+      }
+      cursor = parent;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+};
+
 function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
@@ -421,16 +452,42 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
     const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
+    const pluginSdkCompatAliases = {
+      "openclaw/plugin-sdk/agent-runtime": resolvePluginSdkCompatAliasFile("agent-runtime.js"),
+      "openclaw/plugin-sdk/allow-from": resolvePluginSdkCompatAliasFile("allow-from.js"),
+      "openclaw/plugin-sdk/channel-feedback": resolvePluginSdkCompatAliasFile("channel-feedback.js"),
+      "openclaw/plugin-sdk/channel-status": resolvePluginSdkCompatAliasFile("channel-status.js"),
+      "openclaw/plugin-sdk/channel-config-schema": resolvePluginSdkCompatAliasFile("channel-config-schema.js"),
+      "openclaw/plugin-sdk/channel-runtime": resolvePluginSdkCompatAliasFile("channel-runtime.js"),
+      "openclaw/plugin-sdk/command-auth": resolvePluginSdkCompatAliasFile("command-auth.js"),
+      "openclaw/plugin-sdk/config-runtime": resolvePluginSdkCompatAliasFile("config-runtime.js"),
+      "openclaw/plugin-sdk/infra-runtime": resolvePluginSdkCompatAliasFile("infra-runtime.js"),
+      "openclaw/plugin-sdk/param-readers": resolvePluginSdkCompatAliasFile("param-readers.js"),
+      "openclaw/plugin-sdk/reply-history": resolvePluginSdkCompatAliasFile("reply-history.js"),
+      "openclaw/plugin-sdk/reply-runtime": resolvePluginSdkCompatAliasFile("reply-runtime.js"),
+      "openclaw/plugin-sdk/routing": resolvePluginSdkCompatAliasFile("routing.js"),
+      "openclaw/plugin-sdk/setup": resolvePluginSdkCompatAliasFile("setup.js"),
+      "openclaw/plugin-sdk/temp-path": resolvePluginSdkCompatAliasFile("temp-path.js"),
+      "openclaw/plugin-sdk/text-runtime": resolvePluginSdkCompatAliasFile("text-runtime.js"),
+      "openclaw/plugin-sdk/tool-send": resolvePluginSdkCompatAliasFile("tool-send.js"),
+      "openclaw/plugin-sdk/zalouser": resolvePluginSdkCompatAliasFile("zalouser.js"),
+    } as const;
+    const resolvedPluginSdkCompatAliases = Object.fromEntries(
+      Object.entries(pluginSdkCompatAliases).filter(([, aliasPath]) => Boolean(aliasPath)),
+    );
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-      ...(pluginSdkAlias || pluginSdkAccountIdAlias
+      ...(pluginSdkAlias ||
+      pluginSdkAccountIdAlias ||
+      Object.keys(resolvedPluginSdkCompatAliases).length > 0
         ? {
             alias: {
               ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
               ...(pluginSdkAccountIdAlias
                 ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
                 : {}),
+              ...resolvedPluginSdkCompatAliases,
             },
           }
         : {}),
