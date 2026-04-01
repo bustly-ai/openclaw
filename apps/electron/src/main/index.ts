@@ -237,6 +237,35 @@ function formatIssueReportTimestamp(date: Date): string {
   return `${year}${month}${day}-${hours}${minutes}${seconds}`;
 }
 
+function resolveElectronWorkerExecPath(): string {
+  const execPath = process.execPath;
+  if (process.platform !== "darwin") {
+    return execPath;
+  }
+
+  try {
+    const macOsDir = dirname(execPath);
+    const contentsDir = dirname(macOsDir);
+    const appName = basename(execPath).trim();
+    const helperAppName = `${appName} Helper`;
+    const helperExecPath = join(
+      contentsDir,
+      "Frameworks",
+      `${helperAppName}.app`,
+      "Contents",
+      "MacOS",
+      helperAppName,
+    );
+    if (existsSync(helperExecPath)) {
+      return helperExecPath;
+    }
+  } catch {
+    // Fall back to the main executable if helper resolution fails.
+  }
+
+  return execPath;
+}
+
 function addDirectoryToZip(params: {
   zip: JSZip;
   baseDir: string;
@@ -2229,8 +2258,10 @@ async function startGateway(): Promise<boolean> {
       .filter((value) => Boolean(value && value.length > 0))
       .map((value) => `${value}(${existsSync(value!) ? "exists" : "missing"})`)
       .join(" | ");
-    const nodePath = process.execPath;
-    writeMainLog(`Gateway runtime: execPath=${nodePath} mode=electron-run-as-node`);
+    const nodePath = resolveElectronWorkerExecPath();
+    writeMainLog(
+      `Gateway runtime: execPath=${nodePath} mode=electron-run-as-node helper=${nodePath !== process.execPath ? "yes" : "no"}`,
+    );
 
     const spawnEnv = buildElectronCliEnv({ cliPath, oauthCallbackPort });
     if (existsSync(bundledPluginsDir)) {
