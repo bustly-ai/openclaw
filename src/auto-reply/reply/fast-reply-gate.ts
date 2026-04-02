@@ -477,6 +477,19 @@ export async function runFastReplyGate(params: {
         text: delta,
       });
     };
+    const emitVisibleAssistantSegmentBreak = async () => {
+      if (!emittedVisibleRunStart) {
+        return;
+      }
+      emitAgentEvent({
+        runId: visibleRunId,
+        sessionKey: params.followupRun.run.sessionKey,
+        stream: "assistant",
+        data: {
+          segmentBreak: true,
+        },
+      });
+    };
     try {
       const eventStream = await Promise.resolve(
         runTrackedModelRequest({
@@ -593,6 +606,7 @@ export async function runFastReplyGate(params: {
         assistantText = text;
         await emitVisibleAssistantDelta(text, text);
       }
+      await emitVisibleAssistantSegmentBreak();
       const assistantRequestMetrics = consumeCompletedAssistantRequestMetrics(metricsRunId);
       logFastGate("escalate", {
         reason: "tool_call",

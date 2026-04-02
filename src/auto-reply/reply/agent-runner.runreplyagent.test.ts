@@ -829,6 +829,7 @@ describe("runReplyAgent fast reply gate", () => {
       "lifecycle",
       "assistant",
       "assistant",
+      "assistant",
     ]);
     expect(fastGateEvents[0]?.data).toMatchObject({ phase: "start" });
     expect(fastGateEvents[1]?.data).toMatchObject({
@@ -838,6 +839,9 @@ describe("runReplyAgent fast reply gate", () => {
     expect(fastGateEvents[2]?.data).toMatchObject({
       text: "I'm checking the latest business changes now.",
       delta: " the latest business changes now.",
+    });
+    expect(fastGateEvents[3]?.data).toMatchObject({
+      segmentBreak: true,
     });
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
     expect(onPartialReply).toHaveBeenNthCalledWith(1, {

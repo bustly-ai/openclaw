@@ -1965,6 +1965,12 @@ export default function ChatPage() {
 
             if (stream === "assistant") {
               const isFinalChunk = data.final === true;
+              const segmentBreak = data.segmentBreak === true;
+              if (segmentBreak) {
+                segmentState.assistantClosed = true;
+                runtime.streamSegments.set(runKey, segmentState);
+                return;
+              }
               if (segmentState.assistant === 0 || segmentState.assistantClosed) {
                 segmentState.assistant += 1;
                 segmentState.assistantClosed = false;
