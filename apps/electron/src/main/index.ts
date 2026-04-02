@@ -1145,56 +1145,10 @@ function applyBustlyWorkspaceCollaborationConfig(
   cfg: OpenClawConfig,
   workspaceId: string,
 ): OpenClawConfig {
-  const workspaceAgentIds = listBustlyWorkspaceAgentIds(cfg, workspaceId);
-  if (workspaceAgentIds.length === 0) {
-    return cfg;
-  }
-
-  const workspaceAgentIdSet = new Set(workspaceAgentIds);
-  const allConfiguredBustlyAgentIds = new Set(
-    listAgentEntries(cfg)
-      .map((entry) => entry.id)
-      .filter((agentId) => agentId.startsWith("bustly-")),
-  );
-
-  const nextAgentList = listAgentEntries(cfg).map((entry) => {
-    if (!workspaceAgentIdSet.has(entry.id)) {
-      return entry;
-    }
-    const nextAllowAgents = workspaceAgentIds.filter((agentId) => agentId !== entry.id);
-    return {
-      ...entry,
-      subagents: {
-        ...entry.subagents,
-        allowAgents: nextAllowAgents,
-      },
-    };
-  });
-
-  const preservedAllow = (cfg.tools?.agentToAgent?.allow ?? []).filter(
-    (entry) => !allConfiguredBustlyAgentIds.has(entry),
-  );
-  const nextAgentToAgentAllow = Array.from(new Set([...preservedAllow, ...workspaceAgentIds]));
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      list: nextAgentList,
-    },
-    tools: {
-      ...cfg.tools,
-      agentToAgent: {
-        ...cfg.tools?.agentToAgent,
-        enabled: true,
-        allow: nextAgentToAgentAllow,
-      },
-      sessions: {
-        ...cfg.tools?.sessions,
-        visibility: "all",
-      },
-    },
-  };
+  void workspaceId;
+  // Subagent orchestration is intentionally disabled for Electron initialization.
+  // Keep workspace agents isolated until the desktop client has explicit support for it.
+  return cfg;
 }
 
 function resolveBustlyWorkspaceIdFromOAuthState(): string {
