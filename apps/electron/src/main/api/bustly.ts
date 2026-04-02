@@ -7,6 +7,11 @@ export type SupabaseUserMetadata = {
   avatar_url?: string;
   picture?: string;
   full_name?: string;
+  name?: string;
+  display_name?: string;
+  preferred_username?: string;
+  username?: string;
+  user_name?: string;
 };
 
 export type SupabaseUserResponse = {

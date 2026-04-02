@@ -63,15 +63,47 @@ function getStoredSessionExpiresAt(state: BustlyOAuthState | null): number | nul
   return null;
 }
 
+function trimToUndefined(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function extractSupabaseUserAvatarUrl(user: SupabaseUserResponse | null | undefined): string | undefined {
-  const avatarUrl = user?.user_metadata?.avatar_url?.trim();
-  const picture = user?.user_metadata?.picture?.trim();
+  const avatarUrl = trimToUndefined(user?.user_metadata?.avatar_url);
+  const picture = trimToUndefined(user?.user_metadata?.picture);
   return avatarUrl || picture || undefined;
 }
 
 function extractSupabaseUserName(user: SupabaseUserResponse | null | undefined): string | undefined {
-  const fullName = user?.user_metadata?.full_name?.trim();
-  return fullName || undefined;
+  const metadata = user?.user_metadata;
+  const candidates = [
+    metadata?.full_name,
+    metadata?.name,
+    metadata?.display_name,
+    metadata?.preferred_username,
+    metadata?.username,
+    metadata?.user_name,
+  ];
+  for (const candidate of candidates) {
+    const resolved = trimToUndefined(candidate);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  const email = trimToUndefined(user?.email);
+  if (!email) {
+    return undefined;
+  }
+  const [localPart] = email.split("@");
+  return trimToUndefined(localPart);
+}
+
+function hasCompleteBustlyUserInfo(user: BustlyOAuthState["user"] | null | undefined): boolean {
+  return Boolean(
+    trimToUndefined(user?.userName) &&
+    trimToUndefined(user?.userEmail) &&
+    trimToUndefined(user?.userAvatarUrl),
+  );
 }
 
 function shouldRefreshSession(state: BustlyOAuthState | null, nowMs = Date.now()): boolean {
@@ -112,8 +144,8 @@ async function refreshBustlyAccessTokenInternal(): Promise<boolean> {
     throw new Error("Missing Supabase access token in refresh response");
   }
   const nextRefreshToken = refreshResult.data?.refresh_token?.trim() || refreshToken;
-  const refreshedUserId = refreshResult.data?.user?.id?.trim() ?? currentUser.userId;
-  const refreshedUserEmail = refreshResult.data?.user?.email?.trim() ?? currentUser.userEmail;
+  const refreshedUserId = trimToUndefined(refreshResult.data?.user?.id) ?? currentUser.userId;
+  const refreshedUserEmail = trimToUndefined(refreshResult.data?.user?.email) ?? currentUser.userEmail;
   const refreshedUserName = extractSupabaseUserName(refreshResult.data?.user) ?? currentUser.userName;
   const refreshedUserAvatarUrl =
     extractSupabaseUserAvatarUrl(refreshResult.data?.user) ?? currentUser.userAvatarUrl;
@@ -218,7 +250,7 @@ export async function getBustlyUserInfo(): Promise<BustlyOAuthState["user"] | nu
   if (!currentUser) {
     return null;
   }
-  if (currentUser.userAvatarUrl?.trim()) {
+  if (hasCompleteBustlyUserInfo(currentUser)) {
     return currentUser;
   }
 
@@ -228,7 +260,7 @@ export async function getBustlyUserInfo(): Promise<BustlyOAuthState["user"] | nu
       return currentUser;
     }
     const nextUserName = extractSupabaseUserName(verifyResult.data) ?? currentUser.userName;
-    const nextUserEmail = verifyResult.data.email?.trim() ?? currentUser.userEmail;
+    const nextUserEmail = trimToUndefined(verifyResult.data.email) ?? currentUser.userEmail;
     const nextUserAvatarUrl = extractSupabaseUserAvatarUrl(verifyResult.data) ?? currentUser.userAvatarUrl;
     if (
       nextUserName === currentUser.userName &&
