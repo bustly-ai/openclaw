@@ -98,7 +98,7 @@ const resolvePluginSdkCompatAliasFile = (fileName: string): string | null => {
       const orderedCandidates = isProduction
         ? isTest
           ? [distCandidate, srcCandidate]
-          : [distCandidate]
+          : [distCandidate, srcCandidate]
         : [srcCandidate, distCandidate];
       for (const candidate of orderedCandidates) {
         if (fs.existsSync(candidate)) {

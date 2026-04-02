@@ -1,0 +1,15 @@
+[
+  { "type": "h1", "text": "Executive Summary" },
+  {
+    "type": "body",
+    "text": "This sample content file is meant to bootstrap a polished PDF when the user has not supplied structured content yet."
+  },
+  {
+    "type": "callout",
+    "text": "Replace these blocks with the real report structure before delivering the final PDF."
+  },
+  { "type": "h1", "text": "Key Points" },
+  { "type": "bullet", "text": "Use one clear document type that matches the audience." },
+  { "type": "bullet", "text": "Choose a restrained accent color based on the document subject." },
+  { "type": "bullet", "text": "Keep section hierarchy explicit with h1 and h2 blocks." }
+]

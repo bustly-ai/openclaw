@@ -10,6 +10,7 @@ import {
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import { mergeBustlyRuntimeHeaders } from "../../bustly-runtime-headers.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { readBustlyOAuthState } from "../../../bustly-oauth.js";
@@ -124,30 +125,7 @@ import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 const BUSTLY_PROVIDER_ID = "bustly";
-const BUSTLY_WORKSPACE_HEADER = "X-Workspace-Id";
-const BUSTLY_RUN_ID_HEADER = "X-Run-Id";
 const URL_WITH_QUERY_RE = /https?:\/\/[^\s<>"'`]+?\?[^\s<>"'`]+/g;
-
-export function mergeBustlyRuntimeHeaders(params: {
-  modelHeaders?: Record<string, string>;
-  optionHeaders?: Record<string, string>;
-  workspaceId?: string;
-  runId: string;
-}): Record<string, string> {
-  const mergedHeaders = {
-    ...(params.modelHeaders ?? {}),
-    ...(params.optionHeaders ?? {}),
-  };
-  mergedHeaders[BUSTLY_RUN_ID_HEADER] = params.runId;
-  const workspaceId = params.workspaceId?.trim() ?? "";
-  if (workspaceId) {
-    mergedHeaders[BUSTLY_WORKSPACE_HEADER] = workspaceId;
-  } else {
-    delete mergedHeaders[BUSTLY_WORKSPACE_HEADER];
-    delete mergedHeaders[BUSTLY_WORKSPACE_HEADER.toLowerCase()];
-  }
-  return mergedHeaders;
-}
 
 function escapeRegexLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

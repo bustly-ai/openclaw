@@ -607,6 +607,39 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 
+  it("loads plugins that require plugin-sdk compat subpaths in production mode", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "compat-status",
+      body: `const { PAIRING_APPROVED_MESSAGE } = require("openclaw/plugin-sdk/channel-status");
+module.exports = {
+  id: "compat-status",
+  register(api) {
+    api.registerGatewayMethod("compat-status.ping", ({ respond }) =>
+      respond(true, { ok: PAIRING_APPROVED_MESSAGE.length > 0 }),
+    );
+  },
+};`,
+    });
+
+    const registry = withEnv({ NODE_ENV: "production", VITEST: undefined }, () =>
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: plugin.dir,
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+            allow: ["compat-status"],
+          },
+        },
+      }),
+    );
+
+    const loaded = registry.plugins.find((entry) => entry.id === "compat-status");
+    expect(loaded?.status).toBe("loaded");
+    expect(Object.keys(registry.gatewayHandlers)).toContain("compat-status.ping");
+  });
+
   it("rejects plugin entry files that escape plugin root via symlink", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const pluginDir = makeTempDir();
