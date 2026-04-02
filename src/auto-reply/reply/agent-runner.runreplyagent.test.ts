@@ -678,6 +678,8 @@ describe("runReplyAgent fast reply gate", () => {
   });
 
   it("streams a short preface and continues into the main agent loop when the fast gate requests escalation", async () => {
+    const tempDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-fast-gate-handoff-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
     const fastGateEvents: Array<{ stream: string; data?: Record<string, unknown> }> = [];
     const onAgentRunSettled = vi.fn();
     const onPartialReply = vi.fn();
@@ -804,6 +806,8 @@ describe("runReplyAgent fast reply gate", () => {
         onAgentRunSettled,
       },
       runOverrides: {
+        sessionFile,
+        workspaceDir: tempDir,
         config: bustlyConfig,
       },
     });
@@ -861,6 +865,10 @@ describe("runReplyAgent fast reply gate", () => {
       provider: "anthropic",
       model: "claude",
     });
+    const messages = await readTranscriptMessages(sessionFile);
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(readTextContent(messages[0]?.content)).toBe("hello");
+    expect(readTextContent(messages[1]?.content)).toBe("I'm checking the latest business changes now.");
   });
 
   it("uses the fast gate tool reply when the model escalates without assistant text", async () => {

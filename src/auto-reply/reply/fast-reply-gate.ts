@@ -65,6 +65,7 @@ type FastReplyGateHandoff = {
   runId: string;
   provider: string;
   model: string;
+  prefaceText: string;
   assistantRequestMetrics: ReturnType<typeof consumeCompletedAssistantRequestMetrics>;
 };
 
@@ -604,6 +605,7 @@ export async function runFastReplyGate(params: {
         runId: visibleRunId,
         provider: BUSTLY_PROVIDER_ID,
         model: BUSTLY_STANDARD_CHAT_MODEL_ID,
+        prefaceText: text,
         assistantRequestMetrics,
       };
     }

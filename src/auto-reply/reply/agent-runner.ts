@@ -460,6 +460,20 @@ export async function runReplyAgent(params: {
         selectedModel: gateOutcome.model,
       };
     } else if (gateOutcome.kind === "handoff") {
+      try {
+        await appendFastReplyTurnToSessionTranscript({
+          sessionFile: followupRun.run.sessionFile,
+          sessionId: followupRun.run.sessionId,
+          workspaceDir: followupRun.run.workspaceDir,
+          commandBody,
+          payloads: [{ text: gateOutcome.prefaceText }],
+          provider: gateOutcome.provider,
+          model: gateOutcome.model,
+          timeoutMs: followupRun.run.timeoutMs,
+        });
+      } catch (err) {
+        defaultRuntime.error(`Failed to mirror fast gate handoff into session transcript: ${String(err)}`);
+      }
       opts?.onAgentRunSettled?.({
         runId: gateOutcome.runId,
         aborted: false,

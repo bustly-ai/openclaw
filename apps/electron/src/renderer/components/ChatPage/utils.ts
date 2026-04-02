@@ -1073,13 +1073,16 @@ export function collapseStreamingEvents(
     return nodes;
   }
 
+  const firstEventIndex = eventIndices[0];
+  const secondToLastEventIndex = eventIndices[eventIndices.length - 2];
   const lastEventIndex = eventIndices[eventIndices.length - 1];
-  if (lastEventIndex == null) {
+  if (firstEventIndex == null || secondToLastEventIndex == null || lastEventIndex == null) {
     return nodes;
   }
 
-  // Keep only the latest event visible and collapse every earlier event into the fold capsule.
-  const hiddenIndices = eventIndices.slice(0, -1);
+  // Keep the first event visible for orientation, and keep the latest two events visible
+  // so the current run still feels live. Collapse only the middle stretch.
+  const hiddenIndices = eventIndices.slice(1, -2);
   if (hiddenIndices.length === 0) {
     return nodes;
   }
