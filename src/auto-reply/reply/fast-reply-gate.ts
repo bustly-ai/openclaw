@@ -12,6 +12,7 @@ import {
   BUSTLY_PROVIDER_ID,
   BUSTLY_STANDARD_CHAT_MODEL_ID,
 } from "../../agents/bustly-models.js";
+import { mergeBustlyRuntimeHeaders } from "../../agents/bustly-runtime-headers.js";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
 import { prepareSessionManagerForRun } from "../../agents/pi-embedded-runner/session-manager-init.js";
@@ -21,6 +22,7 @@ import { consumeCompletedAssistantRequestMetrics } from "../../infra/assistant-r
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { runTrackedModelRequest } from "../../infra/model-request-adapter.js";
 import { defaultRuntime } from "../../runtime.js";
+import { readBustlyOAuthState } from "../../bustly-oauth.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue.js";
@@ -428,6 +430,12 @@ export async function runFastReplyGate(params: {
     const timeout = setTimeout(() => controller.abort(), FAST_REPLY_GATE_TIMEOUT_MS);
     const abortFromCaller = () => controller.abort();
     params.opts?.abortSignal?.addEventListener("abort", abortFromCaller, { once: true });
+    const workspaceId = readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
+    const mergedHeaders = mergeBustlyRuntimeHeaders({
+      modelHeaders: (resolved.model as { headers?: Record<string, string> }).headers,
+      workspaceId,
+      runId: visibleRunId,
+    });
 
     let message: AssistantMessage;
     let assistantText = "";
@@ -533,6 +541,7 @@ export async function runFastReplyGate(params: {
             maxTokens: FAST_REPLY_GATE_MAX_TOKENS,
             signal: controller.signal,
             toolChoice: "auto",
+            headers: Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined,
           },
           payloadLog: {
             env: process.env,

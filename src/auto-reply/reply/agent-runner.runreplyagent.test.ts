@@ -672,6 +672,11 @@ describe("runReplyAgent fast reply gate", () => {
         },
       });
       expect(requestLine.request.request).not.toHaveProperty("reasoning_effort");
+      expect(state.streamMock.mock.calls[0]?.[2]).toMatchObject({
+        headers: expect.objectContaining({
+          "X-Run-Id": "run-fast-gate-payload",
+        }),
+      });
     });
 
     vi.unstubAllEnvs();
