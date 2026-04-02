@@ -4,7 +4,6 @@
  * This module provides a simplified one-call initialization
  */
 
-
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -45,18 +44,18 @@ function resolveOpenClawRootFromCliPath(cliPath: string): string {
   return dirname(cliPath);
 }
 
-function isWeixinPluginBundled(): boolean {
+function isBundledExtension(extensionId: string): boolean {
   const cliPath = resolveOpenClawCliPath();
   const candidates = new Set<string>();
 
   if (cliPath) {
     const root = resolveOpenClawRootFromCliPath(cliPath);
-    candidates.add(resolve(root, "extensions", "openclaw-weixin"));
+    candidates.add(resolve(root, "extensions", extensionId));
   }
 
-  candidates.add(resolve(process.resourcesPath, "extensions", "openclaw-weixin"));
-  candidates.add(resolve(__dirname, "../../../extensions/openclaw-weixin"));
-  candidates.add(resolve(__dirname, "../../../../extensions/openclaw-weixin"));
+  candidates.add(resolve(process.resourcesPath, "extensions", extensionId));
+  candidates.add(resolve(__dirname, `../../../extensions/${extensionId}`));
+  candidates.add(resolve(__dirname, `../../../../extensions/${extensionId}`));
 
   for (const candidate of candidates) {
     if (existsSync(candidate)) {
@@ -86,7 +85,8 @@ async function ensureElectronDefaultConfig(configPath: string): Promise<OpenClaw
     }
   }
 
-  const hasWeixinPlugin = isWeixinPluginBundled();
+  const hasWeixinPlugin = isBundledExtension("openclaw-weixin");
+  const hasFeishuPlugin = isBundledExtension("openclaw-lark");
   const pluginEntries = { ...(nextConfig.plugins?.entries ?? {}) } as Record<string, unknown>;
   const channels = { ...(nextConfig.channels ?? {}) } as Record<string, unknown>;
   let configMutated = false;
@@ -109,6 +109,37 @@ async function ensureElectronDefaultConfig(configPath: string): Promise<OpenClaw
     }
   }
 
+  if (hasFeishuPlugin) {
+    const currentLarkEntry =
+      (pluginEntries["openclaw-lark"] as { enabled?: boolean } | undefined) ?? {};
+    if (currentLarkEntry.enabled !== true) {
+      pluginEntries["openclaw-lark"] = { ...currentLarkEntry, enabled: true };
+      configMutated = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(pluginEntries, "feishu")) {
+      delete pluginEntries.feishu;
+      configMutated = true;
+    }
+    const currentFeishuChannel =
+      (channels.feishu as { enabled?: boolean } | undefined) ?? {};
+    if (currentFeishuChannel.enabled !== true) {
+      channels.feishu = { ...currentFeishuChannel, enabled: true };
+      configMutated = true;
+    }
+  } else {
+    if (Object.prototype.hasOwnProperty.call(pluginEntries, "openclaw-lark")) {
+      delete pluginEntries["openclaw-lark"];
+      configMutated = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(pluginEntries, "feishu")) {
+      delete pluginEntries.feishu;
+      configMutated = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(channels, "feishu")) {
+      delete channels.feishu;
+      configMutated = true;
+    }
+  }
   if (configMutated) {
     nextConfig = {
       ...nextConfig,
@@ -256,23 +287,17 @@ export interface InitializationResult {
   success: boolean;
   configPath: string;
   gatewayPort: number;
-  gatewayToken?: string; // Optional (not used when auth is disabled)
+  gatewayToken?: string;
   gatewayBind: string;
   workspace: string;
   error?: string;
 }
 
 export interface InitializationOptions extends PresetConfigOptions {
-  /** Force re-initialization even if config exists */
   force?: boolean;
-  /** OpenRouter API key for minimax model */
   openrouterApiKey?: string;
 }
 
-/**
- * Initialize OpenClaw with default configuration
- * This is the main entry point for automatic onboarding
- */
 export async function initializeOpenClaw(
   options: InitializationOptions = {},
 ): Promise<InitializationResult> {
@@ -280,7 +305,6 @@ export async function initializeOpenClaw(
     const { force = false, ...configOptions } = options;
     const configPath = resolveConfigPathSafe();
 
-    // Check if config already exists
     if (!force && existsSync(configPath)) {
       writeMainInfo("Configuration already exists, skipping initialization");
     } else {
@@ -320,9 +344,6 @@ export async function initializeOpenClaw(
   }
 }
 
-/**
- * Check if OpenClaw is already initialized
- */
 export function isInitialized(): boolean {
   try {
     const configPath = resolveConfigPathSafe();

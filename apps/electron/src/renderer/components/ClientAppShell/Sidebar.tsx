@@ -50,6 +50,7 @@ type SidebarTask = {
   name: string;
   icon?: string;
   isMain?: boolean;
+  createdAt?: number | null;
   updatedAt?: number | null;
 };
 
@@ -92,6 +93,11 @@ function sortSidebarAgents(
       if (right.agentId === pendingAgentId && left.agentId !== pendingAgentId) {
         return 1;
       }
+    }
+    const leftCreatedAt = left.createdAt ?? 0;
+    const rightCreatedAt = right.createdAt ?? 0;
+    if (leftCreatedAt !== rightCreatedAt) {
+      return rightCreatedAt - leftCreatedAt;
     }
     return left.name.localeCompare(right.name);
   });
@@ -1262,14 +1268,23 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
             const sessions = await window.electronAPI.bustlyListAgentSessions(effectiveWorkspaceId, agent.agentId);
             return [
               agent.agentId,
-              sessions.map((session) => ({
-                id: session.sessionKey,
-                agentId: session.agentId,
-                name: session.name,
-                icon: session.icon,
-                updatedAt: session.updatedAt,
-                running: runningTasks[session.sessionKey] === true,
-              })),
+              sessions
+                .map((session) => ({
+                  id: session.sessionKey,
+                  agentId: session.agentId,
+                  name: session.name,
+                  icon: session.icon,
+                  updatedAt: session.updatedAt,
+                  running: runningTasks[session.sessionKey] === true,
+                }))
+                .sort((left, right) => {
+                  const leftUpdatedAt = left.updatedAt ?? 0;
+                  const rightUpdatedAt = right.updatedAt ?? 0;
+                  if (leftUpdatedAt !== rightUpdatedAt) {
+                    return rightUpdatedAt - leftUpdatedAt;
+                  }
+                  return left.name.localeCompare(right.name);
+                }),
             ] as const;
           }),
         );
@@ -1283,6 +1298,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
             name: agent.name,
             icon: agent.icon,
             isMain: agent.isMain,
+            createdAt: agent.createdAt,
             updatedAt: agent.updatedAt,
           })),
         );
@@ -1812,7 +1828,10 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                       }}
                     />
                     {(sessionsByAgent[task.agentId] ?? []).length > 0 ? (
-                      <div className="mt-1 mb-2 max-h-40 space-y-0.5 overflow-y-auto pr-3 pl-10">
+                      <div
+                        className="mt-1 mb-2 max-h-40 space-y-0.5 overflow-y-auto pr-3 pl-10 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                        style={{ msOverflowStyle: "none" }}
+                      >
                         {(sessionsByAgent[task.agentId] ?? []).map((session) => {
                           return (
                             <button

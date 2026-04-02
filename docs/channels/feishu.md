@@ -23,7 +23,7 @@ openclaw plugins install @openclaw/feishu
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/feishu
+openclaw plugins install ./extensions/openclaw-lark
 ```
 
 ---

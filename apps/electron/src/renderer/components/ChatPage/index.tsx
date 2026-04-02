@@ -2552,6 +2552,8 @@ export default function ChatPage() {
 
   const sendChatMessage = useCallback(async () => {
     let targetSessionKey = currentSessionKey;
+    const sourceViewKey = currentViewKey;
+    const startedFromAgentDraft = !currentSessionKey;
     if (!targetSessionKey) {
       const nextLabel = draft.trim().slice(0, 60) || "New conversation";
       const createSessionResult = await window.electronAPI.bustlyCreateAgentSession({
@@ -2585,13 +2587,18 @@ export default function ChatPage() {
       );
       window.dispatchEvent(new Event("openclaw:sidebar-refresh-tasks"));
     }
-    await sendPreparedChatMessage({
+    const didSend = await sendPreparedChatMessage({
       sessionKey: targetSessionKey,
       draftText: draft,
       attachments,
       contextPaths,
       clearComposer: true,
     });
+    if (didSend && startedFromAgentDraft) {
+      setSessionDraft(sourceViewKey, "");
+      setSessionAttachments(sourceViewKey, []);
+      setSessionContextPaths(sourceViewKey, []);
+    }
   }, [
     activeWorkspaceId,
     attachments,
@@ -2600,11 +2607,15 @@ export default function ChatPage() {
     currentScenarioIconId,
     currentScenarioLabel,
     currentSessionKey,
+    currentViewKey,
     draft,
     location.pathname,
     navigate,
     sendPreparedChatMessage,
     setError,
+    setSessionAttachments,
+    setSessionContextPaths,
+    setSessionDraft,
   ]);
 
   const handleSend = useCallback(async () => {

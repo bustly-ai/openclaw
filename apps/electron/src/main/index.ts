@@ -71,7 +71,6 @@ import {
   resolveElectronBackendLogPath,
   resolveElectronIsolatedConfigPath,
   resolveElectronIsolatedStateDir,
-  resolveElectronBustlyWorkspaceTemplateBaseUrl,
 } from "./defaults.js";
 import {
   buildBustlyAgentConversationSessionKey,
@@ -103,6 +102,7 @@ type BustlyWorkspaceAgentSummary = {
   name: string;
   icon?: string;
   isMain: boolean;
+  createdAt: number | null;
   updatedAt: number | null;
 };
 
@@ -116,6 +116,7 @@ type BustlyWorkspaceAgentSessionSummary = {
 
 type BustlyAgentMetadata = {
   icon?: string;
+  createdAt?: number;
 };
 
 type OpenClawAgentListEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
@@ -209,6 +210,7 @@ function loadMainProcessEnvFromDotEnv(): void {
     resolve(__dirname, "../.env"),
     resolve(process.cwd(), ".env"),
   ];
+
   for (const envPath of envPathCandidates) {
     if (!existsSync(envPath)) {
       continue;
@@ -235,6 +237,35 @@ function formatIssueReportTimestamp(date: Date): string {
   const minutes = String(date.getMinutes()).padStart(2, "0");
   const seconds = String(date.getSeconds()).padStart(2, "0");
   return `${year}${month}${day}-${hours}${minutes}${seconds}`;
+}
+
+function resolveElectronWorkerExecPath(): string {
+  const execPath = process.execPath;
+  if (process.platform !== "darwin") {
+    return execPath;
+  }
+
+  try {
+    const macOsDir = dirname(execPath);
+    const contentsDir = dirname(macOsDir);
+    const appName = basename(execPath).trim();
+    const helperAppName = `${appName} Helper`;
+    const helperExecPath = join(
+      contentsDir,
+      "Frameworks",
+      `${helperAppName}.app`,
+      "Contents",
+      "MacOS",
+      helperAppName,
+    );
+    if (existsSync(helperExecPath)) {
+      return helperExecPath;
+    }
+  } catch {
+    // Fall back to the main executable if helper resolution fails.
+  }
+
+  return execPath;
 }
 
 function addDirectoryToZip(params: {
@@ -318,19 +349,11 @@ Sentry.init({
 });
 syncSentryBustlyScope();
 
-if (!process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL?.trim()) {
-  const appVersion = app.getVersion();
-  const isDevelopment = !app.isPackaged;
-  const isBetaVersion = !isDevelopment && appVersion.toLowerCase().includes("beta");
-  const prodUrl = process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL_PROD?.trim();
-  const testUrl = process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL_TEST?.trim();
+if (process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL?.trim()) {
   process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL =
-    ((isDevelopment || isBetaVersion) ? testUrl : prodUrl) ||
-    resolveElectronBustlyWorkspaceTemplateBaseUrl(isDevelopment ? "beta" : appVersion);
-  writeMainInfo("[Bustly Prompts] Selected template base URL:", {
-    appVersion,
-    isPackaged: app.isPackaged,
-    channel: isDevelopment ? "test-dev" : isBetaVersion ? "test" : "prod",
+    process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL.trim();
+  writeMainInfo("[Bustly Prompts] Loaded template base URL from env:", {
+    nodeEnv: process.env.NODE_ENV || "production",
     url: process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL,
   });
 }
@@ -1032,6 +1055,10 @@ function loadBustlyAgentMetadata(agentWorkspaceDir: string): BustlyAgentMetadata
     const parsed = JSON.parse(raw) as BustlyAgentMetadata;
     return {
       icon: parsed.icon?.trim() || undefined,
+      createdAt:
+        typeof parsed.createdAt === "number" && Number.isFinite(parsed.createdAt)
+          ? parsed.createdAt
+          : undefined,
     };
   } catch {
     return {};
@@ -1045,6 +1072,37 @@ function saveBustlyAgentMetadata(agentWorkspaceDir: string, metadata: BustlyAgen
     JSON.stringify(metadata, null, 2),
     "utf-8",
   );
+}
+
+function resolveBustlyAgentCreatedAt(
+  agentWorkspaceDir: string,
+  metadata: BustlyAgentMetadata,
+): number | null {
+  if (typeof metadata.createdAt === "number" && Number.isFinite(metadata.createdAt)) {
+    return metadata.createdAt;
+  }
+  for (const candidatePath of [agentWorkspaceDir, resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir)]) {
+    if (!existsSync(candidatePath)) {
+      continue;
+    }
+    try {
+      const stats = statSync(candidatePath);
+      const fallbackCreatedAt =
+        Number.isFinite(stats.birthtimeMs) && stats.birthtimeMs > 0
+          ? stats.birthtimeMs
+          : Number.isFinite(stats.ctimeMs) && stats.ctimeMs > 0
+            ? stats.ctimeMs
+            : Number.isFinite(stats.mtimeMs) && stats.mtimeMs > 0
+              ? stats.mtimeMs
+              : 0;
+      if (fallbackCreatedAt > 0) {
+        return Math.floor(fallbackCreatedAt);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 function buildBustlyConversationSessionKey(agentId: string): string {
@@ -1061,7 +1119,15 @@ function listBustlyAgentConversationSessions(agentId: string): BustlyWorkspaceAg
       name: entry.label?.trim() || "New conversation",
       icon: entry.icon?.trim() || undefined,
       updatedAt: entry.updatedAt ?? null,
-    }));
+    }))
+    .sort((left, right) => {
+      const leftUpdatedAt = left.updatedAt ?? 0;
+      const rightUpdatedAt = right.updatedAt ?? 0;
+      if (leftUpdatedAt !== rightUpdatedAt) {
+        return rightUpdatedAt - leftUpdatedAt;
+      }
+      return left.name.localeCompare(right.name);
+    });
 }
 
 function listBustlyWorkspaceAgentIds(cfg: OpenClawConfig, workspaceId: string): string[] {
@@ -1152,15 +1218,21 @@ async function hasMissingBustlyWorkspaceSetup(workspaceId: string): Promise<bool
 function setBustlyAgentMetadata(params: {
   workspaceDir: string;
   icon?: string;
+  createdAt?: number;
 }): void {
   const nextIcon = params.icon?.trim();
-  if (!nextIcon) {
+  const nextCreatedAt =
+    typeof params.createdAt === "number" && Number.isFinite(params.createdAt)
+      ? params.createdAt
+      : undefined;
+  if (!nextIcon && nextCreatedAt === undefined) {
     return;
   }
   const current = loadBustlyAgentMetadata(params.workspaceDir);
   saveBustlyAgentMetadata(params.workspaceDir, {
     ...current,
-    icon: nextIcon,
+    icon: nextIcon ?? current.icon,
+    createdAt: nextCreatedAt ?? current.createdAt,
   });
 }
 
@@ -1332,6 +1404,7 @@ async function createBustlyWorkspaceAgent(params: {
   setBustlyAgentMetadata({
     workspaceDir,
     icon,
+    createdAt: Date.now(),
   });
 
   return { agentId, workspaceDir };
@@ -1357,13 +1430,15 @@ function listBustlyWorkspaceAgents(workspaceId: string): BustlyWorkspaceAgentSum
       const metadata = loadBustlyAgentMetadata(workspaceDir);
       const sessions = listBustlyAgentConversationSessions(agentId);
       const displayName = entry.name?.trim() || agentName;
+      const createdAt = resolveBustlyAgentCreatedAt(workspaceDir, metadata);
       return {
         agentId,
         agentName,
         name: displayName,
         icon: metadata.icon,
         isMain: agentName === DEFAULT_BUSTLY_AGENT_NAME,
-        updatedAt: sessions[0]?.updatedAt ?? null,
+        createdAt,
+        updatedAt: sessions[0]?.updatedAt ?? metadata.createdAt ?? null,
       };
     })
     .sort((left, right) => {
@@ -1372,6 +1447,11 @@ function listBustlyWorkspaceAgents(workspaceId: string): BustlyWorkspaceAgentSum
       }
       if (right.isMain && !left.isMain) {
         return 1;
+      }
+      const leftCreatedAt = left.createdAt ?? 0;
+      const rightCreatedAt = right.createdAt ?? 0;
+      if (leftCreatedAt !== rightCreatedAt) {
+        return rightCreatedAt - leftCreatedAt;
       }
       return left.name.localeCompare(right.name);
     });
@@ -2238,8 +2318,10 @@ async function startGateway(): Promise<boolean> {
       .filter((value) => Boolean(value && value.length > 0))
       .map((value) => `${value}(${existsSync(value!) ? "exists" : "missing"})`)
       .join(" | ");
-    const nodePath = process.execPath;
-    writeMainLog(`Gateway runtime: execPath=${nodePath} mode=electron-run-as-node`);
+    const nodePath = resolveElectronWorkerExecPath();
+    writeMainLog(
+      `Gateway runtime: execPath=${nodePath} mode=electron-run-as-node helper=${nodePath !== process.execPath ? "yes" : "no"}`,
+    );
 
     const spawnEnv = buildElectronCliEnv({ cliPath, oauthCallbackPort });
     if (existsSync(bundledPluginsDir)) {
@@ -3798,9 +3880,9 @@ void app.whenReady().then(async () => {
     const envPaths = [
       // Development: dist/main-dev.js -> ../.env = apps/electron/.env
       // Production: dist/main/index.js -> ../../.env = apps/electron/.env
-      process.env.NODE_ENV === "development"
-        ? resolve(__dirname, "../.env")
-        : resolve(__dirname, "../../.env"),
+      resolve(__dirname, "../../.env"),
+      resolve(__dirname, "../.env"),
+      resolve(process.cwd(), ".env"),
     ];
 
     for (const envPath of envPaths) {

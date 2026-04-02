@@ -103,6 +103,7 @@ interface BustlyWorkspaceAgent {
   name: string;
   icon?: string;
   isMain: boolean;
+  createdAt: number | null;
   updatedAt: number | null;
 }
 
