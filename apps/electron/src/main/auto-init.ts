@@ -33,6 +33,85 @@ import { writeMainError, writeMainInfo } from "./logger.js";
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 let lastInitializationLogSignature: string | null = null;
+const BLOCKED_BUNDLED_SKILL_TOKENS = new Set(["skill-eval-ops"]);
+const DEFAULT_BUNDLED_SKILL_ALLOWLIST = [
+  "ads-core-ops",
+  "commerce-core-ops",
+  "source-product",
+  "nano-banana-pro",
+  "minimax-docx",
+  "minimax-pdf",
+  "minimax-tts",
+  "minimax-xlsx",
+  "pptx-generator",
+  "hubspot",
+  "shipstation",
+  "zendesk",
+  "skill-finder",
+  "skill-creator",
+  "clawhub",
+];
+
+function normalizeSkillAllowlistValue(input: string): string {
+  return input.trim().toLowerCase().replace(/[\s_]+/g, "-");
+}
+
+function resolveDefaultBundledSkillAllowlist(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const raw = env.BUSTLY_DEFAULT_BUNDLED_SKILLS?.trim();
+  const values =
+    raw && raw.length > 0
+      ? raw
+          .split(/[,\n]/)
+          .map((entry) => normalizeSkillAllowlistValue(entry))
+          .filter(Boolean)
+      : DEFAULT_BUNDLED_SKILL_ALLOWLIST.map((entry) => normalizeSkillAllowlistValue(entry));
+  return [...new Set(values)];
+}
+
+function shouldApplyDefaultBundledSkillSelection(config: OpenClawConfig): boolean {
+  const allowBundled = config.skills?.allowBundled;
+  const hasAllowBundled = Boolean(Array.isArray(allowBundled) && allowBundled.length > 0);
+  return !hasAllowBundled;
+}
+
+function applyDefaultBundledSkillSelection(config: OpenClawConfig): OpenClawConfig {
+  const allowBundled = resolveDefaultBundledSkillAllowlist();
+  if (allowBundled.length === 0) {
+    return config;
+  }
+  return {
+    ...config,
+    skills: {
+      ...(config.skills ?? {}),
+      allowBundled,
+    },
+  };
+}
+
+function sanitizeBundledSkillAllowlist(config: OpenClawConfig): OpenClawConfig {
+  const current = config.skills?.allowBundled;
+  if (!Array.isArray(current) || current.length === 0) {
+    return config;
+  }
+  const filtered = current
+    .map((entry) => String(entry).trim())
+    .filter(
+      (entry) =>
+        entry.length > 0 && !BLOCKED_BUNDLED_SKILL_TOKENS.has(normalizeSkillAllowlistValue(entry)),
+    );
+  if (filtered.length === current.length) {
+    return config;
+  }
+  return {
+    ...config,
+    skills: {
+      ...(config.skills ?? {}),
+      allowBundled: [...new Set(filtered)],
+    },
+  };
+}
 
 function resolveOpenClawRootFromCliPath(cliPath: string): string {
   if (cliPath.endsWith("openclaw.mjs")) {
@@ -160,6 +239,19 @@ async function ensureElectronDefaultConfig(configPath: string): Promise<OpenClaw
         dmScope: "per-account-channel-peer",
       },
     };
+  }
+
+  if (shouldApplyDefaultBundledSkillSelection(nextConfig)) {
+    nextConfig = applyDefaultBundledSkillSelection(nextConfig);
+    writeMainInfo(
+      `[Init] Applied default bundled skill allowlist (${nextConfig.skills?.allowBundled?.length ?? 0} skills)`,
+    );
+  }
+
+  const sanitizedConfig = sanitizeBundledSkillAllowlist(nextConfig);
+  if (sanitizedConfig !== nextConfig) {
+    nextConfig = sanitizedConfig;
+    writeMainInfo("[Init] Removed blocked internal skills from bundled skill allowlist");
   }
 
   if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {

@@ -46,6 +46,10 @@ function normalizeAllowlist(input: unknown): string[] | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeAllowlistToken(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s_]+/g, "-");
+}
+
 const BUNDLED_SOURCES = new Set(["openclaw-bundled"]);
 
 function isBundledSkill(entry: SkillEntry): boolean {
@@ -64,7 +68,15 @@ export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): 
     return true;
   }
   const key = resolveSkillKey(entry.skill, entry);
-  return allowlist.includes(key) || allowlist.includes(entry.skill.name);
+  const normalizedAllowlist = new Set(allowlist.map((value) => normalizeAllowlistToken(value)));
+  const normalizedKey = normalizeAllowlistToken(key);
+  const normalizedName = normalizeAllowlistToken(entry.skill.name);
+  return (
+    allowlist.includes(key) ||
+    allowlist.includes(entry.skill.name) ||
+    normalizedAllowlist.has(normalizedKey) ||
+    normalizedAllowlist.has(normalizedName)
+  );
 }
 
 export function shouldIncludeSkill(params: {

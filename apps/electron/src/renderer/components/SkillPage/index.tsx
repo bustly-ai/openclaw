@@ -33,6 +33,8 @@ type SkillStatusEntry = {
   homepage?: string;
   primaryEnv?: string;
   disabled: boolean;
+  blockedByAllowlist: boolean;
+  eligible: boolean;
 };
 
 type SkillStatusReport = {
@@ -201,7 +203,7 @@ function toSkillItem(skill: SkillStatusEntry, index: number): SkillItemData {
     name: skill.name,
     description: skill.description,
     icon: INITIAL_SKILLS.find((item) => item.name === skill.name)?.icon ?? LightningIcon,
-    enabled: !skill.disabled,
+    enabled: !skill.disabled && !skill.blockedByAllowlist,
     skillKey: skill.skillKey,
     source: skill.source,
     filePath: skill.filePath,
