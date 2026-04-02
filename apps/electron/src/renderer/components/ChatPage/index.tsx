@@ -873,11 +873,12 @@ export default function ChatPage() {
     [activeWorkspaceId, currentAgentId, currentSessionKey],
   );
   const pageResolving = workspaceStateLoading || (Boolean(currentSessionKey) && loading);
+  const isSessionRunning = Boolean(sending || activeRunId || compactingRunId || reconnectStatus);
   const canSendMessage =
     !pageResolving &&
     connected &&
     !subscriptionExpired &&
-    !sending &&
+    !isSessionRunning &&
     (draft.trim() || attachments.length > 0 || contextPaths.length > 0);
   const showPlaceholderTicker =
     !pageResolving &&
@@ -3388,6 +3389,10 @@ export default function ChatPage() {
                         nativeEvent.isComposing === true ||
                         nativeEvent.keyCode === 229;
                       if (isComposing) {
+                        return;
+                      }
+                      if (e.key === "Enter" && !e.shiftKey && isSessionRunning) {
+                        e.preventDefault();
                         return;
                       }
                       if (!canSendMessage) {
