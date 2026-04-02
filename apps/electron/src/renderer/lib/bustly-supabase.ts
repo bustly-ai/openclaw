@@ -137,7 +137,7 @@ function resolvePlanLabel(
   );
 }
 
-function resolveWorkspacePlanState(
+export function resolveWorkspacePlanState(
   subscription: WorkspaceSubscriptionRow | undefined,
   planById: Map<string, BenefitPlanRow>,
 ): Pick<
@@ -150,7 +150,7 @@ function resolveWorkspacePlanState(
   const trialEndAt = parseTimestamp(subscription?.trial_end_at);
   const isTrial = Boolean(trialEndAt && trialEndAt > now);
   const hasPeriodEnded = Boolean(currentPeriodEnd && currentPeriodEnd < now);
-  const isCanceled = status === "pending_cancellation";
+  const isCanceled = status === "pending_cancellation" || status === "canceled";
   const isCanceledButStillActive = status === "canceled" && Boolean(currentPeriodEnd && currentPeriodEnd >= now);
   const isExpired = hasPeriodEnded || status === "expired" || (status === "canceled" && !isCanceledButStillActive);
   const planLabel = subscription ? (resolvePlanLabel(subscription, planById) || "Basic") : null;

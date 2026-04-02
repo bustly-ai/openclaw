@@ -35,7 +35,7 @@ const FAST_REPLY_GATE_TOOL: Tool = {
   parameters: Type.Object({
     reply: Type.String({
       description:
-        "Required short user-facing acknowledgment in the user's language confirming you received the task and are checking it now.",
+        "Required short user-facing acknowledgment in the user's language confirming you received the task and are starting it now. Do not ask follow-up questions in this field.",
     }),
   }),
 };
@@ -45,7 +45,12 @@ const FAST_REPLY_GATE_PROMPT = [
   "Direct replies must be a short final answer in the user's language.",
   "Reply directly only when the user can be answered safely in one short assistant turn without tools, file access, code execution, web browsing, reminders, or deeper workspace/session context.",
   `If the full agent loop is needed, call the ${FAST_REPLY_GATE_TOOL_NAME} tool and set reply to the short user-facing acknowledgment that should be sent now.`,
-  "When escalating, reply is required and must be something like a brief confirmation that you received the task and are checking it.",
+  "When escalating, reply is required and must be a brief confirmation that you received the task and are starting it now.",
+  "Do not ask follow-up questions in the escalation reply.",
+  "Do not ask the user for clarification, files, screenshots, goals, style preferences, or extra details in the escalation reply.",
+  "Bad escalation reply example: 'I can help. What are you selling and what style do you want?'",
+  "Good escalation reply example: 'No problem, I'll help plan the store redesign now.'",
+  "If more context is needed, the full agent can ask later after the handoff. The fast reply gate should only acknowledge and begin.",
   "Call the tool when the user asks for coding work, debugging, repository inspection, file changes, commands, tool use, reminders, workflows, business analysis, or anything that depends on deeper session/workspace state.",
   "If you are unsure, call the tool.",
   "Reply in the user's language.",
