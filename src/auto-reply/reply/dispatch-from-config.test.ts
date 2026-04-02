@@ -322,6 +322,51 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("uses pending request metrics during fallback completion when settled is skipped", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-30T00:00:00.000Z"));
+    assistantRequestMetricMocks.consumeCompletedAssistantRequestMetrics.mockImplementation(
+      (runId?: string) => {
+        if (runId === "run-failed") {
+          return [{ ttftMs: 95, ttlrMs: 640 }];
+        }
+        return [];
+      },
+    );
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "webchat",
+      SessionKey: "agent:main:main",
+      MessageSid: "run-failed",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      opts?.onAgentRunStart?.("run-failed");
+      vi.advanceTimersByTime(1500);
+      return { text: "Failure fallback reply" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(assistantRequestMetricMocks.consumeCompletedAssistantRequestMetrics).toHaveBeenCalledWith(
+      "run-failed",
+    );
+    expect(reportMocks.reportSessionCompletionToSupabase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageSid: "run-failed",
+        assistantRequestMetrics: [{ ttftMs: 95, ttlrMs: 640 }],
+      }),
+    );
+  });
+
   it("routes media-only tool results when summaries are suppressed", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

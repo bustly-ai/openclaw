@@ -2,10 +2,6 @@ import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import {
-  recordAssistantRequestEnd,
-  recordAssistantRequestFirstDelta,
-} from "../infra/assistant-request-metrics.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -116,9 +112,6 @@ export function handleMessageUpdate(
     });
     // Prefer full partial-message thinking when available; fall back to event payloads.
     const partialThinking = extractAssistantThinking(msg);
-    if (partialThinking || thinkingContent || thinkingDelta) {
-      recordAssistantRequestFirstDelta(ctx.params.runId);
-    }
     ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
     if (evtType === "thinking_end") {
       if (!ctx.state.reasoningStreamOpen) {
@@ -166,7 +159,6 @@ export function handleMessageUpdate(
   }
 
   if (chunk) {
-    recordAssistantRequestFirstDelta(ctx.params.runId);
     ctx.state.deltaBuffer += chunk;
     if (ctx.blockChunker) {
       ctx.blockChunker.append(chunk);
@@ -218,7 +210,6 @@ export function handleMessageUpdate(
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
 
     if (shouldEmit) {
-      recordAssistantRequestFirstDelta(ctx.params.runId);
       emitAgentEvent({
         runId: ctx.params.runId,
         stream: "assistant",
@@ -312,9 +303,6 @@ export function handleMessageEnd(
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
       : "";
-  if (rawThinking) {
-    recordAssistantRequestFirstDelta(ctx.params.runId);
-  }
   const formattedReasoning = rawThinking;
   const trimmedText = text.trim();
   const parsedText = trimmedText ? parseReplyDirectives(stripTrailingDirective(trimmedText)) : null;
@@ -335,7 +323,6 @@ export function handleMessageEnd(
   }
 
   if (cleanedText || hasMedia) {
-    recordAssistantRequestFirstDelta(ctx.params.runId);
     const finalDelta = ctx.state.emittedAssistantUpdate ? "" : cleanedText;
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -491,5 +478,4 @@ export function handleMessageEnd(
   ctx.state.lastStreamedAssistant = undefined;
   ctx.state.lastStreamedAssistantCleaned = undefined;
   ctx.state.reasoningStreamOpen = false;
-  recordAssistantRequestEnd(ctx.params.runId);
 }

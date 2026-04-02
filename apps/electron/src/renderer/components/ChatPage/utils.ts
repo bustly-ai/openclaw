@@ -963,6 +963,12 @@ function isStreamEventNode(node: TimelineNode): boolean {
   return node.tone !== "user";
 }
 
+function isStreamingAssistantTextNode(
+  node: TimelineNode,
+): node is Extract<TimelineNode, { kind: "text"; tone: "assistant" }> {
+  return node.kind === "text" && node.tone === "assistant" && node.streaming === true;
+}
+
 function buildStreamFoldNode(items: TimelineNode[]): Extract<TimelineNode, { kind: "streamFold" }> | null {
   if (items.length === 0) {
     return null;
@@ -1079,7 +1085,25 @@ export function collapseStreamingEvents(
   }
 
   const hiddenIndexSet = new Set(hiddenIndices);
-  const hiddenItems = hiddenIndices.map((index) => nodes[index]);
+  let latestAssistantIndex = -1;
+  for (let index = eventIndices.length - 1; index >= 0; index -= 1) {
+    const candidateIndex = eventIndices[index];
+    const candidate = candidateIndex == null ? null : nodes[candidateIndex];
+    if (candidate && isStreamingAssistantTextNode(candidate)) {
+      latestAssistantIndex = candidateIndex;
+      break;
+    }
+  }
+  if (latestAssistantIndex >= 0 && latestAssistantIndex !== lastEventIndex) {
+    hiddenIndexSet.delete(latestAssistantIndex);
+  }
+  if (hiddenIndexSet.size === 0) {
+    return nodes;
+  }
+
+  const hiddenItems = hiddenIndices
+    .filter((index) => hiddenIndexSet.has(index))
+    .map((index) => nodes[index]);
   const foldNode = buildStreamFoldNode(hiddenItems);
   if (!foldNode) {
     return nodes;

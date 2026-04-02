@@ -769,7 +769,7 @@ async function executeChatRun(params: {
     });
 
     let agentRunStarted = false;
-    let startedAgentRunId: string | null = null;
+    const startedAgentRunIds = new Set<string>();
     let settledAgentRun:
       | {
           runId: string;
@@ -779,7 +779,7 @@ async function executeChatRun(params: {
       | null = null;
     const finalizeAbortedPartialPersistence = () => {
       const candidateRunIds = Array.from(
-        new Set([settledAgentRun?.runId, startedAgentRunId, clientRunId].filter(Boolean)),
+        new Set([settledAgentRun?.runId, ...startedAgentRunIds, clientRunId].filter(Boolean)),
       ) as string[];
       if (candidateRunIds.length === 0) {
         return;
@@ -812,7 +812,7 @@ async function executeChatRun(params: {
         emitReasoningAgentEvents: true,
         onAgentRunStart: (runId) => {
           agentRunStarted = true;
-          startedAgentRunId = runId;
+          startedAgentRunIds.add(runId);
           if (runId !== clientRunId) {
             params.context.addChatRun(runId, {
               sessionKey: rawSessionKey,
@@ -919,7 +919,7 @@ async function executeChatRun(params: {
       })
       .finally(() => {
         params.context.chatAbortControllers.delete(clientRunId);
-        if (startedAgentRunId) {
+        for (const startedAgentRunId of startedAgentRunIds) {
           params.context.chatAbortControllers.delete(startedAgentRunId);
         }
       });

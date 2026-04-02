@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
@@ -15,8 +15,8 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { readBustlyOAuthState } from "../../../bustly-oauth.js";
 import {
   consumeCompletedAssistantRequestMetrics,
-  recordAssistantRequestStart,
 } from "../../../infra/assistant-request-metrics.js";
+import { wrapStreamFnWithModelRequestTracking } from "../../../infra/model-request-adapter.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { reportSessionCompletionToSupabase } from "../../../infra/supabase-chat-report.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
@@ -37,7 +37,6 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
-import { createModelPayloadLogger } from "../../model-payload-log.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
@@ -122,23 +121,6 @@ import {
 } from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
 
-function wrapStreamFnWithAssistantRequestStart(streamFn: StreamFn, runId: string): StreamFn {
-  const wrapped: StreamFn = (model, context, options) => {
-    let started = false;
-    const originalOnPayload = options?.onPayload;
-    return streamFn(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (!started) {
-          started = true;
-          recordAssistantRequestStart(runId);
-        }
-        originalOnPayload?.(payload);
-      },
-    });
-  };
-  return wrapped;
-}
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 const BUSTLY_PROVIDER_ID = "bustly";
@@ -904,17 +886,6 @@ export async function runEmbeddedAttempt(
         modelApi: params.model.api,
         workspaceDir: params.workspaceDir,
       });
-      const modelPayloadLogger = createModelPayloadLogger({
-        env: process.env,
-        runId: params.runId,
-        sessionId: activeSession.sessionId,
-        sessionKey: params.sessionKey,
-        provider: params.provider,
-        modelId: params.modelId,
-        modelApi: params.model.api,
-        workspaceDir: params.workspaceDir,
-      });
-
       // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
       // for reliable streaming + tool calling support (#11828).
       if (params.model.api === "ollama") {
@@ -931,9 +902,20 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = streamSimple;
       }
 
-      activeSession.agent.streamFn = wrapStreamFnWithAssistantRequestStart(
+      activeSession.agent.streamFn = wrapStreamFnWithModelRequestTracking(
         activeSession.agent.streamFn,
-        params.runId,
+        {
+          runId: params.runId,
+          payloadLog: {
+            env: process.env,
+            sessionId: activeSession.sessionId,
+            sessionKey: params.sessionKey,
+            provider: params.provider,
+            modelId: params.modelId,
+            modelApi: params.model.api,
+            workspaceDir: params.workspaceDir,
+          },
+        },
       );
 
       applyExtraParamsToAgent(
@@ -1041,10 +1023,6 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
-      if (modelPayloadLogger) {
-        activeSession.agent.streamFn = modelPayloadLogger.wrapStreamFn(activeSession.agent.streamFn);
-      }
-
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,

@@ -173,8 +173,24 @@ export async function dispatchReplyFromConfig(params: {
     }).catch(() => {});
   };
 
+  const consumePendingAssistantRunMetrics = (): AssistantRequestMetric[] => {
+    const merged: AssistantRequestMetric[] = [];
+    for (const runId of assistantRuns.keys()) {
+      const completed = consumeCompletedAssistantRequestMetrics(runId);
+      if (completed.length > 0) {
+        merged.push(...completed);
+      }
+    }
+    return merged;
+  };
+
   const reportFallbackCompletion = () => {
     if (didReportAssistantRequestMetrics) {
+      return;
+    }
+    const pendingMetrics = consumePendingAssistantRunMetrics();
+    if (pendingMetrics.length > 0) {
+      reportAssistantRequestMetrics(pendingMetrics);
       return;
     }
     reportAssistantRequestMetrics([

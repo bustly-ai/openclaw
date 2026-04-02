@@ -1,0 +1,3 @@
+export const BUSTLY_PROVIDER_ID = "bustly";
+export const BUSTLY_STANDARD_CHAT_MODEL_ID = "chat.lite";
+export const BUSTLY_STANDARD_CHAT_MODEL_REF = `${BUSTLY_PROVIDER_ID}/${BUSTLY_STANDARD_CHAT_MODEL_ID}`;

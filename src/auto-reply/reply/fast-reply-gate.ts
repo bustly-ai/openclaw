@@ -1,0 +1,693 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+  stream,
+  Type,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+  type Tool,
+} from "@mariozechner/pi-ai";
+import {
+  BUSTLY_PROVIDER_ID,
+  BUSTLY_STANDARD_CHAT_MODEL_ID,
+} from "../../agents/bustly-models.js";
+import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
+import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
+import { prepareSessionManagerForRun } from "../../agents/pi-embedded-runner/session-manager-init.js";
+import type { EmbeddedPiRunResult } from "../../agents/pi-embedded-runner/types.js";
+import { acquireSessionWriteLock, resolveSessionLockMaxHoldFromTimeout } from "../../agents/session-write-lock.js";
+import { consumeCompletedAssistantRequestMetrics } from "../../infra/assistant-request-metrics.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
+import { runTrackedModelRequest } from "../../infra/model-request-adapter.js";
+import { defaultRuntime } from "../../runtime.js";
+import type { TemplateContext } from "../templating.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { FollowupRun } from "./queue.js";
+
+const FAST_REPLY_GATE_TIMEOUT_MS = 8_000;
+const FAST_REPLY_GATE_MAX_TOKENS = 512;
+const FAST_REPLY_GATE_TOOL_NAME = "enter_agent_loop";
+const FAST_REPLY_GATE_TOOL: Tool = {
+  name: FAST_REPLY_GATE_TOOL_NAME,
+  description:
+    "Escalate this turn into the full agent loop when tools, workspace actions, multi-step reasoning, or deeper context are required.",
+  parameters: Type.Object({
+    reply: Type.String({
+      description:
+        "Required short user-facing acknowledgment in the user's language confirming you received the task and are checking it now.",
+    }),
+  }),
+};
+const FAST_REPLY_GATE_PROMPT = [
+  "You are the fast reply gate for inbound messages.",
+  "This is a lightweight router. Do not inspect project/workspace files or reason through startup instructions in this mode.",
+  "Direct replies must be a short final answer in the user's language.",
+  "Reply directly only when the user can be answered safely in one short assistant turn without tools, file access, code execution, web browsing, reminders, or deeper workspace/session context.",
+  `If the full agent loop is needed, call the ${FAST_REPLY_GATE_TOOL_NAME} tool and set reply to the short user-facing acknowledgment that should be sent now.`,
+  "When escalating, reply is required and must be something like a brief confirmation that you received the task and are checking it.",
+  "Call the tool when the user asks for coding work, debugging, repository inspection, file changes, commands, tool use, reminders, workflows, business analysis, or anything that depends on deeper session/workspace state.",
+  "If you are unsure, call the tool.",
+  "Reply in the user's language.",
+  "Direct replies must stay brief and final. Escalation acknowledgments must stay brief and avoid claiming the task is already completed. Never mention routing or tools.",
+].join("\n");
+
+type FastReplyGateSuccess = {
+  kind: "success";
+  runId: string;
+  runResult: EmbeddedPiRunResult;
+  provider: string;
+  model: string;
+};
+
+type FastReplyGateHandoff = {
+  kind: "handoff";
+  runId: string;
+  provider: string;
+  model: string;
+  assistantRequestMetrics: ReturnType<typeof consumeCompletedAssistantRequestMetrics>;
+};
+
+export type FastReplyGateResult = FastReplyGateSuccess | FastReplyGateHandoff | { kind: "continue" };
+
+type SessionMessage = Parameters<SessionManager["appendMessage"]>[0];
+type SessionAssistantMessage = Extract<SessionMessage, { role: "assistant" }>;
+type SessionUsage = SessionAssistantMessage["usage"];
+
+type SessionManagerLike = SessionManager & {
+  getLeafEntry?: () =>
+    | {
+        type?: string;
+        parentId?: string | null;
+        message?: { role?: string };
+      }
+    | undefined;
+  branch?: (id: string) => void;
+  resetLeaf?: () => void;
+};
+
+function logFastGate(message: string, details?: Record<string, unknown>) {
+  if (details && Object.keys(details).length > 0) {
+    defaultRuntime.log(`[fast-gate] ${message}`, details);
+    return;
+  }
+  defaultRuntime.log(`[fast-gate] ${message}`);
+}
+
+function buildGateExtraSystemPrompt(extraSystemPrompt?: string): string {
+  void extraSystemPrompt;
+  return FAST_REPLY_GATE_PROMPT;
+}
+
+function hasBustlyFastReplyConfig(run: FollowupRun["run"]): boolean {
+  const provider = run.config?.models?.providers?.[BUSTLY_PROVIDER_ID];
+  return Boolean(provider?.baseUrl?.trim() || (provider?.models?.length ?? 0) > 0);
+}
+
+function isRenderablePayload(payload: ReplyPayload): boolean {
+  if (payload.isError) {
+    return false;
+  }
+  if (payload.text?.trim()) {
+    return true;
+  }
+  if (payload.mediaUrl?.trim()) {
+    return true;
+  }
+  return (payload.mediaUrls?.some((url) => url.trim().length > 0) ?? false) === true;
+}
+
+function buildAssistantTranscriptText(payload: ReplyPayload): string {
+  const parts: string[] = [];
+  if (payload.text?.trim()) {
+    parts.push(payload.text.trim());
+  }
+  const mediaUrls = [
+    ...(payload.mediaUrl ? [payload.mediaUrl] : []),
+    ...(payload.mediaUrls ?? []),
+  ]
+    .map((value) => value.trim())
+    .filter(Boolean);
+  for (const mediaUrl of mediaUrls) {
+    parts.push(`[media attached: ${mediaUrl}]`);
+  }
+  return parts.join("\n");
+}
+
+function buildSessionUsage(usage?: {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+}): SessionUsage {
+  const input = usage?.input ?? 0;
+  const output = usage?.output ?? 0;
+  const cacheRead = usage?.cacheRead ?? 0;
+  const cacheWrite = usage?.cacheWrite ?? 0;
+  const totalTokens = usage?.total ?? input + output + cacheRead + cacheWrite;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+}
+
+function trimTrailingOrphanedUser(sessionManager: SessionManagerLike) {
+  const leafEntry = sessionManager.getLeafEntry?.();
+  if (leafEntry?.type !== "message" || leafEntry.message?.role !== "user") {
+    return;
+  }
+  if (leafEntry.parentId) {
+    sessionManager.branch?.(leafEntry.parentId);
+    return;
+  }
+  sessionManager.resetLeaf?.();
+}
+
+type FastGateToolCall = {
+  id: string;
+  name: string;
+  arguments: string;
+  reply?: string;
+};
+
+function extractToolReply(args: unknown): string | undefined {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return undefined;
+  }
+  const reply = (args as { reply?: unknown }).reply;
+  return typeof reply === "string" && reply.trim() ? reply.trim() : undefined;
+}
+
+function extractFastGateToolCalls(
+  event: AssistantMessageEvent,
+): FastGateToolCall[] {
+  if (event.type !== "toolcall_end" || event.toolCall.name !== FAST_REPLY_GATE_TOOL_NAME) {
+    return [];
+  }
+  return [
+    {
+      id: event.toolCall.id,
+      name: event.toolCall.name,
+      arguments: JSON.stringify(event.toolCall.arguments ?? {}),
+      reply: extractToolReply(event.toolCall.arguments),
+    },
+  ];
+}
+
+function extractAssistantText(message: AssistantMessage): string {
+  return message.content
+    .filter(
+      (block): block is Extract<AssistantMessage["content"][number], { type: "text" }> =>
+        block.type === "text",
+    )
+    .map((block) => block.text.trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function detectLikelyChinese(text: string): boolean {
+  return /[\u3400-\u9fff]/u.test(text);
+}
+
+function buildFallbackHandoffPreface(userText: string): string {
+  if (detectLikelyChinese(userText)) {
+    return "我先快速看一下关键情况，马上给你结论。";
+  }
+  return "I'll quickly check the key signals and come back with the answer.";
+}
+
+function applyFastGatePayloadCompat(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const payloadObj = payload as Record<string, unknown>;
+  delete payloadObj.reasoning_effort;
+  payloadObj.reasoning = {
+    ...(payloadObj.reasoning &&
+    typeof payloadObj.reasoning === "object" &&
+    !Array.isArray(payloadObj.reasoning)
+      ? (payloadObj.reasoning as Record<string, unknown>)
+      : {}),
+    effort: "none",
+  };
+}
+
+function summarizeFastGatePayloadCompat(payload: unknown): Record<string, unknown> | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const payloadObj = payload as Record<string, unknown>;
+  const reasoning =
+    payloadObj.reasoning && typeof payloadObj.reasoning === "object" && !Array.isArray(payloadObj.reasoning)
+      ? (payloadObj.reasoning as Record<string, unknown>)
+      : undefined;
+  return {
+    hasReasoningField: Boolean(reasoning),
+    reasoningEnabled: reasoning?.enabled,
+    reasoningKeys: reasoning ? Object.keys(reasoning).sort() : [],
+    hasReasoningEffortField: Object.hasOwn(payloadObj, "reasoning_effort"),
+  };
+}
+
+export async function appendFastReplyTurnToSessionTranscript(params: {
+  sessionFile: string;
+  sessionId: string;
+  workspaceDir: string;
+  commandBody: string;
+  payloads: ReplyPayload[];
+  provider: string;
+  model: string;
+  timeoutMs: number;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+}): Promise<void> {
+  const assistantPayloads = params.payloads
+    .filter(isRenderablePayload)
+    .map(buildAssistantTranscriptText)
+    .filter(Boolean);
+  const userText = params.commandBody.trim();
+  if (!userText && assistantPayloads.length === 0) {
+    return;
+  }
+
+  const sessionLock = await acquireSessionWriteLock({
+    sessionFile: params.sessionFile,
+    timeoutMs: params.timeoutMs,
+    maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
+      timeoutMs: params.timeoutMs,
+    }),
+  });
+
+  try {
+    const hadSessionFile = await fs
+      .stat(params.sessionFile)
+      .then(() => true)
+      .catch(() => false);
+    const sessionManager = SessionManager.open(params.sessionFile) as SessionManagerLike;
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile: params.sessionFile,
+      hadSessionFile,
+      sessionId: params.sessionId,
+      cwd: params.workspaceDir,
+    });
+    trimTrailingOrphanedUser(sessionManager);
+
+    const timestamp = Date.now();
+    if (userText) {
+      sessionManager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: userText }],
+        timestamp,
+      });
+    }
+
+    for (const assistantText of assistantPayloads) {
+      const assistantMessage: SessionAssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: assistantText }],
+        stopReason: "stop",
+        api: "openai-completions",
+        provider: params.provider,
+        model: params.model,
+        timestamp: Date.now(),
+        usage: buildSessionUsage(params.usage),
+      };
+      sessionManager.appendMessage(assistantMessage);
+    }
+  } finally {
+    await sessionLock.release();
+  }
+}
+
+export async function runFastReplyGate(params: {
+  commandBody: string;
+  followupRun: FollowupRun;
+  sessionCtx: TemplateContext;
+  opts?: GetReplyOptions;
+  onAssistantMessageStart?: () => Promise<void> | void;
+  onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
+}): Promise<FastReplyGateResult> {
+  if (params.opts?.images?.length) {
+    logFastGate("skip", {
+      reason: "images_attached",
+      sessionKey: params.followupRun.run.sessionKey,
+    });
+    return { kind: "continue" };
+  }
+  if (params.opts?.isHeartbeat) {
+    logFastGate("skip", {
+      reason: "heartbeat",
+      sessionKey: params.followupRun.run.sessionKey,
+    });
+    return { kind: "continue" };
+  }
+  if (params.opts?.retryWithoutNewUser) {
+    logFastGate("skip", {
+      reason: "retry_without_new_user",
+      sessionKey: params.followupRun.run.sessionKey,
+    });
+    return { kind: "continue" };
+  }
+  if (!hasBustlyFastReplyConfig(params.followupRun.run)) {
+    logFastGate("skip", {
+      reason: "missing_bustly_provider_config",
+      sessionKey: params.followupRun.run.sessionKey,
+    });
+    return { kind: "continue" };
+  }
+
+  const runId = `${params.opts?.runId?.trim() || randomUUID()}-fast-gate`;
+  const visibleRunId = params.opts?.runId?.trim() || runId;
+  const metricsRunId = visibleRunId;
+  const userText = params.commandBody.trim();
+  if (!userText) {
+    logFastGate("skip", {
+      reason: "empty_user_text",
+      runId,
+      sessionKey: params.followupRun.run.sessionKey,
+    });
+    return { kind: "continue" };
+  }
+  const startedAt = Date.now();
+  logFastGate("start", {
+    runId,
+    sessionKey: params.followupRun.run.sessionKey,
+    messageLength: userText.length,
+  });
+
+  try {
+    const resolved = resolveModel(
+      BUSTLY_PROVIDER_ID,
+      BUSTLY_STANDARD_CHAT_MODEL_ID,
+      params.followupRun.run.agentDir,
+      params.followupRun.run.config,
+    );
+    if (!resolved.model) {
+      logFastGate("skip", {
+        reason: "model_unresolved",
+        runId,
+        sessionKey: params.followupRun.run.sessionKey,
+      });
+      return { kind: "continue" };
+    }
+
+    const apiKey = requireApiKey(
+      await getApiKeyForModel({
+        model: resolved.model,
+        cfg: params.followupRun.run.config,
+        agentDir: params.followupRun.run.agentDir,
+      }),
+      BUSTLY_PROVIDER_ID,
+    );
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FAST_REPLY_GATE_TIMEOUT_MS);
+    const abortFromCaller = () => controller.abort();
+    params.opts?.abortSignal?.addEventListener("abort", abortFromCaller, { once: true });
+
+    let message: AssistantMessage;
+    let assistantText = "";
+    let pendingToolCalls: FastGateToolCall[] = [];
+    let emittedAssistantStart = false;
+    let emittedVisibleRunStart = false;
+    let payloadCompatLogged = false;
+    const ensureAssistantStart = async () => {
+      if (emittedAssistantStart) {
+        return;
+      }
+      emittedAssistantStart = true;
+      await params.onAssistantMessageStart?.();
+    };
+    const ensureVisibleRunStart = async () => {
+      if (emittedVisibleRunStart) {
+        return;
+      }
+      emittedVisibleRunStart = true;
+      params.opts?.onAgentRunStart?.(visibleRunId);
+      emitAgentEvent({
+        runId: visibleRunId,
+        sessionKey: params.followupRun.run.sessionKey,
+        stream: "lifecycle",
+        data: {
+          phase: "start",
+          startedAt,
+        },
+      });
+    };
+    const emitVisibleAssistantDelta = async (delta: string, text: string) => {
+      if (!delta) {
+        return;
+      }
+      await ensureAssistantStart();
+      await ensureVisibleRunStart();
+      emitAgentEvent({
+        runId: visibleRunId,
+        sessionKey: params.followupRun.run.sessionKey,
+        stream: "assistant",
+        data: {
+          text,
+          delta,
+        },
+      });
+      await params.onPartialReply?.({
+        text: delta,
+      });
+    };
+    try {
+      const eventStream = await Promise.resolve(
+        runTrackedModelRequest({
+          runId: metricsRunId,
+          request: (model, context, options) =>
+            stream(model, context, {
+              ...options,
+              onPayload: (payload) => {
+                applyFastGatePayloadCompat(payload);
+                if (!payloadCompatLogged) {
+                  payloadCompatLogged = true;
+                  logFastGate("payload", {
+                    runId,
+                    visibleRunId,
+                    sessionKey: params.followupRun.run.sessionKey,
+                    ...summarizeFastGatePayloadCompat(payload),
+                  });
+                }
+                (options as { onPayload?: (payload: unknown) => void } | undefined)?.onPayload?.(
+                  payload,
+                );
+              },
+            }),
+          model: {
+            ...resolved.model,
+            reasoning: false,
+          },
+          context: {
+            systemPrompt: buildGateExtraSystemPrompt(params.followupRun.run.extraSystemPrompt),
+            messages: [
+              {
+                role: "user",
+                content: userText,
+                timestamp: Date.now(),
+              },
+            ],
+            tools: [FAST_REPLY_GATE_TOOL],
+          },
+          options: {
+            apiKey,
+            maxTokens: FAST_REPLY_GATE_MAX_TOKENS,
+            signal: controller.signal,
+            toolChoice: "auto",
+          },
+          payloadLog: {
+            env: process.env,
+            sessionKey: params.followupRun.run.sessionKey,
+            provider: resolved.model.provider,
+            modelId: resolved.model.id,
+            modelApi: resolved.model.api,
+            workspaceDir: params.followupRun.run.workspaceDir,
+          },
+        }),
+      );
+      for await (const event of eventStream) {
+        if (event.type === "text_delta") {
+          assistantText += event.delta;
+          await emitVisibleAssistantDelta(event.delta, assistantText);
+          continue;
+        }
+        if (event.type === "text_end" && event.content && event.content !== assistantText) {
+          const delta = event.content.startsWith(assistantText)
+            ? event.content.slice(assistantText.length)
+            : event.content;
+          assistantText = event.content;
+          await emitVisibleAssistantDelta(delta, assistantText);
+          continue;
+        }
+        pendingToolCalls = [...pendingToolCalls, ...extractFastGateToolCalls(event)];
+      }
+      message = await eventStream.result();
+    } finally {
+      clearTimeout(timeout);
+      params.opts?.abortSignal?.removeEventListener("abort", abortFromCaller);
+    }
+
+    if (message.stopReason === "aborted" || message.stopReason === "error") {
+      logFastGate("fail-open", {
+        reason: message.stopReason,
+        runId,
+        visibleRunId,
+        sessionKey: params.followupRun.run.sessionKey,
+        durationMs: Date.now() - startedAt,
+        streamedTextLength: assistantText.length,
+        messageContentTypes: message.content.map((block) => block.type),
+      });
+      return { kind: "continue" };
+    }
+
+    if (pendingToolCalls.length === 0) {
+      pendingToolCalls = message.content
+        .filter(
+          (block): block is Extract<AssistantMessage["content"][number], { type: "toolCall" }> =>
+            block.type === "toolCall" && block.name === FAST_REPLY_GATE_TOOL_NAME,
+        )
+        .map((block) => ({
+          id: block.id,
+          name: block.name,
+          arguments: JSON.stringify(block.arguments ?? {}),
+          reply: extractToolReply(block.arguments),
+        }));
+    }
+
+    const extractedMessageText = assistantText || extractAssistantText(message);
+
+    if (pendingToolCalls.length > 0) {
+      let text = extractedMessageText || pendingToolCalls.find((call) => call.reply)?.reply;
+      let fallbackPrefaceUsed = false;
+      if (!text) {
+        text = buildFallbackHandoffPreface(userText);
+        fallbackPrefaceUsed = true;
+      }
+      if (!assistantText) {
+        assistantText = text;
+        await emitVisibleAssistantDelta(text, text);
+      }
+      const assistantRequestMetrics = consumeCompletedAssistantRequestMetrics(metricsRunId);
+      logFastGate("escalate", {
+        reason: "tool_call",
+        runId,
+        visibleRunId,
+        sessionKey: params.followupRun.run.sessionKey,
+        pendingToolCalls,
+        durationMs: Date.now() - startedAt,
+        textLength: text.length,
+        fallbackPrefaceUsed,
+        messageContentTypes: message.content.map((block) => block.type),
+      });
+      return {
+        kind: "handoff",
+        runId: visibleRunId,
+        provider: BUSTLY_PROVIDER_ID,
+        model: BUSTLY_STANDARD_CHAT_MODEL_ID,
+        assistantRequestMetrics,
+      };
+    }
+
+    const text = extractedMessageText;
+    if (!text) {
+      logFastGate("fail-open", {
+        reason: "empty_text_response",
+        runId,
+        visibleRunId,
+        sessionKey: params.followupRun.run.sessionKey,
+        durationMs: Date.now() - startedAt,
+        messageContentTypes: message.content.map((block) => block.type),
+      });
+      return { kind: "continue" };
+    }
+
+    if (!assistantText) {
+      assistantText = text;
+      await emitVisibleAssistantDelta(text, text);
+    }
+
+    const usage = {
+      input: message.usage.input,
+      output: message.usage.output,
+      cacheRead: message.usage.cacheRead,
+      cacheWrite: message.usage.cacheWrite,
+      total: message.usage.totalTokens,
+    };
+    const assistantRequestMetrics = consumeCompletedAssistantRequestMetrics(metricsRunId);
+    logFastGate("success", {
+      runId,
+      visibleRunId,
+      sessionKey: params.followupRun.run.sessionKey,
+      durationMs: Date.now() - startedAt,
+      stopReason: message.stopReason,
+      textLength: text.length,
+      messageContentTypes: message.content.map((block) => block.type),
+    });
+    if (emittedVisibleRunStart) {
+      emitAgentEvent({
+        runId: visibleRunId,
+        sessionKey: params.followupRun.run.sessionKey,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt,
+          endedAt: Date.now(),
+          aborted: false,
+        },
+      });
+    }
+    return {
+      kind: "success",
+      runId: visibleRunId,
+      runResult: {
+        payloads: [{ text }],
+        meta: {
+          durationMs: Date.now() - startedAt,
+          aborted: false,
+          hasAssistantMessage: true,
+          stopReason: message.stopReason,
+          assistantRequestMetrics,
+          agentMeta: {
+            sessionId: `${params.followupRun.run.sessionId}-fast-gate`,
+            provider: BUSTLY_PROVIDER_ID,
+            model: BUSTLY_STANDARD_CHAT_MODEL_ID,
+            usage,
+            lastCallUsage: usage,
+          },
+        },
+      },
+      provider: BUSTLY_PROVIDER_ID,
+      model: BUSTLY_STANDARD_CHAT_MODEL_ID,
+    };
+  } catch (error) {
+    logFastGate("fail-open", {
+      reason: "exception",
+      runId,
+      visibleRunId,
+      sessionKey: params.followupRun.run.sessionKey,
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { kind: "continue" };
+  }
+}
