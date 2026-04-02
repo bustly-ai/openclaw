@@ -102,6 +102,7 @@ type BustlyWorkspaceAgentSummary = {
   name: string;
   icon?: string;
   isMain: boolean;
+  createdAt: number | null;
   updatedAt: number | null;
 };
 
@@ -1073,6 +1074,37 @@ function saveBustlyAgentMetadata(agentWorkspaceDir: string, metadata: BustlyAgen
   );
 }
 
+function resolveBustlyAgentCreatedAt(
+  agentWorkspaceDir: string,
+  metadata: BustlyAgentMetadata,
+): number | null {
+  if (typeof metadata.createdAt === "number" && Number.isFinite(metadata.createdAt)) {
+    return metadata.createdAt;
+  }
+  for (const candidatePath of [agentWorkspaceDir, resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir)]) {
+    if (!existsSync(candidatePath)) {
+      continue;
+    }
+    try {
+      const stats = statSync(candidatePath);
+      const fallbackCreatedAt =
+        Number.isFinite(stats.birthtimeMs) && stats.birthtimeMs > 0
+          ? stats.birthtimeMs
+          : Number.isFinite(stats.ctimeMs) && stats.ctimeMs > 0
+            ? stats.ctimeMs
+            : Number.isFinite(stats.mtimeMs) && stats.mtimeMs > 0
+              ? stats.mtimeMs
+              : 0;
+      if (fallbackCreatedAt > 0) {
+        return Math.floor(fallbackCreatedAt);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 function buildBustlyConversationSessionKey(agentId: string): string {
   return buildBustlyAgentConversationSessionKey(agentId, randomUUID());
 }
@@ -1398,12 +1430,14 @@ function listBustlyWorkspaceAgents(workspaceId: string): BustlyWorkspaceAgentSum
       const metadata = loadBustlyAgentMetadata(workspaceDir);
       const sessions = listBustlyAgentConversationSessions(agentId);
       const displayName = entry.name?.trim() || agentName;
+      const createdAt = resolveBustlyAgentCreatedAt(workspaceDir, metadata);
       return {
         agentId,
         agentName,
         name: displayName,
         icon: metadata.icon,
         isMain: agentName === DEFAULT_BUSTLY_AGENT_NAME,
+        createdAt,
         updatedAt: sessions[0]?.updatedAt ?? metadata.createdAt ?? null,
       };
     })
@@ -1414,10 +1448,10 @@ function listBustlyWorkspaceAgents(workspaceId: string): BustlyWorkspaceAgentSum
       if (right.isMain && !left.isMain) {
         return 1;
       }
-      const leftUpdatedAt = left.updatedAt ?? 0;
-      const rightUpdatedAt = right.updatedAt ?? 0;
-      if (leftUpdatedAt !== rightUpdatedAt) {
-        return rightUpdatedAt - leftUpdatedAt;
+      const leftCreatedAt = left.createdAt ?? 0;
+      const rightCreatedAt = right.createdAt ?? 0;
+      if (leftCreatedAt !== rightCreatedAt) {
+        return rightCreatedAt - leftCreatedAt;
       }
       return left.name.localeCompare(right.name);
     });
