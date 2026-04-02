@@ -6,6 +6,7 @@ import {
   Type,
   type AssistantMessage,
   type AssistantMessageEvent,
+  type Message,
   type Tool,
 } from "@mariozechner/pi-ai";
 import {
@@ -42,10 +43,13 @@ const FAST_REPLY_GATE_TOOL: Tool = {
   }),
 };
 const FAST_REPLY_GATE_PROMPT = [
+  "You are Bustly, a Commerce Operating Agent for merchants.",
+  "You help merchants solve business operations, commerce, revenue, orders, customers, products, marketing, retention, and risk questions.",
   "You are the fast reply gate for inbound messages.",
   "This is a lightweight router. Do not inspect project/workspace files or reason through startup instructions in this mode.",
   "Direct replies must be a short final answer in the user's language.",
   "Reply directly only when the user can be answered safely in one short assistant turn without tools, file access, code execution, web browsing, reminders, or deeper workspace/session context.",
+  "Any commerce-related request must call the tool. This includes store operations, business performance, revenue, orders, customers, products, inventory, marketing, traffic, retention, risk, and business analysis.",
   `If the full agent loop is needed, call the ${FAST_REPLY_GATE_TOOL_NAME} tool and set reply to the short user-facing acknowledgment that should be sent now.`,
   "When escalating, reply is required and must be a brief confirmation that you received the task and are starting it now.",
   "Do not ask follow-up questions in the escalation reply.",
@@ -106,6 +110,17 @@ function buildGateExtraSystemPrompt(extraSystemPrompt?: string): string {
   void extraSystemPrompt;
   return FAST_REPLY_GATE_PROMPT;
 }
+
+type TranscriptMessageLike = {
+  role?: string;
+  content?: unknown;
+  stopReason?: string;
+};
+
+type FastGateLoopTurn = {
+  userText: string;
+  assistantText: string;
+};
 
 function hasBustlyFastReplyConfig(run: FollowupRun["run"]): boolean {
   const provider = run.config?.models?.providers?.[BUSTLY_PROVIDER_ID];
@@ -168,6 +183,148 @@ function buildSessionUsage(usage?: {
       total: 0,
     },
   };
+}
+
+function readMessageText(content: unknown): string {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return "";
+      }
+      if ((block as { type?: string }).type === "text" && typeof (block as { text?: unknown }).text === "string") {
+        return String((block as { text: string }).text).trim();
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+async function readRecentTranscriptMessages(sessionFile: string, maxLines = 300): Promise<TranscriptMessageLike[]> {
+  try {
+    const raw = await fs.readFile(sessionFile, "utf-8");
+    const lines = raw.split(/\r?\n/).filter(Boolean).slice(-maxLines);
+    const messages: TranscriptMessageLike[] = [];
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line) as { type?: string; message?: TranscriptMessageLike };
+        if (entry.type === "message" && entry.message && typeof entry.message === "object") {
+          messages.push(entry.message);
+        }
+      } catch {
+        // Ignore malformed transcript lines.
+      }
+    }
+    return messages;
+  } catch {
+    return [];
+  }
+}
+
+function extractRecentLoopTurns(messages: TranscriptMessageLike[], maxTurns = 2): FastGateLoopTurn[] {
+  const turns: FastGateLoopTurn[] = [];
+  let current:
+    | {
+        userText: string;
+        assistantText: string | null;
+        hadLoopActivity: boolean;
+      }
+    | null = null;
+
+  const flush = () => {
+    if (!current) {
+      return;
+    }
+    if (current.userText && current.assistantText && current.hadLoopActivity) {
+      turns.push({
+        userText: current.userText,
+        assistantText: current.assistantText,
+      });
+    }
+    current = null;
+  };
+
+  for (const message of messages) {
+    const role = message.role?.trim().toLowerCase() ?? "";
+    if (role === "user") {
+      flush();
+      const userText = readMessageText(message.content);
+      current = userText
+        ? {
+            userText,
+            assistantText: null,
+            hadLoopActivity: false,
+          }
+        : null;
+      continue;
+    }
+    if (!current) {
+      continue;
+    }
+    if (role === "toolresult" || role === "tool_result" || role === "tool") {
+      current.hadLoopActivity = true;
+      continue;
+    }
+    if (role !== "assistant") {
+      continue;
+    }
+    if ((message.stopReason ?? "").toLowerCase() === "tooluse") {
+      current.hadLoopActivity = true;
+    }
+    if ((message.stopReason ?? "").toLowerCase() === "stop") {
+      const assistantText = readMessageText(message.content);
+      if (assistantText) {
+        current.assistantText = assistantText;
+      }
+    }
+  }
+  flush();
+  return turns.slice(-maxTurns);
+}
+
+function buildHistoryAssistantMessage(text: string, timestamp: number): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: "openai-completions",
+    provider: BUSTLY_PROVIDER_ID,
+    model: "fast-gate-history",
+    usage: buildSessionUsage(),
+    stopReason: "stop",
+    timestamp,
+  };
+}
+
+async function buildFastGateMessages(params: {
+  sessionFile: string;
+  userText: string;
+}): Promise<Message[]> {
+  const recentMessages = await readRecentTranscriptMessages(params.sessionFile);
+  const recentLoopTurns = extractRecentLoopTurns(recentMessages, 2);
+  const now = Date.now();
+  const contextMessages: Message[] = [];
+  for (const [index, turn] of recentLoopTurns.entries()) {
+    const timestampBase = now - (recentLoopTurns.length - index) * 2;
+    contextMessages.push({
+      role: "user",
+      content: turn.userText,
+      timestamp: timestampBase,
+    });
+    contextMessages.push(buildHistoryAssistantMessage(turn.assistantText, timestampBase + 1));
+  }
+  contextMessages.push({
+    role: "user",
+    content: params.userText,
+    timestamp: now,
+  });
+  return contextMessages;
 }
 
 function trimTrailingOrphanedUser(sessionManager: SessionManagerLike) {
@@ -395,10 +552,15 @@ export async function runFastReplyGate(params: {
     return { kind: "continue" };
   }
   const startedAt = Date.now();
+  const contextMessages = await buildFastGateMessages({
+    sessionFile: params.followupRun.run.sessionFile,
+    userText,
+  });
   logFastGate("start", {
     runId,
     sessionKey: params.followupRun.run.sessionKey,
     messageLength: userText.length,
+    priorLoopTurns: Math.max(0, (contextMessages.length - 1) / 2),
   });
 
   try {
@@ -527,13 +689,7 @@ export async function runFastReplyGate(params: {
           },
           context: {
             systemPrompt: buildGateExtraSystemPrompt(params.followupRun.run.extraSystemPrompt),
-            messages: [
-              {
-                role: "user",
-                content: userText,
-                timestamp: Date.now(),
-              },
-            ],
+            messages: contextMessages,
             tools: [FAST_REPLY_GATE_TOOL],
           },
           options: {

@@ -292,6 +292,18 @@ async function readTranscriptMessages(sessionFile: string) {
     .map((entry) => entry.message ?? {});
 }
 
+async function writeTranscriptMessages(
+  sessionFile: string,
+  messages: Array<Record<string, unknown>>,
+) {
+  const lines = [
+    JSON.stringify({ type: "session", id: "session", version: 1, timestamp: new Date().toISOString() }),
+    ...messages.map((message) => JSON.stringify({ type: "message", message })),
+  ];
+  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+  await fs.writeFile(sessionFile, `${lines.join("\n")}\n`, "utf-8");
+}
+
 function readTextContent(content: unknown): string | undefined {
   if (!Array.isArray(content)) {
     return undefined;
@@ -680,6 +692,145 @@ describe("runReplyAgent fast reply gate", () => {
     });
 
     vi.unstubAllEnvs();
+  });
+
+  it("includes only the latest two loop turns in the fast gate context", async () => {
+    const tempDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-fast-gate-history-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTranscriptMessages(sessionFile, [
+      {
+        role: "user",
+        content: [{ type: "text", text: "old non-loop question" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "old non-loop answer" }],
+        stopReason: "stop",
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "loop question 1" }],
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "working 1" },
+          { type: "toolCall", id: "call-1", name: "exec", arguments: {} },
+        ],
+        stopReason: "toolUse",
+        timestamp: 4,
+      },
+      {
+        role: "toolResult",
+        content: [{ type: "text", text: "tool output 1" }],
+        timestamp: 5,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "loop final 1" }],
+        stopReason: "stop",
+        timestamp: 6,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "loop question 2" }],
+        timestamp: 7,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "working 2" },
+          { type: "toolCall", id: "call-2", name: "exec", arguments: {} },
+        ],
+        stopReason: "toolUse",
+        timestamp: 8,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "loop final 2" }],
+        stopReason: "stop",
+        timestamp: 9,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "loop question 3" }],
+        timestamp: 10,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "working 3" },
+          { type: "toolCall", id: "call-3", name: "exec", arguments: {} },
+        ],
+        stopReason: "toolUse",
+        timestamp: 11,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "loop final 3" }],
+        stopReason: "stop",
+        timestamp: 12,
+      },
+    ]);
+
+    const streamedMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Quick answer" }],
+      api: "openai-completions",
+      provider: "bustly",
+      model: "chat.standard",
+      usage: {
+        input: 12,
+        output: 8,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 20,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+    state.streamMock.mockImplementationOnce((_model, context) => {
+      expect(context.systemPrompt).toContain("You are Bustly, a Commerce Operating Agent for merchants.");
+      expect(context.systemPrompt).toContain("Any commerce-related request must call the tool.");
+      expect(context.messages).toMatchObject([
+        { role: "user", content: "loop question 2" },
+        { role: "assistant", content: "loop final 2" },
+        { role: "user", content: "loop question 3" },
+        { role: "assistant", content: "loop final 3" },
+        { role: "user", content: "hello" },
+      ]);
+      return createMockAssistantStream(
+        [
+          {
+            type: "done",
+            reason: "stop",
+            message: streamedMessage,
+          },
+        ],
+        streamedMessage,
+      );
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        sessionFile,
+        workspaceDir: tempDir,
+        config: bustlyConfig,
+      },
+    });
+
+    await run();
+    expect(state.streamMock).toHaveBeenCalledTimes(1);
   });
 
   it("streams a short preface and continues into the main agent loop when the fast gate requests escalation", async () => {
