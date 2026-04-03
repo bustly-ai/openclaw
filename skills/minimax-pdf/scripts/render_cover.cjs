@@ -35,12 +35,25 @@ if (!fs.existsSync(inputFile)) {
 
 // ── Playwright loader (tolerates global npm installs) ─────────────────────────
 function loadPlaywright() {
-  const { execSync } = require("child_process");
   try { return require("playwright"); } catch (_) {}
-  try {
-    const root = execSync("npm root -g", { stdio: ["ignore","pipe","ignore"] }).toString().trim();
-    return require(path.join(root, "playwright"));
-  } catch (_) {}
+
+  const globalRoots = [];
+  globalRoots.push(path.resolve(process.execPath, "..", "..", "lib", "node_modules"));
+  if (process.env.npm_config_prefix) {
+    globalRoots.push(path.join(process.env.npm_config_prefix, "lib", "node_modules"));
+  }
+  if (process.env.HOME) {
+    globalRoots.push(path.join(process.env.HOME, ".npm-global", "lib", "node_modules"));
+  }
+  globalRoots.push("/opt/homebrew/lib/node_modules");
+  globalRoots.push("/usr/local/lib/node_modules");
+
+  for (const root of globalRoots) {
+    try {
+      return require(path.join(root, "playwright"));
+    } catch (_) {}
+  }
+
   console.error(JSON.stringify({
     status: "error",
     error: "playwright not found",
@@ -57,18 +70,12 @@ function loadPlaywright() {
   try {
     browser = await chromium.launch();
   } catch (e) {
-    // Chromium binary missing — try installing
-    const { spawnSync } = require("child_process");
-    const r = spawnSync("npx", ["playwright", "install", "chromium"], { stdio: "inherit", shell: true });
-    if (r.status !== 0) {
-      console.error(JSON.stringify({
-        status: "error",
-        error: "Chromium not installed and auto-install failed",
-        hint: "Run: npx playwright install chromium"
-      }));
-      process.exit(2);
-    }
-    browser = await chromium.launch();
+    console.error(JSON.stringify({
+      status: "error",
+      error: `Chromium launch failed: ${String(e)}`,
+      hint: "Run: npx playwright install chromium"
+    }));
+    process.exit(2);
   }
 
   try {

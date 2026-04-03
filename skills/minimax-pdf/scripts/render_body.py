@@ -33,6 +33,8 @@ import json
 import os
 import sys
 import importlib.util
+from glob import glob
+from xml.sax.saxutils import escape as xml_escape
 
 
 # ── Dependency bootstrap ───────────────────────────────────────────────────────
@@ -59,19 +61,442 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.colors import HexColor
 from reportlab.lib.enums import TA_JUSTIFY, TA_CENTER
+from reportlab.lib.fonts import addMapping
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
 
 
 # ── Font registration ──────────────────────────────────────────────────────────
 def register_fonts(tokens: dict):
-    """Register TTF fonts from token font_paths if present."""
-    for name, fpath in tokens.get("font_paths", {}).items():
-        if os.path.exists(fpath):
-            try:
-                pdfmetrics.registerFont(TTFont(name, fpath))
-            except Exception:
-                pass
+    """Register token-declared fonts. Supports TTF/TTC files and CID fonts."""
+    registered = set(pdfmetrics.getRegisteredFontNames())
+
+    for name, raw_spec in tokens.get("font_paths", {}).items():
+        if name in registered:
+            continue
+
+        spec = raw_spec if isinstance(raw_spec, dict) else {"path": raw_spec}
+        kind = spec.get("kind", "ttf")
+
+        try:
+            if kind == "cid":
+                pdfmetrics.registerFont(UnicodeCIDFont(spec.get("cidFont", name)))
+            else:
+                fpath = spec.get("path", "")
+                if not fpath or not os.path.exists(fpath):
+                    continue
+                pdfmetrics.registerFont(TTFont(
+                    name,
+                    fpath,
+                    subfontIndex=int(spec.get("subfontIndex", 0)),
+                ))
+            registered.add(name)
+        except Exception:
+            pass
+
+    for name in (
+        tokens.get("font_display_rl"),
+        tokens.get("font_body_rl"),
+        tokens.get("font_body_b_rl"),
+    ):
+        if not name:
+            continue
+        try:
+            addMapping(name, 0, 0, name)
+        except Exception:
+            pass
+
+    body_regular = tokens.get("font_body_rl")
+    body_bold = tokens.get("font_body_b_rl")
+    if body_regular and body_bold:
+        try:
+            addMapping(body_regular, 0, 0, body_regular)
+            addMapping(body_regular, 1, 0, body_bold)
+        except Exception:
+            pass
+
+
+def _detect_cjk_scripts_in_text(text: str) -> set[str]:
+    scripts: set[str] = set()
+    for ch in text:
+        cp = ord(ch)
+        if (
+            0x3400 <= cp <= 0x4DBF
+            or 0x4E00 <= cp <= 0x9FFF
+            or 0xF900 <= cp <= 0xFAFF
+            or 0x20000 <= cp <= 0x2EBEF
+        ):
+            scripts.add("han")
+        elif (
+            0x3040 <= cp <= 0x309F
+            or 0x30A0 <= cp <= 0x30FF
+            or 0x31F0 <= cp <= 0x31FF
+            or 0xFF66 <= cp <= 0xFF9D
+        ):
+            scripts.add("kana")
+        elif (
+            0x1100 <= cp <= 0x11FF
+            or 0x3130 <= cp <= 0x318F
+            or 0xA960 <= cp <= 0xA97F
+            or 0xAC00 <= cp <= 0xD7AF
+            or 0xD7B0 <= cp <= 0xD7FF
+        ):
+            scripts.add("hangul")
+    return scripts
+
+
+def _value_cjk_scripts(value) -> set[str]:
+    if isinstance(value, str):
+        return _detect_cjk_scripts_in_text(value)
+    if isinstance(value, list):
+        scripts: set[str] = set()
+        for item in value:
+            scripts |= _value_cjk_scripts(item)
+        return scripts
+    if isinstance(value, dict):
+        scripts: set[str] = set()
+        for item in value.values():
+            scripts |= _value_cjk_scripts(item)
+        return scripts
+    return set()
+
+
+def _resolve_first_font_path(candidates: list[str]) -> str:
+    for candidate in candidates:
+        if not candidate:
+            continue
+        expanded = os.path.expandvars(os.path.expanduser(candidate))
+        if any(ch in expanded for ch in "*?[]"):
+            for match in sorted(glob(expanded, recursive=True)):
+                if os.path.isfile(match):
+                    return match
+        elif os.path.isfile(expanded):
+            return expanded
+    return ""
+
+
+def _font_spec_usable(spec: dict) -> bool:
+    kind = spec.get("kind", "ttf")
+    try:
+        if kind == "cid":
+            UnicodeCIDFont(spec.get("cidFont", "STSong-Light"))
+            return True
+        path = spec.get("path", "")
+        if not path or not os.path.isfile(path):
+            return False
+        TTFont(
+            "MiniMaxPDF-CJK-Probe",
+            path,
+            subfontIndex=int(spec.get("subfontIndex", 0)),
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _make_file_font_bundle(
+    source: str,
+    display_candidates: list[str],
+    body_candidates: list[str],
+    body_bold_candidates: list[str] | None = None,
+) -> dict | None:
+    display_path = _resolve_first_font_path(display_candidates)
+    body_path = _resolve_first_font_path(body_candidates)
+    bold_path = _resolve_first_font_path(body_bold_candidates or [])
+
+    if not body_path and display_path:
+        body_path = display_path
+    if not display_path and body_path:
+        display_path = body_path
+    if not bold_path:
+        bold_path = display_path or body_path
+
+    if not display_path or not body_path or not bold_path:
+        return None
+
+    bundle = {
+        "font_source": source,
+        "font_display_rl": "MiniMaxPDF-CJK-Display",
+        "font_body_rl": "MiniMaxPDF-CJK-Body",
+        "font_body_b_rl": "MiniMaxPDF-CJK-BodyBold",
+        "font_paths": {
+            "MiniMaxPDF-CJK-Display": {"path": display_path, "subfontIndex": 0},
+            "MiniMaxPDF-CJK-Body": {"path": body_path, "subfontIndex": 0},
+            "MiniMaxPDF-CJK-BodyBold": {"path": bold_path, "subfontIndex": 0},
+        },
+    }
+    if all(_font_spec_usable(spec) for spec in bundle["font_paths"].values()):
+        return bundle
+    return None
+
+
+def _env_font_bundle() -> dict | None:
+    display = os.environ.get("MINIMAX_PDF_CJK_DISPLAY_FONT", "").strip()
+    body = os.environ.get("MINIMAX_PDF_CJK_BODY_FONT", "").strip()
+    bold = os.environ.get("MINIMAX_PDF_CJK_BODY_BOLD_FONT", "").strip()
+    if not any((display, body, bold)):
+        return None
+    return _make_file_font_bundle(
+        "env-cjk-font-override",
+        [display or body or bold],
+        [body or display or bold],
+        [bold or body or display],
+    )
+
+
+def _platform_file_font_bundles(scripts: set[str]) -> list[dict]:
+    bundles: list[dict] = []
+    wide_unicode = bool({"kana", "hangul"} & scripts) or len(scripts) > 1
+
+    if sys.platform == "darwin":
+        if wide_unicode:
+            bundle = _make_file_font_bundle(
+                "macos-arial-unicode",
+                ["/Library/Fonts/Arial Unicode.ttf"],
+                ["/Library/Fonts/Arial Unicode.ttf"],
+                ["/Library/Fonts/Arial Unicode.ttf"],
+            )
+            if bundle:
+                bundles.append(bundle)
+
+        if "han" in scripts:
+            bundle = _make_file_font_bundle(
+                "macos-stheiti",
+                ["/System/Library/Fonts/STHeiti Medium.ttc"],
+                ["/System/Library/Fonts/STHeiti Light.ttc"],
+                ["/System/Library/Fonts/STHeiti Medium.ttc"],
+            )
+            if bundle:
+                bundles.append(bundle)
+
+        if not wide_unicode:
+            bundle = _make_file_font_bundle(
+                "macos-arial-unicode",
+                ["/Library/Fonts/Arial Unicode.ttf"],
+                ["/Library/Fonts/Arial Unicode.ttf"],
+                ["/Library/Fonts/Arial Unicode.ttf"],
+            )
+            if bundle:
+                bundles.append(bundle)
+
+        return bundles
+
+    if sys.platform.startswith("win"):
+        windir = os.environ.get("WINDIR", r"C:\Windows")
+        fonts_dir = os.path.join(windir, "Fonts")
+
+        if wide_unicode:
+            bundle = _make_file_font_bundle(
+                "windows-arial-unicode",
+                [os.path.join(fonts_dir, "arialuni.ttf")],
+                [os.path.join(fonts_dir, "arialuni.ttf")],
+                [os.path.join(fonts_dir, "arialuni.ttf")],
+            )
+            if bundle:
+                bundles.append(bundle)
+
+        if "hangul" in scripts:
+            bundle = _make_file_font_bundle(
+                "windows-malgun",
+                [os.path.join(fonts_dir, "malgunbd.ttf"), os.path.join(fonts_dir, "malgun.ttf")],
+                [os.path.join(fonts_dir, "malgun.ttf"), os.path.join(fonts_dir, "gulim.ttc")],
+                [os.path.join(fonts_dir, "malgunbd.ttf"), os.path.join(fonts_dir, "malgun.ttf")],
+            )
+            if bundle:
+                bundles.append(bundle)
+
+        if "kana" in scripts:
+            bundle = _make_file_font_bundle(
+                "windows-meiryo",
+                [os.path.join(fonts_dir, "meiryob.ttc"), os.path.join(fonts_dir, "YuGothB.ttc")],
+                [os.path.join(fonts_dir, "meiryo.ttc"), os.path.join(fonts_dir, "YuGothM.ttc"), os.path.join(fonts_dir, "msgothic.ttc")],
+                [os.path.join(fonts_dir, "meiryob.ttc"), os.path.join(fonts_dir, "YuGothB.ttc"), os.path.join(fonts_dir, "msgothic.ttc")],
+            )
+            if bundle:
+                bundles.append(bundle)
+
+        if "han" in scripts:
+            bundle = _make_file_font_bundle(
+                "windows-yahei",
+                [os.path.join(fonts_dir, "msyhbd.ttc"), os.path.join(fonts_dir, "msyh.ttc"), os.path.join(fonts_dir, "simhei.ttf")],
+                [os.path.join(fonts_dir, "msyh.ttc"), os.path.join(fonts_dir, "simsun.ttc"), os.path.join(fonts_dir, "simsun.ttc"), os.path.join(fonts_dir, "msjh.ttc")],
+                [os.path.join(fonts_dir, "msyhbd.ttc"), os.path.join(fonts_dir, "simhei.ttf"), os.path.join(fonts_dir, "msjhbd.ttc"), os.path.join(fonts_dir, "msyh.ttc")],
+            )
+            if bundle:
+                bundles.append(bundle)
+
+        if not wide_unicode:
+            bundle = _make_file_font_bundle(
+                "windows-arial-unicode",
+                [os.path.join(fonts_dir, "arialuni.ttf")],
+                [os.path.join(fonts_dir, "arialuni.ttf")],
+                [os.path.join(fonts_dir, "arialuni.ttf")],
+            )
+            if bundle:
+                bundles.append(bundle)
+
+        return bundles
+
+    linux_roots = [
+        "/usr/share/fonts",
+        "/usr/local/share/fonts",
+        os.path.expanduser("~/.local/share/fonts"),
+        os.path.expanduser("~/.fonts"),
+    ]
+
+    def patterns(*names: str) -> list[str]:
+        out: list[str] = []
+        for root in linux_roots:
+            out.extend([os.path.join(root, "**", name) for name in names])
+        return out
+
+    generic_linux = _make_file_font_bundle(
+        "linux-noto-cjk",
+        patterns(
+            "NotoSansCJK-Bold.ttc",
+            "NotoSerifCJK-Bold.ttc",
+            "NotoSansCJK-Regular.ttc",
+            "NotoSansSC-Bold.ttf",
+            "NotoSansTC-Bold.ttf",
+            "NotoSansJP-Bold.ttf",
+            "NotoSansKR-Bold.ttf",
+        ),
+        patterns(
+            "NotoSansCJK-Regular.ttc",
+            "NotoSerifCJK-Regular.ttc",
+            "NotoSansSC-Regular.ttf",
+            "NotoSansTC-Regular.ttf",
+            "NotoSansJP-Regular.ttf",
+            "NotoSansKR-Regular.ttf",
+            "DroidSansFallbackFull.ttf",
+            "wqy-zenhei.ttc",
+            "wqy-microhei.ttc",
+            "WenQuanYi*.ttf",
+        ),
+        patterns(
+            "NotoSansCJK-Bold.ttc",
+            "NotoSerifCJK-Bold.ttc",
+            "NotoSansSC-Bold.ttf",
+            "NotoSansTC-Bold.ttf",
+            "NotoSansJP-Bold.ttf",
+            "NotoSansKR-Bold.ttf",
+            "DroidSansFallbackFull.ttf",
+            "wqy-zenhei.ttc",
+            "wqy-microhei.ttc",
+            "WenQuanYi*.ttf",
+        ),
+    )
+    if generic_linux:
+        bundles.append(generic_linux)
+
+    source_han = _make_file_font_bundle(
+        "linux-sourcehan-han",
+        patterns("SourceHanSans*Bold*.ttc", "SourceHanSans*Bold*.ttf"),
+        patterns("SourceHanSans*Regular*.ttc", "SourceHanSans*Regular*.ttf", "SourceHanSans*.ttc"),
+        patterns("SourceHanSans*Bold*.ttc", "SourceHanSans*Bold*.ttf", "SourceHanSans*.ttc"),
+    )
+    if source_han and "han" in scripts:
+        bundles.append(source_han)
+
+    return bundles
+
+
+def _cid_font_bundle(scripts: set[str]) -> dict:
+    if "hangul" in scripts:
+        return {
+            "font_source": "cid-hangul",
+            "font_display_rl": "HYGothic-Medium",
+            "font_body_rl": "HYSMyeongJo-Medium",
+            "font_body_b_rl": "HYGothic-Medium",
+            "font_paths": {
+                "HYGothic-Medium": {"kind": "cid", "cidFont": "HYGothic-Medium"},
+                "HYSMyeongJo-Medium": {"kind": "cid", "cidFont": "HYSMyeongJo-Medium"},
+            },
+        }
+    if "kana" in scripts:
+        return {
+            "font_source": "cid-japanese",
+            "font_display_rl": "HeiseiKakuGo-W5",
+            "font_body_rl": "HeiseiMin-W3",
+            "font_body_b_rl": "HeiseiKakuGo-W5",
+            "font_paths": {
+                "HeiseiKakuGo-W5": {"kind": "cid", "cidFont": "HeiseiKakuGo-W5"},
+                "HeiseiMin-W3": {"kind": "cid", "cidFont": "HeiseiMin-W3"},
+            },
+        }
+    return {
+        "font_source": "cid-stsong-light",
+        "font_display_rl": "STSong-Light",
+        "font_body_rl": "STSong-Light",
+        "font_body_b_rl": "STSong-Light",
+        "font_paths": {
+            "STSong-Light": {
+                "kind": "cid",
+                "cidFont": "STSong-Light",
+            },
+        },
+    }
+
+
+def _pick_cjk_font_bundle(scripts: set[str]) -> dict:
+    candidates: list[dict] = []
+    env_bundle = _env_font_bundle()
+    if env_bundle:
+        candidates.append(env_bundle)
+    candidates.extend(_platform_file_font_bundles(scripts))
+    candidates.append(_cid_font_bundle(scripts))
+
+    for bundle in candidates:
+        if all(_font_spec_usable(spec) for spec in bundle.get("font_paths", {}).values()):
+            return bundle
+
+    return _cid_font_bundle({"han"})
+
+
+def apply_font_fallback(tokens: dict, content: list) -> dict:
+    payload = {
+        "title": tokens.get("title", ""),
+        "author": tokens.get("author", ""),
+        "date": tokens.get("date", ""),
+        "content": content,
+    }
+    scripts = _value_cjk_scripts(payload)
+    if not scripts:
+        return tokens
+
+    bundle = _pick_cjk_font_bundle(scripts)
+    merged = dict(tokens)
+    merged["font_display_rl"] = bundle["font_display_rl"]
+    merged["font_body_rl"] = bundle["font_body_rl"]
+    merged["font_body_b_rl"] = bundle["font_body_b_rl"]
+    merged["font_heading"] = merged["font_display_rl"]
+    merged["font_body_b"] = merged["font_body_b_rl"]
+    merged["font_paths"] = {
+        **tokens.get("font_paths", {}),
+        **bundle["font_paths"],
+    }
+    merged["font_source"] = bundle["font_source"]
+    merged["cjk_scripts"] = sorted(scripts)
+    return merged
+
+
+def _block_text(item: dict, default: str = "") -> str:
+    for key in ("text", "content", "value", "summary", "abstract"):
+        value = item.get(key)
+        if isinstance(value, str):
+            return value
+    return default
+
+
+def _table_headers(item: dict) -> list:
+    headers = item.get("headers", item.get("header", item.get("columns", [])))
+    return list(headers) if isinstance(headers, (list, tuple)) else []
+
+
+def _table_rows(item: dict) -> list:
+    rows = item.get("rows", item.get("data", []))
+    return list(rows) if isinstance(rows, (list, tuple)) else []
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -107,12 +532,13 @@ class BibliographyItem(Flowable):
 
     LABEL_W = 28
 
-    def __init__(self, ref_id: str, text: str, style, dark: str):
+    def __init__(self, ref_id: str, text: str, style, dark: str, label_font: str):
         super().__init__()
         self._id    = ref_id
         self._text  = text
         self._style = style
         self._dark  = HexColor(dark)
+        self._label_font = label_font
 
     def wrap(self, aw, ah):
         self._w    = aw
@@ -124,7 +550,7 @@ class BibliographyItem(Flowable):
     def draw(self):
         c = self.canv
         c.setFillColor(self._dark)
-        c.setFont("Helvetica-Bold", 8.5)
+        c.setFont(self._label_font, 8.5)
         c.drawString(0, self._h - 12, f"[{self._id}]")
         self._para.drawOn(c, self.LABEL_W, 2)
 
@@ -268,7 +694,7 @@ def make_styles(t: dict) -> dict:
             textColor=HexColor(dk),
         ),
         "eq_label": ParagraphStyle("EqLabel",
-            fontName="Helvetica", fontSize=9, leading=12,
+            fontName=bf, fontSize=9, leading=12,
             textColor=HexColor(mu),
         ),
     }
@@ -612,7 +1038,7 @@ def _render_flowchart_png(item: dict, accent: str, dark: str,
 
 def _add_heading(story: list, item: dict, ctx: dict, level: int):
     key  = f"h{level}"
-    para = Paragraph(item["text"], ctx["styles"][key])
+    para = Paragraph(_block_text(item), ctx["styles"][key])
     if level == 1:
         story.append(KeepTogether([para, _divider(ctx["acc"])]))
     else:
@@ -620,27 +1046,35 @@ def _add_heading(story: list, item: dict, ctx: dict, level: int):
 
 
 def _add_body(story: list, item: dict, ctx: dict):
-    story.append(Paragraph(item["text"], ctx["styles"]["body"]))
+    story.append(Paragraph(_block_text(item), ctx["styles"]["body"]))
 
 
 def _add_bullet(story: list, item: dict, ctx: dict):
     story.append(Paragraph(
-        f"\u2022\u2002{item['text']}", ctx["styles"]["bullet"]
+        f"\u2022\u2002{_block_text(item)}", ctx["styles"]["bullet"]
     ))
 
 
 def _add_numbered(story: list, item: dict, ctx: dict):
     ctx["numbered_n"] += 1
     story.append(Paragraph(
-        f"{ctx['numbered_n']}.\u2002{item['text']}",
+        f"{ctx['numbered_n']}.\u2002{_block_text(item)}",
         ctx["styles"]["numbered"],
     ))
 
 
 def _add_callout(story: list, item: dict, ctx: dict):
+    text = _block_text(item)
+    title = str(item.get("title", "")).strip()
+    if title:
+        lines = [xml_escape(title)]
+        if text:
+            lines.append(xml_escape(text).replace("\n", "<br/>"))
+        text = "<br/>".join(lines)
+
     story.append(Spacer(1, 8))
     story.append(CalloutBox(
-        item["text"], ctx["styles"]["callout"], ctx["acc"], ctx["acc_lt"]
+        text, ctx["styles"]["callout"], ctx["acc"], ctx["acc_lt"]
     ))
     story.append(Spacer(1, 8))
 
@@ -652,14 +1086,20 @@ def _add_table(story: list, item: dict, ctx: dict):
     acc      = ctx["acc"]
     acc_lt   = ctx["acc_lt"]
 
-    headers = [Paragraph(h, styles["table_header"]) for h in item["headers"]]
+    raw_headers = _table_headers(item)
+    if not raw_headers:
+        first_row = next((row for row in _table_rows(item) if isinstance(row, (list, tuple))), [])
+        raw_headers = [""] * len(first_row)
+    headers = [Paragraph(str(h), styles["table_header"]) for h in raw_headers]
     rows    = [
         [Paragraph(str(c), styles["table_cell"]) for c in row]
-        for row in item.get("rows", [])
+        for row in _table_rows(item)
     ]
-    n_cols = len(item["headers"])
+    n_cols = len(raw_headers)
 
     # Optional col_widths as fractions summing to 1.0
+    if n_cols == 0:
+        return
     if "col_widths" in item and len(item["col_widths"]) == n_cols:
         col_w = [usable_w * f for f in item["col_widths"]]
     else:
@@ -733,7 +1173,7 @@ def _add_code(story: list, item: dict, ctx: dict):
     uw     = ctx["usable_w"]
     lang   = item.get("language", "")
 
-    pre = Preformatted(item.get("text", ""), ctx["styles"]["code"])
+    pre = Preformatted(_block_text(item), ctx["styles"]["code"])
     tbl = Table([[pre]], colWidths=[uw])
     tbl.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, -1), HexColor(acc_lt)),
@@ -767,7 +1207,7 @@ def _add_math(story: list, item: dict, ctx: dict):
     acc    = ctx["acc"]
     acc_lt = ctx["acc_lt"]
     uw     = ctx["usable_w"]
-    expr   = item.get("text", "").strip()
+    expr   = _block_text(item).strip()
     label  = item.get("label", "").strip()
 
     png = _render_math_png(expr)
@@ -921,6 +1361,7 @@ def _add_bibliography(story: list, item: dict, ctx: dict):
             ref.get("text", ""),
             ctx["styles"]["bib"],
             ctx["dark"],
+            ctx["tokens"]["font_body_b_rl"],
         ))
 
 
@@ -953,8 +1394,15 @@ def build_story(content: list, tokens: dict, styles: dict) -> list:
 
     story: list = []
 
-    for item in content:
-        kind = item.get("type", "body")
+    for raw_item in content:
+        if isinstance(raw_item, str):
+            item = {"type": "body", "text": raw_item}
+        elif isinstance(raw_item, dict):
+            item = raw_item
+        else:
+            continue
+
+        kind = str(item.get("type", "body")).strip().lower()
 
         if kind in _RESETS_NUMBERED:
             ctx["numbered_n"] = 0
@@ -976,7 +1424,7 @@ def build_story(content: list, tokens: dict, styles: dict) -> list:
         elif kind == "bibliography": _add_bibliography(story, item, ctx)
         elif kind == "divider":      story.append(_divider(ctx["acc"]))
         elif kind == "caption":
-            story.append(Paragraph(item["text"], styles["caption"]))
+            story.append(Paragraph(_block_text(item), styles["caption"]))
         elif kind == "pagebreak":    story.append(PageBreak())
         elif kind == "spacer":       story.append(Spacer(1, item.get("pt", 12)))
 
@@ -988,6 +1436,7 @@ def build_story(content: list, tokens: dict, styles: dict) -> list:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build(tokens: dict, content: list, out_path: str) -> dict:
+    tokens = apply_font_fallback(tokens, content)
     register_fonts(tokens)
     styles = make_styles(tokens)
 
@@ -1002,7 +1451,12 @@ def build(tokens: dict, content: list, out_path: str) -> dict:
     doc.build(build_story(content, tokens, styles))
 
     size = os.path.getsize(out_path)
-    return {"status": "ok", "out": out_path, "size_kb": size // 1024}
+    return {
+        "status": "ok",
+        "out": out_path,
+        "size_kb": size // 1024,
+        "font_source": tokens.get("font_source", "default"),
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
