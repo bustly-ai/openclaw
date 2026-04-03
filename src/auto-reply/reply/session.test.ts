@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import { saveSessionStore } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -1132,35 +1132,6 @@ describe("persistSessionUsageUpdate", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(250_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
-  });
-
-  it("persists latest run timing diagnostics for downstream chat reporting", async () => {
-    const storePath = await createStorePath("openclaw-usage-");
-    const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: { sessionId: "s1", updatedAt: Date.now() },
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 15_439, output: 21, total: 15_460 },
-      lastCallUsage: { input: 15_439, output: 21, total: 15_460 },
-      promptTokens: 15_439,
-      runId: "run-1774839963983-c53ivqa",
-      ttftMs: 4554,
-      ttlrMs: 6800,
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].latestRunId).toBe("run-1774839963983-c53ivqa");
-    expect(stored[sessionKey].latestRunTtftMs).toBe(4554);
-    expect(stored[sessionKey].latestRunTtlrMs).toBe(6800);
-    expect(stored[sessionKey].totalTokens).toBe(15_439);
-    expect(stored[sessionKey].outputTokens).toBe(21);
   });
 });
 

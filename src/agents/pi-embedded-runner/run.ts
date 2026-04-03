@@ -1,10 +1,12 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
+import type { RunEmbeddedPiAgentParams } from "./run/params.js";
+import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -48,25 +50,23 @@ import {
   pickFallbackThinkingLevel,
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
-import {
-  isOutputLimitStopReason,
-  isOutputLimitWithoutReply,
-  OUTPUT_LIMIT_ERROR,
-} from "../pi-embedded-openrouter.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
+import {
+  isOutputLimitStopReason,
+  isOutputLimitWithoutReply,
+  OUTPUT_LIMIT_ERROR,
+} from "../pi-embedded-openrouter.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
-import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
 } from "./tool-result-truncation.js";
-import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -1063,20 +1063,10 @@ export async function runEmbeddedPiAgent(
           // the final call, giving an accurate snapshot of current context.
           const lastCallUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const promptTokens = derivePromptTokens(lastRunPromptUsage);
-          const clientTtftMs =
-            attempt.openclawPreModelMs != null && attempt.openclawFirstTokenWaitMs != null
-              ? attempt.openclawPreModelMs + attempt.openclawFirstTokenWaitMs
-              : undefined;
-          const clientTtlrMs =
-            attempt.openclawPreModelMs != null && attempt.openclawStreamTotalMs != null
-              ? attempt.openclawPreModelMs + attempt.openclawStreamTotalMs
-              : undefined;
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             provider: lastAssistant?.provider ?? provider,
             model: lastAssistant?.model ?? model.id,
-            clientTtftMs,
-            clientTtlrMs,
             usage,
             lastCallUsage: lastCallUsage ?? undefined,
             promptTokens,

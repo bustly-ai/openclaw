@@ -42,14 +42,6 @@ type SupabaseChatRow = {
   metadata: Record<string, unknown>;
 };
 
-type SessionChatMetrics = {
-  ttftMs: number | null;
-  ttlrMs: number | null;
-  inputTokens: number | null;
-  outputTokens: number | null;
-  totalTokens: number | null;
-};
-
 const uploadedLineCursor = new Map<string, number>();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -167,38 +159,8 @@ const buildRows = (params: {
   senderName: string | null;
   senderUsername: string | null;
   senderE164: string | null;
-  sessionMetrics: SessionChatMetrics;
   messages: ParsedMessage[];
 }): SupabaseChatRow[] => {
-  const enrichRawEntry = (msg: ParsedMessage): unknown => {
-    if (msg.role !== "assistant" || !msg.rawEntry || typeof msg.rawEntry !== "object") {
-      return msg.rawEntry;
-    }
-    const entry = {
-      ...(msg.rawEntry as Record<string, unknown>),
-    };
-    const rawMessage =
-      entry.message && typeof entry.message === "object"
-        ? { ...(entry.message as Record<string, unknown>) }
-        : {};
-    const usage =
-      rawMessage.usage && typeof rawMessage.usage === "object"
-        ? { ...(rawMessage.usage as Record<string, unknown>) }
-        : {};
-    if (params.sessionMetrics.inputTokens != null) {
-      usage.input = params.sessionMetrics.inputTokens;
-    }
-    if (params.sessionMetrics.outputTokens != null) {
-      usage.output = params.sessionMetrics.outputTokens;
-    }
-    if (params.sessionMetrics.totalTokens != null) {
-      usage.totalTokens = params.sessionMetrics.totalTokens;
-    }
-    rawMessage.usage = usage;
-    entry.message = rawMessage;
-    return entry;
-  };
-
   return params.messages.map((msg) => ({
     workspace_id: params.workspaceId,
     user_uid: params.userUid,
@@ -218,9 +180,7 @@ const buildRows = (params: {
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
-      ttftMs: msg.role === "assistant" ? params.sessionMetrics.ttftMs : null,
-      ttlrMs: msg.role === "assistant" ? params.sessionMetrics.ttlrMs : null,
-      raw: enrichRawEntry(msg),
+      raw: msg.rawEntry,
     },
   }));
 };
@@ -294,7 +254,7 @@ export async function reportSessionCompletionToSupabase(
     return;
   }
 
-  const { sessionEntry, sessionId, sessionFile } = resolveSessionEntry({
+  const { sessionId, sessionFile } = resolveSessionEntry({
     cfg: params.cfg,
     sessionKey,
   });
@@ -320,16 +280,6 @@ export async function reportSessionCompletionToSupabase(
     senderName: trimOrNull(params.senderName),
     senderUsername: trimOrNull(params.senderUsername),
     senderE164: trimOrNull(params.senderE164),
-    sessionMetrics: {
-      ttftMs:
-        typeof sessionEntry?.latestRunTtftMs === "number" ? sessionEntry.latestRunTtftMs : null,
-      ttlrMs:
-        typeof sessionEntry?.latestRunTtlrMs === "number" ? sessionEntry.latestRunTtlrMs : null,
-      inputTokens: typeof sessionEntry?.inputTokens === "number" ? sessionEntry.inputTokens : null,
-      outputTokens:
-        typeof sessionEntry?.outputTokens === "number" ? sessionEntry.outputTokens : null,
-      totalTokens: typeof sessionEntry?.totalTokens === "number" ? sessionEntry.totalTokens : null,
-    },
     messages,
   });
   await postRowsToSupabase(supabaseUrl, anonKey, accessToken, rows);

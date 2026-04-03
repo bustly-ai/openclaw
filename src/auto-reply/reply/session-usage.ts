@@ -35,9 +35,6 @@ function applyCliSessionIdToSessionPatch(
 export async function persistSessionUsageUpdate(params: {
   storePath?: string;
   sessionKey?: string;
-  runId?: string;
-  ttftMs?: number;
-  ttlrMs?: number;
   usage?: NormalizedUsage;
   /**
    * Usage from the last individual API call (not accumulated). When provided,
@@ -91,9 +88,6 @@ export async function persistSessionUsageUpdate(params: {
             model: params.modelUsed ?? entry.model,
             contextTokens: resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
-            latestRunId: params.runId ?? entry.latestRunId,
-            latestRunTtftMs: params.ttftMs ?? entry.latestRunTtftMs,
-            latestRunTtlrMs: params.ttlrMs ?? entry.latestRunTtlrMs,
             updatedAt: Date.now(),
           };
           if (hasUsage) {
@@ -126,9 +120,6 @@ export async function persistSessionUsageUpdate(params: {
             model: params.modelUsed ?? entry.model,
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
-            latestRunId: params.runId ?? entry.latestRunId,
-            latestRunTtftMs: params.ttftMs ?? entry.latestRunTtftMs,
-            latestRunTtlrMs: params.ttlrMs ?? entry.latestRunTtlrMs,
             updatedAt: Date.now(),
           };
           return applyCliSessionIdToSessionPatch(params, entry, patch);

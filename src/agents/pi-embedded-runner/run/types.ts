@@ -50,9 +50,6 @@ export type EmbeddedRunAttemptResult = {
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
   compactionCount?: number;
-  openclawPreModelMs?: number;
-  openclawFirstTokenWaitMs?: number;
-  openclawStreamTotalMs?: number;
   /** Client tool call detected (OpenResponses hosted tools). */
   clientToolCall?: { name: string; params: Record<string, unknown> };
 };

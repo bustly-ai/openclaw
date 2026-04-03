@@ -10,9 +10,9 @@ import {
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
-import { readBustlyOAuthState } from "../../../bustly-oauth.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { readBustlyOAuthState } from "../../../bustly-oauth.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -32,6 +32,7 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import { createModelPayloadLogger } from "../../model-payload-log.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
@@ -43,7 +44,6 @@ import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
-import { createModelPayloadLogger } from "../../model-payload-log.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
@@ -54,18 +54,10 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
-import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { applyPiCompactionSettingsFromConfig } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
-import {
-  buildBustlyTelemetryHeaders,
-  createTelemetryIngestClientFromEnv,
-  createTelemetryTraceContext,
-  OpenClawTelemetryRecorder,
-  summarizeBustlyGatewayDispatch,
-} from "../../request-telemetry.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -151,9 +143,7 @@ function rewindRetryLeafToLatestUserTurn(params: {
   while (leafEntry) {
     if (leafEntry.type === "message" && leafEntry.message.role === "user") {
       if (rewound) {
-        params.activeSession.agent.replaceMessages(
-          params.sessionManager.buildSessionContext().messages,
-        );
+        params.activeSession.agent.replaceMessages(params.sessionManager.buildSessionContext().messages);
       }
       return true;
     }
@@ -167,9 +157,7 @@ function rewindRetryLeafToLatestUserTurn(params: {
   }
 
   if (rewound) {
-    params.activeSession.agent.replaceMessages(
-      params.sessionManager.buildSessionContext().messages,
-    );
+    params.activeSession.agent.replaceMessages(params.sessionManager.buildSessionContext().messages);
   }
   return false;
 }
@@ -477,33 +465,6 @@ export async function runEmbeddedAttempt(
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
-    const telemetryTrace = createTelemetryTraceContext();
-    const telemetrySink = createTelemetryIngestClientFromEnv(process.env);
-    const bustlyUser =
-      normalizeProviderId(params.provider) === BUSTLY_PROVIDER_ID
-        ? readBustlyOAuthState()?.user
-        : undefined;
-    const telemetryRecorder = new OpenClawTelemetryRecorder({
-      sink: telemetrySink,
-      serviceOrigin: "openclaw",
-      environment:
-        process.env.ENV?.trim() ||
-        process.env.NODE_ENV?.trim() ||
-        process.env.OPENCLAW_PROFILE?.trim() ||
-        "dev",
-      requestId: telemetryTrace.requestId,
-      traceId: telemetryTrace.traceId,
-      runId: params.runId,
-      workspaceId: bustlyUser?.workspaceId,
-      endUserId: bustlyUser?.userId,
-      sessionKey: params.sessionKey ?? params.sessionId,
-      channel: runtimeChannel,
-      capability: "CHAT",
-      routeKey:
-        normalizeProviderId(params.provider) === BUSTLY_PROVIDER_ID ? params.modelId : undefined,
-      provider: params.provider,
-      model: params.modelId,
-    });
     let runtimeCapabilities = runtimeChannel
       ? (resolveChannelCapabilities({
           cfg: params.config,
@@ -756,82 +717,65 @@ export async function runEmbeddedAttempt(
         : [];
 
       const allCustomTools = [...customTools, ...clientToolDefs];
-      const sessionLoadPhase = telemetryRecorder.startPhase("openclaw.session.load", {
-        provider: params.provider,
-        model: params.modelId,
-      });
 
-      let activeSession: NonNullable<typeof session>;
-      let cacheTrace: ReturnType<typeof createCacheTrace> | undefined;
-      let anthropicPayloadLogger: ReturnType<typeof createAnthropicPayloadLogger> | undefined;
-      let modelPayloadLogger: ReturnType<typeof createModelPayloadLogger> | undefined;
-      try {
-        ({ session } = await createAgentSession({
-          cwd: resolvedWorkspace,
-          agentDir,
-          authStorage: params.authStorage,
-          modelRegistry: params.modelRegistry,
-          model: params.model,
-          thinkingLevel: mapThinkingLevel(params.thinkLevel),
-          tools: builtInTools,
-          customTools: allCustomTools,
-          sessionManager,
-          settingsManager,
-          resourceLoader,
-        }));
-        applySystemPromptOverrideToSession(session, systemPromptText);
-        if (!session) {
-          throw new Error("Embedded agent session missing");
-        }
-        activeSession = session;
-        removeToolResultContextGuard = installToolResultContextGuard({
-          agent: activeSession.agent,
-          contextWindowTokens: Math.max(
-            1,
-            Math.floor(
-              params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-            ),
-          ),
-        });
-        cacheTrace =
-          createCacheTrace({
-            cfg: params.config,
-            env: process.env,
-            runId: params.runId,
-            sessionId: activeSession.sessionId,
-            sessionKey: params.sessionKey,
-            provider: params.provider,
-            modelId: params.modelId,
-            modelApi: params.model.api,
-            workspaceDir: params.workspaceDir,
-          }) ?? undefined;
-        anthropicPayloadLogger = createAnthropicPayloadLogger({
-          env: process.env,
-          runId: params.runId,
-          sessionId: activeSession.sessionId,
-          sessionKey: params.sessionKey,
-          provider: params.provider,
-          modelId: params.modelId,
-          modelApi: params.model.api,
-          workspaceDir: params.workspaceDir,
-        });
-        modelPayloadLogger = createModelPayloadLogger({
-          env: process.env,
-          runId: params.runId,
-          sessionId: activeSession.sessionId,
-          sessionKey: params.sessionKey,
-          provider: params.provider,
-          modelId: params.modelId,
-          modelApi: params.model.api,
-          workspaceDir: params.workspaceDir,
-        });
-      } catch (error) {
-        telemetryRecorder.endPhase(sessionLoadPhase, {
-          status: "error",
-          metadata: { error: describeUnknownError(error) },
-        });
-        throw error;
+      ({ session } = await createAgentSession({
+        cwd: resolvedWorkspace,
+        agentDir,
+        authStorage: params.authStorage,
+        modelRegistry: params.modelRegistry,
+        model: params.model,
+        thinkingLevel: mapThinkingLevel(params.thinkLevel),
+        tools: builtInTools,
+        customTools: allCustomTools,
+        sessionManager,
+        settingsManager,
+        resourceLoader,
+      }));
+      applySystemPromptOverrideToSession(session, systemPromptText);
+      if (!session) {
+        throw new Error("Embedded agent session missing");
       }
+      const activeSession = session;
+      removeToolResultContextGuard = installToolResultContextGuard({
+        agent: activeSession.agent,
+        contextWindowTokens: Math.max(
+          1,
+          Math.floor(
+            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+          ),
+        ),
+      });
+      const cacheTrace = createCacheTrace({
+        cfg: params.config,
+        env: process.env,
+        runId: params.runId,
+        sessionId: activeSession.sessionId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelApi: params.model.api,
+        workspaceDir: params.workspaceDir,
+      });
+      const anthropicPayloadLogger = createAnthropicPayloadLogger({
+        env: process.env,
+        runId: params.runId,
+        sessionId: activeSession.sessionId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelApi: params.model.api,
+        workspaceDir: params.workspaceDir,
+      });
+      const modelPayloadLogger = createModelPayloadLogger({
+        env: process.env,
+        runId: params.runId,
+        sessionId: activeSession.sessionId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelApi: params.model.api,
+        workspaceDir: params.workspaceDir,
+      });
 
       // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
       // for reliable streaming + tool calling support (#11828).
@@ -864,18 +808,18 @@ export async function runEmbeddedAttempt(
         let warnedMissingWorkspace = false;
         activeSession.agent.streamFn = (model, context, options) => {
           const workspaceId = readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
-          const mergedHeaders = buildBustlyTelemetryHeaders({
-            modelHeaders: {
-              ...(model as { headers?: Record<string, string> }).headers,
-            },
-            optionHeaders: {
-              ...options?.headers,
-            },
-            workspaceId,
-            requestId: telemetryTrace.requestId,
-            traceparent: telemetryTrace.traceparent,
-          });
+          const modelHeaders = {
+            ...(model as { headers?: Record<string, string> }).headers,
+          };
+          const optionHeaders = {
+            ...((options?.headers) ?? {}),
+          };
+          const mergedHeaders = {
+            ...modelHeaders,
+            ...optionHeaders,
+          };
           if (workspaceId) {
+            mergedHeaders[BUSTLY_WORKSPACE_HEADER] = workspaceId;
             warnedMissingWorkspace = false;
           } else {
             delete mergedHeaders[BUSTLY_WORKSPACE_HEADER];
@@ -887,25 +831,13 @@ export async function runEmbeddedAttempt(
               warnedMissingWorkspace = true;
             }
           }
-          const nextModel = { ...model, headers: mergedHeaders } as typeof model;
-          const baseUrl =
-            ((nextModel as { baseUrl?: string }).baseUrl ?? params.model.baseUrl)?.trim?.() ||
-            undefined;
-          log.info(
-            "bustly gateway request dispatch",
-            summarizeBustlyGatewayDispatch({
-              requestId: telemetryTrace.requestId,
-              traceId: telemetryTrace.traceId,
-              workspaceId: workspaceId || undefined,
-              provider: params.provider,
-              model: params.modelId,
-              routeKey: params.modelId,
-              baseUrl,
-            }),
-          );
+          const nextModel =
+            Object.keys(mergedHeaders).length > 0
+              ? ({ ...model, headers: mergedHeaders } as typeof model)
+              : model;
           return inner(nextModel, context, {
             ...options,
-            headers: mergedHeaders,
+            headers: Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined,
           });
         };
       }
@@ -918,9 +850,6 @@ export async function runEmbeddedAttempt(
         });
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
       }
-      telemetryRecorder.endPhase(sessionLoadPhase, {
-        metadata: { session_id: activeSession.sessionId },
-      });
 
       // Copilot/Claude can reject persisted `thinking` blocks (e.g. thinkingSignature:"reasoning_text")
       // on *any* follow-up provider call (including tool continuations). Wrap the stream function
@@ -977,15 +906,9 @@ export async function runEmbeddedAttempt(
         );
       }
       if (modelPayloadLogger) {
-        activeSession.agent.streamFn = modelPayloadLogger.wrapStreamFn(
-          activeSession.agent.streamFn,
-        );
+        activeSession.agent.streamFn = modelPayloadLogger.wrapStreamFn(activeSession.agent.streamFn);
       }
 
-      const sessionSanitizePhase = telemetryRecorder.startPhase("openclaw.session.sanitize", {
-        provider: params.provider,
-        model: params.modelId,
-      });
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
@@ -1019,14 +942,7 @@ export async function runEmbeddedAttempt(
         if (limited.length > 0) {
           activeSession.agent.replaceMessages(limited);
         }
-        telemetryRecorder.endPhase(sessionSanitizePhase, {
-          metadata: { message_count: limited.length },
-        });
       } catch (err) {
-        telemetryRecorder.endPhase(sessionSanitizePhase, {
-          status: "error",
-          metadata: { error: describeUnknownError(err) },
-        });
         await flushPendingToolResultsAfterIdle({
           agent: activeSession?.agent,
           sessionManager,
@@ -1087,36 +1003,6 @@ export async function runEmbeddedAttempt(
         });
       };
 
-      const markFirstModelOutput = () => {
-        telemetryRecorder.markFirstToken();
-      };
-      const onPartialReply = async (payload: { text?: string; mediaUrls?: string[] }) => {
-        markFirstModelOutput();
-        await params.onPartialReply?.(payload);
-      };
-      const onAssistantMessageStart = async () => {
-        markFirstModelOutput();
-        await params.onAssistantMessageStart?.();
-      };
-      const onBlockReply = async (payload: BlockReplyPayload) => {
-        markFirstModelOutput();
-        await params.onBlockReply?.(payload);
-      };
-      const onReasoningStream = async (payload: { text?: string; mediaUrls?: string[] }) => {
-        markFirstModelOutput();
-        await params.onReasoningStream?.(payload);
-      };
-      const onToolResult = async (payload: { text?: string; mediaUrls?: string[] }) => {
-        markFirstModelOutput();
-        await params.onToolResult?.(payload);
-      };
-      const onAgentEvent = (evt: { stream: string; data: Record<string, unknown> }) => {
-        if (evt.stream === "assistant" || evt.stream === "thinking" || evt.stream === "tool") {
-          markFirstModelOutput();
-        }
-        params.onAgentEvent?.(evt);
-      };
-
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -1128,17 +1014,17 @@ export async function runEmbeddedAttempt(
         toolResultFormat: params.toolResultFormat,
         shouldEmitToolResult: params.shouldEmitToolResult,
         shouldEmitToolOutput: params.shouldEmitToolOutput,
-        onToolResult,
-        onReasoningStream,
+        onToolResult: params.onToolResult,
+        onReasoningStream: params.onReasoningStream,
         emitReasoningAgentEvents: params.emitReasoningAgentEvents,
         onReasoningEnd: params.onReasoningEnd,
-        onBlockReply,
+        onBlockReply: params.onBlockReply,
         onBlockReplyFlush: params.onBlockReplyFlush,
         blockReplyBreak: params.blockReplyBreak,
         blockReplyChunking: params.blockReplyChunking,
-        onPartialReply,
-        onAssistantMessageStart,
-        onAgentEvent,
+        onPartialReply: params.onPartialReply,
+        onAssistantMessageStart: params.onAssistantMessageStart,
+        onAgentEvent: params.onAgentEvent,
         abort: (reason) => abortRun(false, reason),
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
@@ -1238,10 +1124,6 @@ export async function runEmbeddedAttempt(
       let promptErrorSource: "prompt" | "compaction" | null = null;
       try {
         const promptStartedAt = Date.now();
-        const promptBuildPhase = telemetryRecorder.startPhase("openclaw.prompt.build", {
-          provider: params.provider,
-          model: params.modelId,
-        });
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
@@ -1297,14 +1179,7 @@ export async function runEmbeddedAttempt(
               `runId=${params.runId} sessionId=${params.sessionId}`,
           );
         }
-        telemetryRecorder.endPhase(promptBuildPhase, {
-          metadata: { message_count: activeSession.messages.length },
-        });
 
-        const promptImagesPhase = telemetryRecorder.startPhase("openclaw.prompt.images", {
-          provider: params.provider,
-          model: params.modelId,
-        });
         try {
           // Detect and load images referenced in the prompt for vision-capable models.
           // This eliminates the need for an explicit "view" tool call by injecting
@@ -1387,12 +1262,6 @@ export async function runEmbeddedAttempt(
                 log.warn(`llm_input hook failed: ${String(err)}`);
               });
           }
-          telemetryRecorder.endPhase(promptImagesPhase, {
-            metadata: {
-              prompt_image_count: imageResult.images.length,
-              history_image_message_count: imageResult.historyImagesByIndex.size,
-            },
-          });
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
@@ -1404,20 +1273,13 @@ export async function runEmbeddedAttempt(
             if (!canContinue) {
               throw new Error("Retry could not locate the original user turn.");
             }
-            telemetryRecorder.markModelDispatchStart();
             await abortable(activeSession.agent.continue());
           } else if (imageResult.images.length > 0) {
-            telemetryRecorder.markModelDispatchStart();
             await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {
-            telemetryRecorder.markModelDispatchStart();
             await abortable(activeSession.prompt(effectivePrompt));
           }
         } catch (err) {
-          telemetryRecorder.endPhase(promptImagesPhase, {
-            status: "error",
-            metadata: { error: describeUnknownError(err) },
-          });
           promptError = err;
           promptErrorSource = "prompt";
         } finally {
@@ -1603,29 +1465,6 @@ export async function runEmbeddedAttempt(
           });
       }
 
-      const telemetryStatus = timedOut
-        ? "timeout"
-        : aborted
-          ? "aborted"
-          : promptError
-            ? "error"
-            : "ok";
-      telemetryRecorder.completeModelStream(telemetryStatus);
-      void telemetryRecorder.emitRequest({
-        status: telemetryStatus,
-        errorType:
-          promptError instanceof Error ? promptError.name : promptError ? "Error" : undefined,
-        errorMessage: promptError ? describeUnknownError(promptError) : undefined,
-        metadata: {
-          assistant_text_count: assistantTexts.length,
-          tool_meta_count: toolMetasNormalized.length,
-          timed_out_during_compaction: timedOutDuringCompaction,
-          prompt_error_source: promptErrorSource ?? undefined,
-          usage: getUsageTotals() ?? undefined,
-          compaction_count: getCompactionCount(),
-        },
-      });
-
       return {
         aborted,
         timedOut,
@@ -1648,9 +1487,6 @@ export async function runEmbeddedAttempt(
         ),
         attemptUsage: getUsageTotals(),
         compactionCount: getCompactionCount(),
-        openclawPreModelMs: telemetryRecorder.getOpenClawPreModelMs(),
-        openclawFirstTokenWaitMs: telemetryRecorder.getOpenClawFirstTokenWaitMs(),
-        openclawStreamTotalMs: telemetryRecorder.getOpenClawStreamTotalMs(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
       };

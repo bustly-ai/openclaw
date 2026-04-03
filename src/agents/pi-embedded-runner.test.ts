@@ -3,9 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import * as BustlyOAuth from "../bustly-oauth.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { withEnvAsync } from "../test-utils/env.js";
 
 function createMockUsage(input: number, output: number) {
   return {
@@ -23,12 +21,6 @@ function createMockUsage(input: number, output: number) {
     },
   };
 }
-
-const streamSimpleSpy = vi.fn((model: { api: string; provider: string; id: string }) => {
-  throw new Error(
-    `streamSimpleSpy called before mock initialization for ${model.provider}/${model.id}`,
-  );
-});
 
 vi.mock("@mariozechner/pi-coding-agent", async () => {
   return await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
@@ -76,23 +68,21 @@ vi.mock("@mariozechner/pi-ai", async () => {
       }
       return buildAssistantMessage(model);
     },
-    streamSimple: streamSimpleSpy.mockImplementation(
-      (model: { api: string; provider: string; id: string }) => {
-        const stream = actual.createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          stream.push({
-            type: "done",
-            reason: "stop",
-            message:
-              model.id === "mock-error"
-                ? buildAssistantErrorMessage(model)
-                : buildAssistantMessage(model),
-          });
-          stream.end();
+    streamSimple: (model: { api: string; provider: string; id: string }) => {
+      const stream = actual.createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message:
+            model.id === "mock-error"
+              ? buildAssistantErrorMessage(model)
+              : buildAssistantMessage(model),
         });
-        return stream;
-      },
-    ),
+        stream.end();
+      });
+      return stream;
+    },
   };
 });
 
@@ -134,28 +124,6 @@ const makeOpenAiConfig = (modelIds: string[]) =>
           models: modelIds.map((id) => ({
             id,
             name: `Mock ${id}`,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 16_000,
-            maxTokens: 2048,
-          })),
-        },
-      },
-    },
-  }) satisfies OpenClawConfig;
-
-const makeBustlyConfig = (modelIds: string[]) =>
-  ({
-    models: {
-      providers: {
-        bustly: {
-          api: "openai-completions",
-          apiKey: "gateway-test-key",
-          baseUrl: "https://gw.bustly.ai/api/v1",
-          models: modelIds.map((id) => ({
-            id,
-            name: `Bustly ${id}`,
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -272,106 +240,6 @@ describe("runEmbeddedPiAgent", () => {
       (message) => message?.role === "user" && textFromContent(message.content) === "boom",
     );
     expect(userIndex).toBeGreaterThanOrEqual(0);
-  });
-
-  it("emits telemetry batches and forwards request correlation headers for bustly runs", async () => {
-    streamSimpleSpy.mockClear();
-    const sessionFile = nextSessionFile();
-    const sessionKey = nextSessionKey();
-    const cfg = makeBustlyConfig(["chat.standard"]);
-    const originalFetch = globalThis.fetch;
-    const fetchMock = vi.fn(async () => new Response(null, { status: 202 }));
-    const oauthSpy = vi.spyOn(BustlyOAuth, "readBustlyOAuthState").mockReturnValue({
-      deviceId: "device",
-      callbackPort: 17900,
-      user: {
-        userId: "user-123",
-        userName: "User",
-        userEmail: "user@example.com",
-        userAccessToken: "oauth-token",
-        workspaceId: "11111111-1111-1111-1111-111111111111",
-        skills: [],
-      },
-    });
-
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-    try {
-      await withEnvAsync(
-        {
-          OPENCLAW_TELEMETRY_INGEST_BASE_URL: "https://telemetry.example.com",
-          OPENCLAW_TELEMETRY_INGEST_KEY: "ingest-secret",
-          OPENCLAW_TELEMETRY_INGEST_SERVICE_NAME: "openclaw",
-          OPENCLAW_TELEMETRY_INGEST_TIMEOUT_MS: "500",
-          ENV: "test",
-        },
-        async () => {
-          await runEmbeddedPiAgent({
-            sessionId: "session:test",
-            sessionKey,
-            sessionFile,
-            workspaceDir,
-            config: cfg,
-            prompt: "hello bustly",
-            provider: "bustly",
-            model: "chat.standard",
-            timeoutMs: 5_000,
-            agentDir,
-            runId: nextRunId("bustly-telemetry"),
-            enqueue: immediateEnqueue,
-          });
-        },
-      );
-
-      const telemetryCalls = fetchMock.mock.calls.filter(
-        ([url]) => url === "https://telemetry.example.com/api/v1/ingest/request-batch",
-      );
-      expect(telemetryCalls).toHaveLength(1);
-      const [url, init] = telemetryCalls[0] ?? [];
-      expect(url).toBe("https://telemetry.example.com/api/v1/ingest/request-batch");
-      const body = JSON.parse(String(init?.body)) as {
-        requests: Array<Record<string, unknown>>;
-        phases: Array<Record<string, unknown>>;
-      };
-      expect(body.requests[0]).toMatchObject({
-        service_origin: "openclaw",
-        environment: "test",
-        route_key: "chat.standard",
-        provider: "bustly",
-        model: "chat.standard",
-        workspace_id: "11111111-1111-1111-1111-111111111111",
-        end_user_id: "user-123",
-      });
-      expect(body.requests[0]?.request_id).toEqual(expect.any(String));
-      expect(body.requests[0]?.openclaw_pre_model_ms).toEqual(expect.any(Number));
-      expect(body.requests[0]?.openclaw_stream_total_ms).toEqual(expect.any(Number));
-      expect(body.phases.map((item) => item.phase_name)).toEqual(
-        expect.arrayContaining([
-          "openclaw.session.load",
-          "openclaw.session.sanitize",
-          "openclaw.prompt.build",
-          "openclaw.prompt.images",
-          "openclaw.model.stream_total",
-        ]),
-      );
-
-      expect(streamSimpleSpy).toHaveBeenCalled();
-      const [modelArg, _contextArg, optionsArg] = streamSimpleSpy.mock.calls.at(-1) ?? [];
-      const requestIdValue = body.requests[0]?.request_id;
-      const forwardedRequestId = typeof requestIdValue === "string" ? requestIdValue : "";
-      expect((modelArg as { headers?: Record<string, string> })?.headers?.["x-request-id"]).toBe(
-        forwardedRequestId,
-      );
-      expect((optionsArg as { headers?: Record<string, string> })?.headers?.["x-request-id"]).toBe(
-        forwardedRequestId,
-      );
-      expect((optionsArg as { headers?: Record<string, string> })?.headers?.traceparent).toEqual(
-        expect.stringMatching(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/),
-      );
-    } finally {
-      globalThis.fetch = originalFetch;
-      oauthSpy.mockRestore();
-    }
   });
 
   it(

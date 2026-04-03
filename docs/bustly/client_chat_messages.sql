@@ -1,11 +1,5 @@
 -- Chat message reporting table (one row per message event).
 -- Run in Supabase SQL editor (or migration pipeline) before enabling uploader.
---
--- metadata keys used by telemetry/admin enrichment:
--- - ttftMs: frontend-observed time to first token (ms)
--- - ttlrMs: frontend-observed time to last response (ms)
--- - messageSid: agent run id / single-task id
--- - raw.message.usage.input|output|totalTokens: token counts used for token-bucket analysis
 
 create table if not exists public.client_chat_messages (
   id bigint generated always as identity primary key,
