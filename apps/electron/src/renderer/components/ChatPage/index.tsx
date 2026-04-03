@@ -840,6 +840,7 @@ export default function ChatPage() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const composerAreaRef = useRef<HTMLDivElement | null>(null);
   const composerIsComposingRef = useRef(false);
+  const sendInFlightRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
   const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
   const lastAppliedPromptRef = useRef<string | null>(null);
@@ -2558,57 +2559,76 @@ export default function ChatPage() {
   ]);
 
   const sendChatMessage = useCallback(async () => {
-    let targetSessionKey = currentSessionKey;
-    const sourceViewKey = currentViewKey;
-    const startedFromAgentDraft = !currentSessionKey;
-    if (!targetSessionKey) {
-      const nextLabel = draft.trim().slice(0, 60) || "New conversation";
-      const createSessionResult = await window.electronAPI.bustlyCreateAgentSession({
-        workspaceId: activeWorkspaceId,
-        agentId: currentAgentId,
-        label: nextLabel,
-      });
-      if (!createSessionResult.success || !createSessionResult.sessionKey) {
-        setError(createSessionResult.error ?? "Failed to create conversation.");
-        return;
-      }
-      targetSessionKey = createSessionResult.sessionKey;
-      void navigate(
-        {
-          pathname: location.pathname,
-          search: new URLSearchParams({
-            agent: currentAgentId,
-            session: targetSessionKey,
-            label: currentScenarioLabel,
-            ...(currentScenarioIconId ? { icon: currentScenarioIconId } : {}),
-          }).toString()
-            ? `?${new URLSearchParams({
+    if (
+      sendInFlightRef.current ||
+      pageResolving ||
+      !connected ||
+      subscriptionExpired ||
+      sending ||
+      (!draft.trim() && attachments.length === 0 && contextPaths.length === 0)
+    ) {
+      return;
+    }
+
+    // Guard against duplicate Enter/click sends before React state has re-rendered.
+    sendInFlightRef.current = true;
+
+    try {
+      let targetSessionKey = currentSessionKey;
+      const sourceViewKey = currentViewKey;
+      const startedFromAgentDraft = !currentSessionKey;
+      if (!targetSessionKey) {
+        const nextLabel = draft.trim().slice(0, 60) || "New conversation";
+        const createSessionResult = await window.electronAPI.bustlyCreateAgentSession({
+          workspaceId: activeWorkspaceId,
+          agentId: currentAgentId,
+          label: nextLabel,
+        });
+        if (!createSessionResult.success || !createSessionResult.sessionKey) {
+          setError(createSessionResult.error ?? "Failed to create conversation.");
+          return;
+        }
+        targetSessionKey = createSessionResult.sessionKey;
+        void navigate(
+          {
+            pathname: location.pathname,
+            search: new URLSearchParams({
               agent: currentAgentId,
               session: targetSessionKey,
               label: currentScenarioLabel,
               ...(currentScenarioIconId ? { icon: currentScenarioIconId } : {}),
-            }).toString()}`
-            : "",
-        },
-        { replace: true },
-      );
-      window.dispatchEvent(new Event("openclaw:sidebar-refresh-tasks"));
-    }
-    const didSend = await sendPreparedChatMessage({
-      sessionKey: targetSessionKey,
-      draftText: draft,
-      attachments,
-      contextPaths,
-      clearComposer: true,
-    });
-    if (didSend && startedFromAgentDraft) {
-      setSessionDraft(sourceViewKey, "");
-      setSessionAttachments(sourceViewKey, []);
-      setSessionContextPaths(sourceViewKey, []);
+            }).toString()
+              ? `?${new URLSearchParams({
+                agent: currentAgentId,
+                session: targetSessionKey,
+                label: currentScenarioLabel,
+                ...(currentScenarioIconId ? { icon: currentScenarioIconId } : {}),
+              }).toString()}`
+              : "",
+          },
+          { replace: true },
+        );
+        window.dispatchEvent(new Event("openclaw:sidebar-refresh-tasks"));
+      }
+      const didSend = await sendPreparedChatMessage({
+        sessionKey: targetSessionKey,
+        draftText: draft,
+        attachments,
+        contextPaths,
+        clearComposer: true,
+      });
+      if (didSend && startedFromAgentDraft) {
+        setSessionDraft(sourceViewKey, "");
+        setSessionAttachments(sourceViewKey, []);
+        setSessionContextPaths(sourceViewKey, []);
+      }
+    } finally {
+      sendInFlightRef.current = false;
     }
   }, [
     activeWorkspaceId,
     attachments,
+    connected,
     contextPaths,
     currentAgentId,
     currentScenarioIconId,
@@ -2618,11 +2638,14 @@ export default function ChatPage() {
     draft,
     location.pathname,
     navigate,
+    pageResolving,
     sendPreparedChatMessage,
+    sending,
     setError,
     setSessionAttachments,
     setSessionContextPaths,
     setSessionDraft,
+    subscriptionExpired,
   ]);
 
   const handleSend = useCallback(async () => {
