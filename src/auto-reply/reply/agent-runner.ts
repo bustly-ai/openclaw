@@ -485,6 +485,7 @@ export async function runReplyAgent(params: {
         followupRun,
         sessionCtx,
         opts,
+        retryWithoutNewUser: true,
         typingSignals,
         blockReplyPipeline,
         blockStreamingEnabled,

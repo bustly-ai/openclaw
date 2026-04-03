@@ -1024,6 +1024,7 @@ describe("runReplyAgent fast reply gate", () => {
     expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
       provider: "anthropic",
       model: "claude",
+      retryWithoutNewUser: true,
     });
     const messages = await readTranscriptMessages(sessionFile);
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);

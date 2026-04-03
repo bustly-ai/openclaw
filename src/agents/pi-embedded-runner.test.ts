@@ -295,4 +295,55 @@ describe("runEmbeddedPiAgent", () => {
     expect(result.meta.error).toBeUndefined();
     expect(result.payloads?.length ?? 0).toBeGreaterThan(0);
   });
+
+  it("continues a fast-gate handoff without persisting a duplicate user message", async () => {
+    const sessionFile = nextSessionFile();
+    const sessionKey = nextSessionKey();
+    const sessionManager = SessionManager.open(sessionFile);
+
+    sessionManager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "hello" }],
+      timestamp: Date.now(),
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "preface" }],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "mock-1",
+      usage: createMockUsage(1, 1),
+      timestamp: Date.now(),
+    });
+
+    const cfg = makeOpenAiConfig(["mock-1"]);
+    await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      retryWithoutNewUser: true,
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("handoff-continuation"),
+      enqueue: immediateEnqueue,
+    });
+
+    const messages = await readSessionMessages(sessionFile);
+    const userMessages = messages.filter(
+      (message) => message?.role === "user" && textFromContent(message.content) === "hello",
+    );
+
+    expect(userMessages).toHaveLength(1);
+    expect(
+      messages.some(
+        (message) => message?.role === "assistant" && textFromContent(message.content) === "preface",
+      ),
+    ).toBe(true);
+  });
 });
