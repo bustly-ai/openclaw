@@ -35,6 +35,7 @@ function hasMatchingHistoryTextItem(
   items: HistoryMergeItem[],
   role: HistoryMergeChatRole,
   text: string,
+  runId?: string,
 ): boolean {
   const comparable = normalizeComparableMessageText(text);
   if (!comparable) {
@@ -42,6 +43,9 @@ function hasMatchingHistoryTextItem(
   }
   return items.some((item) => {
     if (item.kind !== "text" || item.role !== role) {
+      return false;
+    }
+    if (runId && item.runId && item.runId !== runId) {
       return false;
     }
     return normalizeComparableMessageText(item.text) === comparable;
@@ -84,5 +88,11 @@ export function shouldPreserveLocalTimelineItem(params: {
   if (item.role === "thinking" || item.role === "system") {
     return true;
   }
-  return item.role === "assistant" && (item.streaming === true || item.final !== true);
+  if (item.role !== "assistant") {
+    return false;
+  }
+  if (hasMatchingHistoryTextItem(historyItems, "assistant", item.text, item.runId)) {
+    return false;
+  }
+  return item.streaming === true || item.final !== true;
 }
