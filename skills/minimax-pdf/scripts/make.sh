@@ -235,12 +235,6 @@ JSON
     yellow "  No content file provided — using placeholder body."
   fi
 
-  $PY "$SCRIPTS/normalize_content.py" \
-    --input "$content_file" \
-    --out "$workdir/content.normalized.json"
-  content_file="$workdir/content.normalized.json"
-  green "  ✓ Content normalized"
-
   $PY "$SCRIPTS/render_body.py" \
     --tokens  "$workdir/tokens.json" \
     --content "$content_file" \

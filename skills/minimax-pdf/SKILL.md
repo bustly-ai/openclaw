@@ -1,177 +1,192 @@
 ---
 name: minimax-pdf
-description: Create polished PDFs from structured content, reformat markdown/text into styled PDFs, or inspect and fill existing PDF forms. Use when the user wants a report, proposal, resume, or other client-ready PDF, asks to restyle an existing document into PDF, or needs PDF form fields listed or filled.
+description: >
+  Use this skill when visual quality and design identity matter for a PDF.
+  CREATE (generate from scratch): "make a PDF", "generate a report", "write a proposal",
+  "create a resume", "beautiful PDF", "professional document", "cover page",
+  "polished PDF", "client-ready document".
+  FILL (complete form fields): "fill in the form", "fill out this PDF",
+  "complete the form fields", "write values into PDF", "what fields does this PDF have".
+  REFORMAT (apply design to an existing doc): "reformat this document", "apply our style",
+  "convert this Markdown/text to PDF", "make this doc look good", "re-style this PDF".
+  This skill uses a token-based design system: color, typography, and spacing are derived
+  from the document type and flow through every page. The output is print-ready.
+  Prefer this skill when appearance matters, not just when any PDF output is needed.
 license: MIT
 metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "📄",
-        "homepage": "https://github.com/MiniMax-AI/skills/tree/main/skills/minimax-pdf",
-        "requires": { "bins": ["python3", "node"] },
-        "install":
-          [
-            {
-              "id": "playwright",
-              "kind": "node",
-              "package": "playwright",
-              "bins": ["playwright"],
-              "label": "Install Playwright",
-            },
-          ],
-      },
-  }
+  version: "1.0"
+  category: document-generation
 ---
 
-# MiniMax PDF
+# minimax-pdf
 
-Use this skill for visually polished PDFs. It has three routes.
+Three tasks. One skill.
 
-## Route Selection
+## Read `design/design.md` before any CREATE or REFORMAT work.
 
-- `CREATE`: make a new PDF from structured content.
-- `REFORMAT`: turn an existing `.md`, `.txt`, `.pdf`, or `.json` document into a designed PDF.
-- `FILL`: inspect or fill fields in an existing PDF form.
+---
 
-Before any `CREATE` or `REFORMAT` work, read [`design/design.md`]({baseDir}/design/design.md). That file contains the visual rules and token system the scripts expect.
+## Route table
 
-## Commands
+| User intent | Route | Scripts used |
+|---|---|---|
+| Generate a new PDF from scratch | **CREATE** | `palette.py` → `cover.py` → `render_cover.js` → `render_body.py` → `merge.py` |
+| Fill / complete form fields in an existing PDF | **FILL** | `fill_inspect.py` → `fill_write.py` |
+| Reformat / re-style an existing document | **REFORMAT** | `reformat_parse.py` → then full CREATE pipeline |
 
-### CREATE
+**Rule:** when in doubt between CREATE and REFORMAT, ask whether the user has an existing document to start from. If yes → REFORMAT. If no → CREATE.
 
-Use the sample content file at `{baseDir}/assets/sample-content.json` as a starting point when the user does not provide one.
+---
 
-Canonical body content is a top-level JSON array of blocks:
+## Route A: CREATE
 
+Full pipeline — content → design tokens → cover → body → merged PDF.
+
+```bash
+bash scripts/make.sh run \
+  --title "Q3 Strategy Review" --type proposal \
+  --author "Strategy Team" --date "October 2025" \
+  --accent "#2D5F8A" \
+  --content content.json --out report.pdf
+```
+
+**Doc types:** `report` · `proposal` · `resume` · `portfolio` · `academic` · `general` · `minimal` · `stripe` · `diagonal` · `frame` · `editorial` · `magazine` · `darkroom` · `terminal` · `poster`
+
+| Type | Cover pattern | Visual identity |
+|---|---|---|
+| `report` | `fullbleed` | Dark bg, dot grid, Playfair Display |
+| `proposal` | `split` | Left panel + right geometric, Syne |
+| `resume` | `typographic` | Oversized first-word, DM Serif Display |
+| `portfolio` | `atmospheric` | Near-black, radial glow, Fraunces |
+| `academic` | `typographic` | Light bg, classical serif, EB Garamond |
+| `general` | `fullbleed` | Dark slate, Outfit |
+| `minimal` | `minimal` | White + single 8px accent bar, Cormorant Garamond |
+| `stripe` | `stripe` | 3 bold horizontal color bands, Barlow Condensed |
+| `diagonal` | `diagonal` | SVG angled cut, dark/light halves, Montserrat |
+| `frame` | `frame` | Inset border, corner ornaments, Cormorant |
+| `editorial` | `editorial` | Ghost letter, all-caps title, Bebas Neue |
+| `magazine` | `magazine` | Warm cream bg, centered stack, hero image, Playfair Display |
+| `darkroom` | `darkroom` | Navy bg, centered stack, grayscale image, Playfair Display |
+| `terminal` | `terminal` | Near-black, grid lines, monospace, neon green |
+| `poster` | `poster` | White bg, thick sidebar, oversized title, Barlow Condensed |
+
+Cover extras (inject into tokens via `--abstract`, `--cover-image`):
+- `--abstract "text"` — abstract text block on the cover (magazine/darkroom)
+- `--cover-image "url"` — hero image URL/path (magazine, darkroom, poster)
+
+**Color overrides — always choose these based on document content:**
+- `--accent "#HEX"` — override the accent color; `accent_lt` is auto-derived by lightening toward white
+- `--cover-bg "#HEX"` — override the cover background color
+
+**Accent color selection guidance:**
+
+You have creative authority over the accent color. Pick it from the document's semantic context — title, industry, purpose, audience — not from generic "safe" choices. The accent appears on section rules, callout bars, table headers, and the cover: it carries the document's visual identity.
+
+| Context | Suggested accent range |
+|---|---|
+| Legal / compliance / finance | Deep navy `#1C3A5E`, charcoal `#2E3440`, slate `#3D4C5E` |
+| Healthcare / medical | Teal-green `#2A6B5A`, cool green `#3A7D6A` |
+| Technology / engineering | Steel blue `#2D5F8A`, indigo `#3D4F8A` |
+| Environmental / sustainability | Forest `#2E5E3A`, olive `#4A5E2A` |
+| Creative / arts / culture | Burgundy `#6B2A35`, plum `#5A2A6B`, terracotta `#8A3A2A` |
+| Academic / research | Deep teal `#2A5A6B`, library blue `#2A4A6B` |
+| Corporate / neutral | Slate `#3D4A5A`, graphite `#444C56` |
+| Luxury / premium | Warm black `#1A1208`, deep bronze `#4A3820` |
+
+**Rule:** choose a color that a thoughtful designer would select for this specific document — not the type's default. Muted, desaturated tones work best; avoid vivid primaries. When in doubt, go darker and more neutral.
+
+**content.json block types:**
+
+| Block | Usage | Key fields |
+|---|---|---|
+| `h1` | Section heading + accent rule | `text` |
+| `h2` | Subsection heading | `text` |
+| `h3` | Sub-subsection (bold) | `text` |
+| `body` | Justified paragraph; supports `<b>` `<i>` markup | `text` |
+| `bullet` | Unordered list item (• prefix) | `text` |
+| `numbered` | Ordered list item — counter auto-resets on non-numbered blocks | `text` |
+| `callout` | Highlighted insight box with accent left bar | `text` |
+| `table` | Data table — accent header, alternating row tints | `headers`, `rows`, `col_widths`?, `caption`? |
+| `image` | Embedded image scaled to column width | `path`/`src`, `caption`? |
+| `figure` | Image with auto-numbered "Figure N:" caption | `path`/`src`, `caption`? |
+| `code` | Monospace code block with accent left border | `text`, `language`? |
+| `math` | Display math — LaTeX syntax via matplotlib mathtext | `text`, `label`?, `caption`? |
+| `chart` | Bar / line / pie chart rendered with matplotlib | `chart_type`, `labels`, `datasets`, `title`?, `x_label`?, `y_label`?, `caption`?, `figure`? |
+| `flowchart` | Process diagram with nodes + edges via matplotlib | `nodes`, `edges`, `caption`?, `figure`? |
+| `bibliography` | Numbered reference list with hanging indent | `items` [{id, text}], `title`? |
+| `divider` | Accent-colored full-width rule | — |
+| `caption` | Small muted label | `text` |
+| `pagebreak` | Force a new page | — |
+| `spacer` | Vertical whitespace | `pt` (default 12) |
+
+**chart / flowchart schemas:**
 ```json
-[
-  { "type": "h1", "text": "Overview" },
-  { "type": "body", "text": "Summarize the business context and the time range." },
-  {
-    "type": "table",
-    "headers": ["Metric", "Value"],
-    "rows": [["Revenue", "HKD 15,415"], ["Orders", "69"]]
-  }
-]
+{"type":"chart","chart_type":"bar","labels":["Q1","Q2","Q3","Q4"],
+ "datasets":[{"label":"Revenue","values":[120,145,132,178]}],"caption":"Q results"}
+
+{"type":"flowchart",
+ "nodes":[{"id":"s","label":"Start","shape":"oval"},
+          {"id":"p","label":"Process","shape":"rect"},
+          {"id":"d","label":"Valid?","shape":"diamond"},
+          {"id":"e","label":"End","shape":"oval"}],
+ "edges":[{"from":"s","to":"p"},{"from":"p","to":"d"},
+          {"from":"d","to":"e","label":"Yes"},{"from":"d","to":"p","label":"No"}]}
+
+{"type":"bibliography","items":[
+  {"id":"1","text":"Author (Year). Title. Publisher."}]}
 ```
 
-The OpenClaw build also auto-normalizes common report-shaped inputs, so these variants are accepted:
-- Top-level objects with `abstract` + `sections`
-- `content` instead of `text`
-- `header` instead of `headers`
-- Plain strings inside the block list (they become `body` blocks)
+---
 
-For multi-section business reports, this higher-level shape is usually the easiest for the agent to write:
+## Route B: FILL
 
-```json
-{
-  "title": "Store Operations Report",
-  "abstract": "Summarize the reporting window and the headline outcome.",
-  "sections": [
-    {
-      "title": "Core Metrics",
-      "blocks": [
-        { "type": "body", "content": "Give the narrative summary." },
-        {
-          "type": "table",
-          "header": ["Metric", "Value"],
-          "rows": [["Revenue", "HKD 15,415"], ["Orders", "69"]]
-        }
-      ]
-    },
-    {
-      "title": "Next Actions",
-      "blocks": [
-        { "type": "numbered", "content": "Restock the top missing SKU." }
-      ]
-    }
-  ]
-}
-```
+Fill form fields in an existing PDF without altering layout or design.
 
 ```bash
-bash {baseDir}/scripts/make.sh run \
-  --title "Q3 Strategy Review" \
-  --type proposal \
-  --author "Strategy Team" \
-  --date "March 2026" \
-  --content {baseDir}/assets/sample-content.json \
-  --out ./strategy-review.pdf
+# Step 1: inspect
+python3 scripts/fill_inspect.py --input form.pdf
+
+# Step 2: fill
+python3 scripts/fill_write.py --input form.pdf --out filled.pdf \
+  --values '{"FirstName": "Jane", "Agree": "true", "Country": "US"}'
 ```
 
-Supported document types:
-- `report`
-- `proposal`
-- `resume`
-- `portfolio`
-- `academic`
-- `general`
-- `minimal`
-- `stripe`
-- `diagonal`
-- `frame`
-- `editorial`
-- `magazine`
-- `darkroom`
-- `terminal`
-- `poster`
+| Field type | Value format |
+|---|---|
+| `text` | Any string |
+| `checkbox` | `"true"` or `"false"` |
+| `dropdown` | Must match a choice value from inspect output |
+| `radio` | Must match a radio value (often starts with `/`) |
 
-### REFORMAT
+Always run `fill_inspect.py` first to get exact field names.
+
+---
+
+## Route C: REFORMAT
+
+Parse an existing document → content.json → CREATE pipeline.
 
 ```bash
-bash {baseDir}/scripts/make.sh reformat \
-  --input ./source.md \
-  --title "Restyled Report" \
-  --type report \
-  --out ./restyled-report.pdf
+bash scripts/make.sh reformat \
+  --input source.md --title "My Report" --type report --out output.pdf
 ```
 
-### FILL
+**Supported input formats:** `.md` `.txt` `.pdf` `.json`
 
-Always inspect first so field names are exact.
+---
+
+## Environment
 
 ```bash
-bash {baseDir}/scripts/make.sh fill --input ./form.pdf --inspect
-
-bash {baseDir}/scripts/make.sh fill \
-  --input ./form.pdf \
-  --out ./filled.pdf \
-  --values '{"FirstName":"Jane","Agree":"true"}'
+bash scripts/make.sh check   # verify all deps
+bash scripts/make.sh fix     # auto-install missing deps
+bash scripts/make.sh demo    # build a sample PDF
 ```
 
-## Dependencies
-
-Check the environment first:
-
-```bash
-bash {baseDir}/scripts/make.sh check
-```
-
-If Python libraries are missing, install them explicitly:
-
-```bash
-python3 -m pip install reportlab pypdf matplotlib
-```
-
-If Playwright is missing:
-
-```bash
-npm install -g playwright
-npx playwright install chromium
-```
-
-## Notes
-
-- Body pages now auto-detect Chinese/Japanese/Korean content and switch to a CJK-capable ReportLab font path automatically.
-- Font selection is now cross-platform:
-  - macOS: prefers local system CJK fonts and wide Unicode fallback fonts
-  - Windows: probes common CJK fonts such as Microsoft YaHei, Meiryo, Yu Gothic, and Malgun Gothic
-  - Linux: probes common Noto / Source Han / WenQuanYi style installs under standard font directories
-- If no suitable local font can be registered, the renderer falls back to built-in CID fonts so body text still renders instead of tofu.
-- If a machine uses a non-standard font layout, you can force custom body fonts with:
-  - `MINIMAX_PDF_CJK_DISPLAY_FONT`
-  - `MINIMAX_PDF_CJK_BODY_FONT`
-  - `MINIMAX_PDF_CJK_BODY_BOLD_FONT`
-- `render_cover.cjs` uses Playwright and may fetch remote fonts or remote cover images when those are referenced.
-- `matplotlib` is optional but needed for `math`, `chart`, and `flowchart` blocks.
-- The main entrypoint is `bash {baseDir}/scripts/make.sh ...`; it now normalizes near-miss JSON formats before rendering. Do not call the lower-level scripts unless you need to debug the pipeline.
+| Tool | Used by | Install |
+|---|---|---|
+| Python 3.9+ | all `.py` scripts | system |
+| `reportlab` | `render_body.py` | `pip install reportlab` |
+| `pypdf` | fill, merge, reformat | `pip install pypdf` |
+| Node.js 18+ | `render_cover.js` | system |
+| `playwright` + Chromium | `render_cover.js` | `npm install -g playwright && npx playwright install chromium` |
