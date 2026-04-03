@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { recoverSessionViewState } from "../../apps/electron/src/renderer/components/ChatPage/runtime-recovery";
+import {
+  recoverSessionViewState,
+  shouldDiscardRecoveredPendingRuns,
+  type RecoverableTimelineItem,
+} from "../../apps/electron/src/renderer/components/ChatPage/runtime-recovery.js";
 
 describe("recoverSessionViewState", () => {
   it("drops stale transient run indicators when no live artifact remains", () => {
@@ -14,6 +18,7 @@ describe("recoverSessionViewState", () => {
       timeline: [
         {
           kind: "text",
+          id: "history:assistant:1",
           runId: "run-stale",
           role: "assistant",
           final: true,
@@ -46,6 +51,7 @@ describe("recoverSessionViewState", () => {
       timeline: [
         {
           kind: "text",
+          id: "history:thinking:1",
           runId: "run-live",
           role: "thinking",
           streaming: true,
@@ -75,5 +81,64 @@ describe("recoverSessionViewState", () => {
 
     expect(recovered.view.activeRunId).toBe("run-pending");
     expect(recovered.pendingClientRunIds).toEqual(new Set(["run-pending"]));
+  });
+
+  it("drops stale pending runs when recovered history already ends in a final assistant", () => {
+    const historyItems: RecoverableTimelineItem[] = [
+      {
+        kind: "text",
+        id: "history:user:1",
+        role: "user",
+        sortSeq: 1,
+        timestamp: 1,
+      },
+      {
+        kind: "text",
+        id: "history:assistant:2",
+        role: "assistant",
+        final: true,
+        sortSeq: 2,
+        timestamp: 2,
+      },
+    ];
+
+    expect(
+      shouldDiscardRecoveredPendingRuns({
+        historyItems,
+        mergedTimeline: historyItems,
+        pendingClientRunIds: new Set(["run-pending"]),
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps pending runs when there is still an unsynced local user turn", () => {
+    const historyItems: RecoverableTimelineItem[] = [
+      {
+        kind: "text",
+        id: "history:assistant:1",
+        role: "assistant",
+        final: true,
+        sortSeq: 1,
+        timestamp: 1,
+      },
+    ];
+    const mergedTimeline: RecoverableTimelineItem[] = [
+      ...historyItems,
+      {
+        kind: "text",
+        id: "user-local-1",
+        role: "user",
+        sortSeq: 2,
+        timestamp: 2,
+      },
+    ];
+
+    expect(
+      shouldDiscardRecoveredPendingRuns({
+        historyItems,
+        mergedTimeline,
+        pendingClientRunIds: new Set(["run-pending"]),
+      }),
+    ).toBe(false);
   });
 });

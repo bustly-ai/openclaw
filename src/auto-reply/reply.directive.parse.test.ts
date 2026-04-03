@@ -9,6 +9,7 @@ import {
   extractVerboseDirective,
 } from "./reply.js";
 import { extractStatusDirective } from "./reply/directives.js";
+import { stripInlineStatus } from "./reply/reply-inline.js";
 
 describe("directive parsing", () => {
   it("ignores verbose directive inside URL", () => {
@@ -178,6 +179,12 @@ describe("directive parsing", () => {
     const res = extractStatusDirective("thats not /usage:/tmp/hello");
     expect(res.hasDirective).toBe(false);
     expect(res.cleaned).toBe("thats not /usage:/tmp/hello");
+  });
+
+  it("does not collapse user newlines when no /status directive is present", () => {
+    const res = stripInlineStatus("line 1\nline 2\n\nline 3");
+    expect(res.didStrip).toBe(false);
+    expect(res.cleaned).toBe("line 1\nline 2\n\nline 3");
   });
 
   it("parses queue options and modes", () => {

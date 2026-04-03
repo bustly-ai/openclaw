@@ -37,7 +37,7 @@ import {
   type InputArtifactKind,
 } from "./input-artifacts";
 import { shouldPreserveLocalTimelineItem } from "./history-merge";
-import { recoverSessionViewState } from "./runtime-recovery";
+import { recoverSessionViewState, shouldDiscardRecoveredPendingRuns } from "./runtime-recovery";
 import { collapseProcessedTurn, collapseStreamingEvents, resolveToolDisplay, formatToolDetail } from "./utils";
 import type { TimelineArtifact, TimelineNode } from "./types";
 import { useAppState } from "../../providers/AppStateProvider";
@@ -210,6 +210,31 @@ function nextId(prefix: string) {
 
 function notifySidebarTasksRefresh() {
   window.dispatchEvent(new Event(SIDEBAR_TASKS_REFRESH_EVENT));
+}
+
+function readHistoryRunId(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const rec = message as Record<string, unknown>;
+  const nested =
+    rec.message && typeof rec.message === "object" ? (rec.message as Record<string, unknown>) : null;
+  const candidates = [
+    rec.runId,
+    rec.run_id,
+    nested?.runId,
+    nested?.run_id,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const trimmed = candidate.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
 }
 
 function isSessionViewRunning(view: SessionViewState): boolean {
@@ -840,6 +865,7 @@ export default function ChatPage() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const composerAreaRef = useRef<HTMLDivElement | null>(null);
   const composerIsComposingRef = useRef(false);
+  const sendInFlightRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
   const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
   const lastAppliedPromptRef = useRef<string | null>(null);
@@ -1561,6 +1587,7 @@ export default function ChatPage() {
         (typeof nested?.stopReason === "string" ? nested.stopReason : undefined) ??
         "";
       const stopReason = stopReasonRaw.toLowerCase();
+      const runId = readHistoryRunId(message);
       const timestamp =
         typeof rec.timestamp === "number"
           ? rec.timestamp
@@ -1578,6 +1605,7 @@ export default function ChatPage() {
           timestamp,
           role: "thinking",
           text: thinking,
+          runId,
           streaming: false,
         });
       }
@@ -1605,6 +1633,7 @@ export default function ChatPage() {
           timestamp,
           role: textRole,
           text,
+          runId,
           streaming: false,
           final: textRole === "assistant" && stopReason === "stop",
         });
@@ -1623,7 +1652,7 @@ export default function ChatPage() {
             kind: "tool",
             id: `tool:${tool.toolCallId}`,
             toolCallId: tool.toolCallId,
-            runId: undefined,
+            runId,
             sortSeq: baseSeq + 0.02,
             timestamp,
             name: tool.name,
@@ -1635,6 +1664,7 @@ export default function ChatPage() {
         }
         toolsByCallId.set(tool.toolCallId, {
           ...existing,
+          runId: existing.runId ?? runId,
           sortSeq: Math.min(existing.sortSeq, baseSeq + 0.02),
           timestamp: Math.min(existing.timestamp, timestamp),
           name: tool.name || existing.name,
@@ -1687,11 +1717,30 @@ export default function ChatPage() {
     const mergedTimeline = merged.toSorted(compareTimeline);
 
     if (options?.recoverTransientState) {
-      const recovered = recoverSessionViewState({
+      let recovered = recoverSessionViewState({
         view: runtime.view,
         timeline: mergedTimeline,
         pendingClientRunIds: runtime.pendingClientRunIds,
       });
+      if (
+        shouldDiscardRecoveredPendingRuns({
+          historyItems: items,
+          mergedTimeline,
+          pendingClientRunIds: recovered.pendingClientRunIds,
+        })
+      ) {
+        recovered = {
+          ...recovered,
+          view: {
+            ...recovered.view,
+            activeRunId: null,
+            compactingRunId: null,
+            reconnectStatus: null,
+          },
+          liveRunIds: new Set(),
+          pendingClientRunIds: new Set(),
+        };
+      }
       runtime.pendingClientRunIds = recovered.pendingClientRunIds;
       runtime.settledRunIds = recovered.terminalRunIds;
       runtime.discardedRunIds = new Set(
@@ -1775,7 +1824,7 @@ export default function ChatPage() {
           if (!currentClient) {
             return;
           }
-          reloadSessionHistory(currentClient, sessionKey);
+          reloadSessionHistory(currentClient, sessionKey, { recoverTransientState: true });
         },
         onClose: ({ code, reason, error: closeError }) => {
           setConnected(false);
@@ -2558,57 +2607,76 @@ export default function ChatPage() {
   ]);
 
   const sendChatMessage = useCallback(async () => {
-    let targetSessionKey = currentSessionKey;
-    const sourceViewKey = currentViewKey;
-    const startedFromAgentDraft = !currentSessionKey;
-    if (!targetSessionKey) {
-      const nextLabel = draft.trim().slice(0, 60) || "New conversation";
-      const createSessionResult = await window.electronAPI.bustlyCreateAgentSession({
-        workspaceId: activeWorkspaceId,
-        agentId: currentAgentId,
-        label: nextLabel,
-      });
-      if (!createSessionResult.success || !createSessionResult.sessionKey) {
-        setError(createSessionResult.error ?? "Failed to create conversation.");
-        return;
-      }
-      targetSessionKey = createSessionResult.sessionKey;
-      void navigate(
-        {
-          pathname: location.pathname,
-          search: new URLSearchParams({
-            agent: currentAgentId,
-            session: targetSessionKey,
-            label: currentScenarioLabel,
-            ...(currentScenarioIconId ? { icon: currentScenarioIconId } : {}),
-          }).toString()
-            ? `?${new URLSearchParams({
+    if (
+      sendInFlightRef.current ||
+      pageResolving ||
+      !connected ||
+      subscriptionExpired ||
+      sending ||
+      (!draft.trim() && attachments.length === 0 && contextPaths.length === 0)
+    ) {
+      return;
+    }
+
+    // Guard against duplicate Enter/click sends before React state has re-rendered.
+    sendInFlightRef.current = true;
+
+    try {
+      let targetSessionKey = currentSessionKey;
+      const sourceViewKey = currentViewKey;
+      const startedFromAgentDraft = !currentSessionKey;
+      if (!targetSessionKey) {
+        const nextLabel = draft.trim().slice(0, 60) || "New conversation";
+        const createSessionResult = await window.electronAPI.bustlyCreateAgentSession({
+          workspaceId: activeWorkspaceId,
+          agentId: currentAgentId,
+          label: nextLabel,
+        });
+        if (!createSessionResult.success || !createSessionResult.sessionKey) {
+          setError(createSessionResult.error ?? "Failed to create conversation.");
+          return;
+        }
+        targetSessionKey = createSessionResult.sessionKey;
+        void navigate(
+          {
+            pathname: location.pathname,
+            search: new URLSearchParams({
               agent: currentAgentId,
               session: targetSessionKey,
               label: currentScenarioLabel,
               ...(currentScenarioIconId ? { icon: currentScenarioIconId } : {}),
-            }).toString()}`
-            : "",
-        },
-        { replace: true },
-      );
-      window.dispatchEvent(new Event("openclaw:sidebar-refresh-tasks"));
-    }
-    const didSend = await sendPreparedChatMessage({
-      sessionKey: targetSessionKey,
-      draftText: draft,
-      attachments,
-      contextPaths,
-      clearComposer: true,
-    });
-    if (didSend && startedFromAgentDraft) {
-      setSessionDraft(sourceViewKey, "");
-      setSessionAttachments(sourceViewKey, []);
-      setSessionContextPaths(sourceViewKey, []);
+            }).toString()
+              ? `?${new URLSearchParams({
+                agent: currentAgentId,
+                session: targetSessionKey,
+                label: currentScenarioLabel,
+                ...(currentScenarioIconId ? { icon: currentScenarioIconId } : {}),
+              }).toString()}`
+              : "",
+          },
+          { replace: true },
+        );
+        window.dispatchEvent(new Event("openclaw:sidebar-refresh-tasks"));
+      }
+      const didSend = await sendPreparedChatMessage({
+        sessionKey: targetSessionKey,
+        draftText: draft,
+        attachments,
+        contextPaths,
+        clearComposer: true,
+      });
+      if (didSend && startedFromAgentDraft) {
+        setSessionDraft(sourceViewKey, "");
+        setSessionAttachments(sourceViewKey, []);
+        setSessionContextPaths(sourceViewKey, []);
+      }
+    } finally {
+      sendInFlightRef.current = false;
     }
   }, [
     activeWorkspaceId,
     attachments,
+    connected,
     contextPaths,
     currentAgentId,
     currentScenarioIconId,
@@ -2618,11 +2686,14 @@ export default function ChatPage() {
     draft,
     location.pathname,
     navigate,
+    pageResolving,
     sendPreparedChatMessage,
+    sending,
     setError,
     setSessionAttachments,
     setSessionContextPaths,
     setSessionDraft,
+    subscriptionExpired,
   ]);
 
   const handleSend = useCallback(async () => {

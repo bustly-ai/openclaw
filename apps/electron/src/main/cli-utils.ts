@@ -1,5 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -142,6 +142,38 @@ export function resolveOpenClawCliPath(logger?: CliLogger): string | null {
 
   logger?.error?.("OpenClaw CLI not found in bundled locations");
   return null;
+}
+
+export function resolveElectronRunAsNodeExecPath(): string {
+  const execPath = process.execPath?.trim();
+  if (!execPath) {
+    return "";
+  }
+  if (process.platform !== "darwin") {
+    return execPath;
+  }
+
+  try {
+    const macOsDir = dirname(execPath);
+    const contentsDir = dirname(macOsDir);
+    const appName = basename(execPath).trim();
+    const helperAppName = `${appName} Helper`;
+    const helperExecPath = join(
+      contentsDir,
+      "Frameworks",
+      `${helperAppName}.app`,
+      "Contents",
+      "MacOS",
+      helperAppName,
+    );
+    if (existsSync(helperExecPath)) {
+      return helperExecPath;
+    }
+  } catch {
+    // Fall back to the main executable if helper resolution fails.
+  }
+
+  return execPath;
 }
 
 export function resolveNodeBinary(options?: { includeBundled?: boolean }): string | null {
@@ -340,7 +372,7 @@ export function ensureBundledOpenClawShim(
   stateDir: string,
   options?: BundledCliShimOptions,
 ): CliShim | null {
-  const runtimeExecPath = process.execPath?.trim();
+  const runtimeExecPath = resolveElectronRunAsNodeExecPath();
   if (!runtimeExecPath) {
     return null;
   }

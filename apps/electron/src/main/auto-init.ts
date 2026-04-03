@@ -21,7 +21,7 @@ import {
   setOpenrouterApiKey,
 } from "../../../../src/commands/onboard-auth";
 import { applyPrimaryModel } from "../../../../src/commands/model-picker";
-import { resolveOpenClawCliPath } from "./cli-utils.js";
+import { resolveElectronRunAsNodeExecPath, resolveOpenClawCliPath } from "./cli-utils.js";
 import {
   ELECTRON_DEFAULT_MODEL,
   ELECTRON_OPENCLAW_PROFILE,
@@ -365,7 +365,7 @@ async function runCliOnboard(options: InitializationOptions): Promise<void> {
   };
 
   await new Promise<void>((resolvePromise, rejectPromise) => {
-    execFile(process.execPath, [cliPath, ...args], { env }, (error) => {
+    execFile(resolveElectronRunAsNodeExecPath(), [cliPath, ...args], { env }, (error) => {
       if (error) {
         rejectPromise(error);
         return;

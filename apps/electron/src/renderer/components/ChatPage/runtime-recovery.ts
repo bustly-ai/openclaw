@@ -8,6 +8,7 @@ export type RecoverableToolStatus = "running" | "completed" | "error";
 export type RecoverableTimelineItem =
   | {
       kind: "text";
+      id: string;
       runId?: string;
       role: RecoverableChatRole;
       streaming?: boolean;
@@ -17,6 +18,7 @@ export type RecoverableTimelineItem =
     }
   | {
       kind: "tool";
+      id: string;
       runId?: string;
       status: RecoverableToolStatus;
       sortSeq: number;
@@ -24,6 +26,7 @@ export type RecoverableTimelineItem =
     }
   | {
       kind: "error";
+      id: string;
       runId?: string;
       sortSeq: number;
       timestamp: number;
@@ -149,4 +152,52 @@ export function recoverSessionViewState<T extends RecoverableSessionViewState>(
     pendingClientRunIds,
     terminalRunIds,
   };
+}
+
+function hasUnsyncedLocalUserMessage(items: RecoverableTimelineItem[]): boolean {
+  return items.some(
+    (item) =>
+      item.kind === "text" &&
+      item.role === "user" &&
+      !item.id.startsWith("history:"),
+  );
+}
+
+function historyEndsInTerminalAssistant(items: RecoverableTimelineItem[]): boolean {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.kind === "tool") {
+      continue;
+    }
+    if (item.kind === "error") {
+      return true;
+    }
+    if (item.role === "thinking") {
+      continue;
+    }
+    if (item.role === "assistant") {
+      return item.final === true;
+    }
+    if (item.role === "user") {
+      return false;
+    }
+    if (item.role === "system") {
+      continue;
+    }
+  }
+  return false;
+}
+
+export function shouldDiscardRecoveredPendingRuns(params: {
+  historyItems: RecoverableTimelineItem[];
+  mergedTimeline: RecoverableTimelineItem[];
+  pendingClientRunIds: ReadonlySet<string>;
+}): boolean {
+  if (params.pendingClientRunIds.size === 0) {
+    return false;
+  }
+  if (hasUnsyncedLocalUserMessage(params.mergedTimeline)) {
+    return false;
+  }
+  return historyEndsInTerminalAssistant(params.historyItems);
 }

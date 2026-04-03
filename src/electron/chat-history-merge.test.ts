@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { shouldPreserveLocalTimelineItem, type HistoryMergeItem } from "../../apps/electron/src/renderer/components/ChatPage/history-merge";
+import {
+  shouldPreserveLocalTimelineItem,
+  type HistoryMergeItem,
+} from "../../apps/electron/src/renderer/components/ChatPage/history-merge.js";
 
 describe("shouldPreserveLocalTimelineItem", () => {
   it("drops stale running tools when history already contains the same tool call", () => {

@@ -558,6 +558,9 @@ describe("runReplyAgent fast reply gate", () => {
     expect(state.streamMock.mock.calls[0]?.[1]).toMatchObject({
       systemPrompt: expect.stringContaining("You are the fast reply gate for inbound messages."),
     });
+    expect(String(state.streamMock.mock.calls[0]?.[1]?.systemPrompt ?? "")).toContain(
+      "Except for simple greetings or lightweight social niceties",
+    );
     expect(String(state.streamMock.mock.calls[0]?.[1]?.systemPrompt ?? "")).not.toContain(
       "HEAVY_CTX_SHOULD_NOT_BE_INCLUDED",
     );
@@ -1024,6 +1027,7 @@ describe("runReplyAgent fast reply gate", () => {
     expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
       provider: "anthropic",
       model: "claude",
+      retryWithoutNewUser: true,
     });
     const messages = await readTranscriptMessages(sessionFile);
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);

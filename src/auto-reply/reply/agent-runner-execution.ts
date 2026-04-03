@@ -69,6 +69,7 @@ export async function runAgentTurnWithFallback(params: {
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
   opts?: GetReplyOptions;
+  retryWithoutNewUser?: boolean;
   typingSignals: TypingSignaler;
   blockReplyPipeline: BlockReplyPipeline | null;
   blockStreamingEnabled: boolean;
@@ -291,7 +292,7 @@ export async function runAgentTurnWithFallback(params: {
             ...senderContext,
             ...runBaseParams,
             prompt: params.commandBody,
-            retryWithoutNewUser: params.opts?.retryWithoutNewUser,
+            retryWithoutNewUser: params.retryWithoutNewUser ?? params.opts?.retryWithoutNewUser,
             extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
             toolResultFormat: (() => {
               const channel = resolveMessageChannel(
