@@ -38,6 +38,15 @@ function parseArgs(argv) {
     }
     fail(`Unexpected argument: ${arg}`);
   }
+
+  if (existsSync(sourceSkillsDir)) {
+    console.log(
+      "[prepare-skill] Using existing local bustly-skills checkout without resetting its branch or commit",
+    );
+    return;
+  }
+
+  console.log("[prepare-skill] Initializing bustly-skills submodule");
   run("git", ["submodule", "update", "--init", "bustly-skills"], repoRoot);
 }
 
