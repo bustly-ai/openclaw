@@ -855,7 +855,7 @@ function normalizeBustlyModelRef(value: unknown): string {
     return `${BUSTLY_PROVIDER_ID}/${raw}`;
   }
   if (raw === "lite" || raw === "auto") {
-    return "bustly/chat.standard";
+    return "bustly/chat.ultra";
   }
   if (raw === "pro") {
     return "bustly/chat.advanced";
@@ -863,7 +863,7 @@ function normalizeBustlyModelRef(value: unknown): string {
   if (raw === "max") {
     return "bustly/chat.ultra";
   }
-  return "bustly/chat.standard";
+  return "bustly/chat.ultra";
 }
 
 function resolveCurrentBustlyModelRef(cfg: OpenClawConfig): string {

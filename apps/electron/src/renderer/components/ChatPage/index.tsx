@@ -841,7 +841,7 @@ export default function ChatPage() {
     }
     // Backward-compatible migration for older local values.
     if (stored === "lite" || stored === "auto") {
-      return "standard";
+      return "ultra";
     }
     if (stored === "pro") {
       return "advanced";
@@ -849,7 +849,7 @@ export default function ChatPage() {
     if (stored === "max") {
       return "ultra";
     }
-    return "standard";
+    return "ultra";
   });
 
   const clientRef = useRef<GatewayBrowserClient | null>(null);
