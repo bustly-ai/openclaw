@@ -933,7 +933,7 @@ function WorkspaceSwitcher(props: {
                         {activeWorkspace.planDisplayText}
                       </span>
                       {activeWorkspace.badge ? (
-                        <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-bold text-gray-600">
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
                           {activeWorkspace.badge}
                         </span>
                       ) : null}
