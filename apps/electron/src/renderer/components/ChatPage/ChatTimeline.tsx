@@ -43,7 +43,7 @@ import {
   type ChatInputArtifact,
 } from "./input-artifacts";
 import type { TimelineArtifact, TimelineNode } from "./types";
-import { toSanitizedMarkdownHtml } from "./utils";
+import { isAbsoluteLocalMarkdownPath, toSanitizedMarkdownHtml } from "./utils";
 
 type ChatTimelineProps = {
   timeline: TimelineNode[];
@@ -244,12 +244,12 @@ function ToolIcon({ name }: { name: string }) {
 
 function markdownClassName(isErrorText: boolean) {
   return cx(
-    "text-sm leading-7 text-gray-900",
+    "max-w-full break-words text-sm leading-7 text-gray-900 [overflow-wrap:anywhere]",
     isErrorText && "text-red-600",
     "[&_a]:text-[#1A162F] [&_a]:underline [&_a]:underline-offset-2",
     "[&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-gray-200 [&_blockquote]:pl-4 [&_blockquote]:text-gray-500",
-    "[&_code]:rounded [&_code]:bg-gray-100 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.92em]",
-    "[&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-2xl [&_pre]:border [&_pre]:border-gray-200 [&_pre]:bg-gray-50 [&_pre]:p-4 [&_pre]:text-xs [&_pre]:leading-6",
+    "[&_code]:rounded [&_code]:bg-gray-100 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.92em] [&_code]:break-words [&_code]:[overflow-wrap:anywhere]",
+    "[&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:rounded-2xl [&_pre]:border [&_pre]:border-gray-200 [&_pre]:bg-gray-50 [&_pre]:p-4 [&_pre]:text-xs [&_pre]:leading-6 [&_pre]:[overflow-wrap:anywhere]",
     "[&_pre_code]:bg-transparent [&_pre_code]:p-0",
     "[&_h1]:mb-2 [&_h1]:mt-5 [&_h1]:text-xl [&_h1]:font-semibold",
     "[&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-lg [&_h2]:font-semibold",
@@ -530,6 +530,60 @@ async function copyText(text: string, onCopyText?: (text: string) => void) {
   }
 }
 
+const MarkdownContent = memo(function MarkdownContent({
+  text,
+  className,
+}: {
+  text: string;
+  className: string;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const html = toSanitizedMarkdownHtml(text);
+
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root) {
+      return;
+    }
+
+    root.querySelectorAll<HTMLAnchorElement>("a[data-local-path]").forEach((anchor) => {
+      const path = anchor.getAttribute("data-local-path")?.trim() ?? "";
+      if (!isAbsoluteLocalMarkdownPath(path)) {
+        return;
+      }
+      anchor.setAttribute("title", path);
+      anchor.classList.add("cursor-pointer");
+    });
+
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      const anchor = target.closest("a[data-local-path]");
+      if (!(anchor instanceof HTMLAnchorElement) || !root.contains(anchor)) {
+        return;
+      }
+
+      const path = anchor.getAttribute("data-local-path")?.trim() ?? "";
+      if (!isAbsoluteLocalMarkdownPath(path)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      void window.electronAPI?.openLocalPath(path);
+    };
+
+    root.addEventListener("click", handleClick);
+    return () => {
+      root.removeEventListener("click", handleClick);
+    };
+  }, [html]);
+
+  return <div ref={containerRef} className={className} dangerouslySetInnerHTML={{ __html: html }} />;
+});
+
 const TextNode = memo(function TextNode({
   node,
   onCopyText,
@@ -570,9 +624,12 @@ const TextNode = memo(function TextNode({
             ))}
           </div>
         ) : null}
-        <div className="flex max-w-[85%] flex-col gap-2 rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3">
+        <div className="flex max-w-[85%] min-w-0 flex-col gap-2 rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3">
           {parsed.text ? (
-            <div className="whitespace-pre-wrap text-sm leading-relaxed text-gray-900" dir="auto">
+            <div
+              className="max-w-full whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-900 [overflow-wrap:anywhere]"
+              dir="auto"
+            >
               {parsed.text}
             </div>
           ) : null}
@@ -610,9 +667,9 @@ const TextNode = memo(function TextNode({
             backgroundRepeat: "repeat-y",
           }}
         />
-        <div
+        <MarkdownContent
+          text={node.text}
           className={cx(markdownClassName(isErrorText), "relative z-10 !text-gray-500")}
-          dangerouslySetInnerHTML={{ __html: toSanitizedMarkdownHtml(node.text) }}
         />
       </div>
     );
@@ -621,9 +678,9 @@ const TextNode = memo(function TextNode({
   if (node.tone === "assistant" && !node.final) {
     return (
       <div className="pl-3">
-        <div
+        <MarkdownContent
+          text={node.text}
           className={markdownClassName(isErrorText)}
-          dangerouslySetInnerHTML={{ __html: toSanitizedMarkdownHtml(node.text) }}
         />
       </div>
     );
@@ -637,9 +694,9 @@ const TextNode = memo(function TextNode({
         node.final && "pb-1",
       )}
     >
-      <div
+      <MarkdownContent
+        text={node.text}
         className={markdownClassName(isErrorText)}
-        dangerouslySetInnerHTML={{ __html: toSanitizedMarkdownHtml(node.text) }}
       />
     </div>
   );

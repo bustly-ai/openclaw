@@ -71,7 +71,7 @@ import {
   sanitizeToolsForGoogle,
 } from "./google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
-import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
+import { resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { buildModelAliasLines, resolveModel } from "./model.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
@@ -243,7 +243,7 @@ function classifyCompactionReason(reason?: string): string {
 
 /**
  * Core compaction logic without lane queueing.
- * Use this when already inside a session/global lane to avoid deadlocks.
+ * Use this when already inside a session lane to avoid deadlocks.
  */
 export async function compactEmbeddedPiSessionDirect(
   params: CompactEmbeddedPiSessionParams,
@@ -342,10 +342,12 @@ export async function compactEmbeddedPiSessionDirect(
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
           config: params.config,
+          runtimeEnv: { OPENCLAW_RUN_ID: params.runId },
         })
       : applySkillEnvOverrides({
           skills: skillEntries ?? [],
           config: params.config,
+          runtimeEnv: { OPENCLAW_RUN_ID: params.runId },
         });
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
@@ -515,6 +517,7 @@ export async function compactEmbeddedPiSessionDirect(
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
+      timeoutMs: EMBEDDED_COMPACTION_TIMEOUT_MS,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
         timeoutMs: EMBEDDED_COMPACTION_TIMEOUT_MS,
       }),
@@ -744,18 +747,13 @@ export async function compactEmbeddedPiSessionDirect(
 }
 
 /**
- * Compacts a session with lane queueing (session lane + global lane).
- * Use this from outside a lane context. If already inside a lane, use
+ * Compacts a session with lane queueing (session lane only).
+ * Use this from outside a lane context. If already inside a session lane, use
  * `compactEmbeddedPiSessionDirect` to avoid deadlocks.
  */
 export async function compactEmbeddedPiSession(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult> {
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
-  const globalLane = resolveGlobalLane(params.lane);
-  const enqueueGlobal =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
-  return enqueueCommandInLane(sessionLane, () =>
-    enqueueGlobal(async () => compactEmbeddedPiSessionDirect(params)),
-  );
+  return enqueueCommandInLane(sessionLane, () => compactEmbeddedPiSessionDirect(params));
 }

@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.2.24",
+  "version": "2026.3.30",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -38,7 +38,79 @@
     ".": "./dist/index.js",
     "./plugin-sdk": {
       "types": "./dist/plugin-sdk/index.d.ts",
-      "default": "./dist/plugin-sdk/index.js"
+      "default": "./dist/plugin-sdk-compat/index.js"
+    },
+    "./plugin-sdk/agent-runtime": {
+      "types": "./dist/plugin-sdk-compat/agent-runtime.d.ts",
+      "default": "./dist/plugin-sdk-compat/agent-runtime.js"
+    },
+    "./plugin-sdk/allow-from": {
+      "types": "./dist/plugin-sdk-compat/allow-from.d.ts",
+      "default": "./dist/plugin-sdk-compat/allow-from.js"
+    },
+    "./plugin-sdk/channel-config-schema": {
+      "types": "./dist/plugin-sdk-compat/channel-config-schema.d.ts",
+      "default": "./dist/plugin-sdk-compat/channel-config-schema.js"
+    },
+    "./plugin-sdk/channel-feedback": {
+      "types": "./dist/plugin-sdk-compat/channel-feedback.d.ts",
+      "default": "./dist/plugin-sdk-compat/channel-feedback.js"
+    },
+    "./plugin-sdk/channel-runtime": {
+      "types": "./dist/plugin-sdk-compat/channel-runtime.d.ts",
+      "default": "./dist/plugin-sdk-compat/channel-runtime.js"
+    },
+    "./plugin-sdk/channel-status": {
+      "types": "./dist/plugin-sdk-compat/channel-status.d.ts",
+      "default": "./dist/plugin-sdk-compat/channel-status.js"
+    },
+    "./plugin-sdk/command-auth": {
+      "types": "./dist/plugin-sdk-compat/command-auth.d.ts",
+      "default": "./dist/plugin-sdk-compat/command-auth.js"
+    },
+    "./plugin-sdk/config-runtime": {
+      "types": "./dist/plugin-sdk-compat/config-runtime.d.ts",
+      "default": "./dist/plugin-sdk-compat/config-runtime.js"
+    },
+    "./plugin-sdk/infra-runtime": {
+      "types": "./dist/plugin-sdk-compat/infra-runtime.d.ts",
+      "default": "./dist/plugin-sdk-compat/infra-runtime.js"
+    },
+    "./plugin-sdk/param-readers": {
+      "types": "./dist/plugin-sdk-compat/param-readers.d.ts",
+      "default": "./dist/plugin-sdk-compat/param-readers.js"
+    },
+    "./plugin-sdk/reply-history": {
+      "types": "./dist/plugin-sdk-compat/reply-history.d.ts",
+      "default": "./dist/plugin-sdk-compat/reply-history.js"
+    },
+    "./plugin-sdk/reply-runtime": {
+      "types": "./dist/plugin-sdk-compat/reply-runtime.d.ts",
+      "default": "./dist/plugin-sdk-compat/reply-runtime.js"
+    },
+    "./plugin-sdk/routing": {
+      "types": "./dist/plugin-sdk-compat/routing.d.ts",
+      "default": "./dist/plugin-sdk-compat/routing.js"
+    },
+    "./plugin-sdk/setup": {
+      "types": "./dist/plugin-sdk-compat/setup.d.ts",
+      "default": "./dist/plugin-sdk-compat/setup.js"
+    },
+    "./plugin-sdk/temp-path": {
+      "types": "./dist/plugin-sdk-compat/temp-path.d.ts",
+      "default": "./dist/plugin-sdk-compat/temp-path.js"
+    },
+    "./plugin-sdk/text-runtime": {
+      "types": "./dist/plugin-sdk-compat/text-runtime.d.ts",
+      "default": "./dist/plugin-sdk-compat/text-runtime.js"
+    },
+    "./plugin-sdk/tool-send": {
+      "types": "./dist/plugin-sdk-compat/tool-send.d.ts",
+      "default": "./dist/plugin-sdk-compat/tool-send.js"
+    },
+    "./plugin-sdk/zalouser": {
+      "types": "./dist/plugin-sdk-compat/zalouser.d.ts",
+      "default": "./dist/plugin-sdk-compat/zalouser.js"
     },
     "./plugin-sdk/account-id": {
       "types": "./dist/plugin-sdk/account-id.d.ts",
@@ -51,7 +123,7 @@
     "android:install": "cd apps/android && ./gradlew :app:installDebug",
     "android:run": "cd apps/android && ./gradlew :app:installDebug && adb shell am start -n ai.openclaw.android/.MainActivity",
     "android:test": "cd apps/android && ./gradlew :app:testDebugUnitTest",
-    "build": "pnpm canvas:a2ui:bundle && tsdown && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-compat.ts",
+    "build": "pnpm canvas:a2ui:bundle && tsdown && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/write-plugin-sdk-compat.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
     "check": "pnpm format:check && pnpm tsgo && pnpm lint && pnpm lint:tmp:no-random-messaging",

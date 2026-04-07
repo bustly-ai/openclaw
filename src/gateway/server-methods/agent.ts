@@ -62,6 +62,30 @@ function isGatewayErrorShape(value: unknown): value is { code: string; message: 
   return typeof candidate.code === "string" && typeof candidate.message === "string";
 }
 
+function broadcastAcceptedAgentInput(params: {
+  context: Pick<GatewayRequestHandlerOptions["context"], "broadcast" | "nodeSendToSession">;
+  sessionKey?: string;
+  message: string;
+}) {
+  const sessionKey = params.sessionKey?.trim();
+  const text = params.message.trim();
+  if (!sessionKey || !text) {
+    return;
+  }
+  const payload = {
+    sessionKey,
+    seq: 0,
+    state: "final" as const,
+    message: {
+      role: "user",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    },
+  };
+  params.context.broadcast("chat", payload);
+  params.context.nodeSendToSession(sessionKey, "chat", payload);
+}
+
 async function runSessionResetFromAgent(params: {
   key: string;
   reason: "new" | "reset";
@@ -221,6 +245,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof request.bestEffortDeliver === "boolean" ? request.bestEffortDeliver : undefined;
 
     let message = (request.message ?? "").trim();
+    const userVisibleMessage = message;
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
     if (normalizedAttachments.length > 0) {
       try {
@@ -577,6 +602,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       payload: accepted,
     });
     respond(true, accepted, undefined, { runId });
+    broadcastAcceptedAgentInput({
+      context,
+      sessionKey: resolvedSessionKey,
+      message: userVisibleMessage,
+    });
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 

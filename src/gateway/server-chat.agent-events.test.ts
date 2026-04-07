@@ -88,7 +88,7 @@ describe("agent event handler", () => {
       seq: 1,
       stream: "assistant",
       ts: Date.now(),
-      data: { text },
+      data: { text, delta: text },
     });
     return harness;
   }

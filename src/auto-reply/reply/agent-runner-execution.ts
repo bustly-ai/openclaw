@@ -69,6 +69,7 @@ export async function runAgentTurnWithFallback(params: {
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
   opts?: GetReplyOptions;
+  retryWithoutNewUser?: boolean;
   typingSignals: TypingSignaler;
   blockReplyPipeline: BlockReplyPipeline | null;
   blockStreamingEnabled: boolean;
@@ -291,7 +292,7 @@ export async function runAgentTurnWithFallback(params: {
             ...senderContext,
             ...runBaseParams,
             prompt: params.commandBody,
-            retryWithoutNewUser: params.opts?.retryWithoutNewUser,
+            retryWithoutNewUser: params.retryWithoutNewUser ?? params.opts?.retryWithoutNewUser,
             extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
             toolResultFormat: (() => {
               const channel = resolveMessageChannel(
@@ -434,6 +435,7 @@ export async function runAgentTurnWithFallback(params: {
         runId,
         aborted: runResult.meta?.aborted === true,
         hasAssistantMessage: runResult.meta?.hasAssistantMessage === true,
+        assistantRequestMetrics: runResult.meta?.assistantRequestMetrics,
       });
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.

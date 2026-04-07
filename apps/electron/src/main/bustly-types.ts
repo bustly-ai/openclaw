@@ -7,6 +7,7 @@ export type BustlyOAuthUser = {
   userId: string;
   userName: string;
   userEmail: string;
+  userAvatarUrl?: string;
   userAccessToken?: string;
   userRefreshToken?: string;
   sessionExpiresIn?: number;

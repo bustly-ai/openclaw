@@ -8,17 +8,22 @@ import {
   dialog,
   type OpenDialogOptions,
 } from "electron";
+import * as Sentry from "@sentry/electron/main";
+import JSZip from "jszip";
 import { randomUUID } from "node:crypto";
-import { resolve, dirname, basename, join } from "node:path";
-import { spawn, spawnSync, ChildProcess } from "node:child_process";
+import { resolve, dirname, basename, join, relative } from "node:path";
+import { fork, spawnSync, ChildProcess } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
   mkdirSync,
-  appendFileSync,
+  copyFileSync,
   cpSync,
   statSync,
+  rmSync,
 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -32,9 +37,8 @@ import {
 } from "./auto-init.js";
 import {
   ensureBundledOpenClawShim,
-  resolveBundledBustlyBinDir,
-  resolveCliInvocation,
   resolveOpenClawCliPath,
+  resolveElectronRunAsNodeExecPath,
 } from "./cli-utils.js";
 import {
   exchangeToken,
@@ -53,7 +57,6 @@ import { resolveDefaultSessionStorePath } from "../../../../src/config/sessions/
 import { applyAgentConfig, listAgentEntries, pruneAgentConfig } from "../../../../src/commands/agents.config";
 import { GatewayClient } from "../../../../src/gateway/client";
 import type { SessionsPatchResult } from "../../../../src/gateway/protocol";
-import { applySessionsPatchToStore } from "../../../../src/gateway/sessions-patch";
 import type { OpenClawConfig } from "../../../../src/config/types";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../../../src/utils/message-channel";
 import {
@@ -62,7 +65,6 @@ import {
   setOpenrouterApiKey,
 } from "../../../../src/commands/onboard-auth";
 import { applyPrimaryModel } from "../../../../src/commands/model-picker";
-import { buildAgentMainSessionKey } from "../../../../src/routing/session-key";
 import {
   ELECTRON_DEFAULT_MODEL,
   ELECTRON_OPENCLAW_PROFILE,
@@ -70,18 +72,94 @@ import {
   resolveElectronBackendLogPath,
   resolveElectronIsolatedConfigPath,
   resolveElectronIsolatedStateDir,
-  resolveElectronBustlyWorkspaceTemplateBaseUrl,
 } from "./defaults.js";
 import {
-  buildBustlyAgentPresetChannelSessionKey,
+  buildBustlyAgentConversationSessionKey,
+  buildBustlyWorkspaceAgentPrefix,
+  DEFAULT_BUSTLY_AGENT_NAME,
   buildBustlyWorkspaceAgentId,
+  isBustlyAgentConversationSessionKey,
+  normalizeBustlyAgentName,
+  normalizeBustlyWorkspaceId,
 } from "../shared/bustly-agent.js";
+import { normalizeAgentId } from "../../../../src/routing/session-key.js";
 import {
-  BUSTLY_MAIN_AGENT_PRESET,
-  BUSTLY_PRESET_CHANNELS,
-} from "../shared/bustly-preset-channels.js";
+  loadBustlyMainAgentPreset,
+  loadBustlyRemoteAgentPresets,
+  loadEnabledBustlyRemoteAgentPresets,
+} from "./bustly-agent-presets.js";
+import {
+  ensureMainLogPath,
+  setMainLogSink,
+  writeMainError,
+  writeMainInfo,
+  writeMainLog,
+  writeMainWarn,
+} from "./logger.js";
+
+type BustlyWorkspaceAgentSummary = {
+  agentId: string;
+  agentName: string;
+  name: string;
+  icon?: string;
+  isMain: boolean;
+  createdAt: number | null;
+  updatedAt: number | null;
+};
+
+type BustlyWorkspaceAgentSessionSummary = {
+  agentId: string;
+  sessionKey: string;
+  name: string;
+  icon?: string;
+  updatedAt: number | null;
+};
+
+type BustlyAgentMetadata = {
+  icon?: string;
+  createdAt?: number;
+};
+
+type OpenClawAgentListEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
+const SENTRY_DSN =
+  "https://03becf8322280fe9b5b01c0524874af0@o4511115803557888.ingest.us.sentry.io/4511115804737536";
+
+function syncSentryBustlyScope(): void {
+  try {
+    const user = BustlyOAuth.readBustlyOAuthState()?.user;
+    const userId = user?.userId?.trim() || "";
+    const workspaceId = user?.workspaceId?.trim() || "";
+    const email = user?.userEmail?.trim() || "";
+    const username = user?.userName?.trim() || "";
+
+    Sentry.setUser(
+      userId || email || username
+        ? {
+            id: userId || undefined,
+            email: email || undefined,
+            username: username || undefined,
+          }
+        : null,
+    );
+    Sentry.setTag("workspace_id", workspaceId || "");
+    Sentry.setTag("uid", userId || "");
+    Sentry.setContext(
+      "bustly",
+      workspaceId || userId || email || username
+        ? {
+            workspaceId: workspaceId || undefined,
+            userId: userId || undefined,
+            userEmail: email || undefined,
+            userName: username || undefined,
+          }
+        : null,
+    );
+  } catch {
+    // Never let Sentry scope syncing break the main process.
+  }
+}
 
 function parseDotEnv(content: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -110,12 +188,30 @@ function parseDotEnv(content: string): Record<string, string> {
   return out;
 }
 
+function stripPerAgentSkipBootstrap(
+  entries: OpenClawAgentListEntry[] | undefined,
+): OpenClawAgentListEntry[] | undefined {
+  if (!entries) {
+    return entries;
+  }
+  return entries.map((entry) => {
+    if (!("skipBootstrap" in entry)) {
+      return entry;
+    }
+    const { skipBootstrap: _skipBootstrap, ...rest } = entry as OpenClawAgentListEntry & {
+      skipBootstrap?: boolean;
+    };
+    return rest;
+  });
+}
+
 function loadMainProcessEnvFromDotEnv(): void {
   const envPathCandidates = [
     resolve(__dirname, "../../.env"),
     resolve(__dirname, "../.env"),
     resolve(process.cwd(), ".env"),
   ];
+
   for (const envPath of envPathCandidates) {
     if (!existsSync(envPath)) {
       continue;
@@ -129,26 +225,107 @@ function loadMainProcessEnvFromDotEnv(): void {
       }
       break;
     } catch (error) {
-      console.error(`[Env] Failed to load ${envPath}:`, error);
+      writeMainError(`[Env] Failed to load ${envPath}:`, error);
     }
   }
 }
 
+function formatIssueReportTimestamp(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const seconds = String(date.getSeconds()).padStart(2, "0");
+  return `${year}${month}${day}-${hours}${minutes}${seconds}`;
+}
+
+function addDirectoryToZip(params: {
+  zip: JSZip;
+  baseDir: string;
+  currentDir: string;
+  pathPrefix: string;
+}): void {
+  const entries = readdirSync(params.currentDir, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name));
+
+  for (const entry of entries) {
+    const entryPath = join(params.currentDir, entry.name);
+    const relativePath = entryPath.slice(params.baseDir.length + 1).replace(/\\/g, "/");
+    const zipPath = `${params.pathPrefix}/${relativePath}`;
+
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      params.zip.folder(zipPath);
+      addDirectoryToZip({
+        zip: params.zip,
+        baseDir: params.baseDir,
+        currentDir: entryPath,
+        pathPrefix: params.pathPrefix,
+      });
+      continue;
+    }
+
+    if (!entry.isFile()) {
+      continue;
+    }
+
+    const stat = lstatSync(entryPath);
+    params.zip.file(zipPath, readFileSync(entryPath), {
+      unixPermissions: stat.mode,
+      date: stat.mtime,
+    });
+  }
+}
+
+async function createBustlyIssueReportArchive(): Promise<string> {
+  const stateDir = resolve(app.getPath("home"), ".bustly");
+  if (!existsSync(stateDir) || !lstatSync(stateDir).isDirectory()) {
+    throw new Error(`Bustly state directory not found: ${stateDir}`);
+  }
+
+  const downloadsDir = app.getPath("downloads");
+  mkdirSync(downloadsDir, { recursive: true });
+
+  const zip = new JSZip();
+  zip.folder(".bustly");
+  addDirectoryToZip({
+    zip,
+    baseDir: stateDir,
+    currentDir: stateDir,
+    pathPrefix: ".bustly",
+  });
+
+  const archivePath = join(
+    downloadsDir,
+    `bustly-issue-report-${formatIssueReportTimestamp(new Date())}.zip`,
+  );
+  const archiveBuffer = await zip.generateAsync({
+    type: "nodebuffer",
+    compression: "DEFLATE",
+    compressionOptions: { level: 6 },
+  });
+  writeFileSync(archivePath, archiveBuffer);
+  shell.showItemInFolder(archivePath);
+  return archivePath;
+}
+
 loadMainProcessEnvFromDotEnv();
 
-if (!process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL?.trim()) {
-  const appVersion = app.getVersion();
-  const isDevelopment = !app.isPackaged;
-  const isBetaVersion = !isDevelopment && appVersion.toLowerCase().includes("beta");
-  const prodUrl = process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL_PROD?.trim();
-  const testUrl = process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL_TEST?.trim();
+Sentry.init({
+  dsn: SENTRY_DSN,
+  environment: process.env.NODE_ENV || "production",
+});
+syncSentryBustlyScope();
+
+if (process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL?.trim()) {
   process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL =
-    ((isDevelopment || isBetaVersion) ? testUrl : prodUrl) ||
-    resolveElectronBustlyWorkspaceTemplateBaseUrl(isDevelopment ? "beta" : appVersion);
-  console.log("[Bustly Prompts] Selected template base URL:", {
-    appVersion,
-    isPackaged: app.isPackaged,
-    channel: isDevelopment ? "test-dev" : isBetaVersion ? "test" : "prod",
+    process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL.trim();
+  writeMainInfo("[Bustly Prompts] Loaded template base URL from env:", {
+    nodeEnv: process.env.NODE_ENV || "production",
     url: process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL,
   });
 }
@@ -161,21 +338,41 @@ const DEEP_LINK_CHANNEL = "deep-link";
 app.setName(APP_DISPLAY_NAME);
 
 let gatewayProcess: ChildProcess | null = null;
+let gatewayStartPromise: Promise<boolean> | null = null;
 let mainWindow: BrowserWindow | null = null;
 let needsOnboardAtLaunch = false;
 let gatewayPort: number = 17999;
 let gatewayBind: string = "loopback";
 let gatewayToken: string | null = null;
+let gatewayStartupInFlight = false;
+let gatewayShutdownExpected = false;
+let gatewayAutoRestartAttempt = 0;
+let gatewayAutoRestartTimer: NodeJS.Timeout | null = null;
+let gatewayLastWorkerFailure: {
+  kind: "config" | "runtime";
+  message: string;
+} | null = null;
 let bustlyLoginCancelled = false;
 let bustlyLoginAttemptId = 0;
 
-function emitGatewayLifecycle(phase: "starting" | "stopping" | "ready" | "error", message?: string): void {
+setMainLogSink((entry) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("main-log", entry);
+  }
+});
+
+function emitGatewayLifecycle(
+  phase: "starting" | "stopping" | "ready" | "error",
+  message?: string,
+  opts?: { canRestoreLastGoodConfig?: boolean },
+): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
   }
   mainWindow.webContents.send("gateway-lifecycle", {
     phase,
     message: message ?? null,
+    canRestoreLastGoodConfig: opts?.canRestoreLastGoodConfig === true,
   });
 }
 
@@ -306,9 +503,50 @@ function resolveImagePreviewMimeType(filePath: string): string | null {
 let updateReady = false;
 let updateVersion: string | null = null;
 let updateInstalling = false;
-let pendingDeepLink: { url: string; route: string | null } | null = null;
+type DeepLinkPayload = {
+  url: string;
+  route: string | null;
+  workspaceId: string | null;
+};
+
+let pendingDeepLink: DeepLinkPayload | null = null;
 
 const EXTERNAL_NAV_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+const WINDOWS_ABSOLUTE_PATH_RE = /^[A-Za-z]:[\\/]/;
+const HOME_RELATIVE_PATH_RE = /^~(?:[\\/]|$)/;
+
+function isOpenableLocalPath(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("\\\\") ||
+    WINDOWS_ABSOLUTE_PATH_RE.test(trimmed) ||
+    HOME_RELATIVE_PATH_RE.test(trimmed)
+  );
+}
+
+function decodeOpenableLocalPath(value: string): string {
+  if (!value.includes("%")) {
+    return value;
+  }
+  try {
+    return decodeURI(value);
+  } catch {
+    return value;
+  }
+}
+
+function resolveOpenableLocalPath(value: string): string {
+  const trimmed = decodeOpenableLocalPath(value.trim());
+  if (!HOME_RELATIVE_PATH_RE.test(trimmed)) {
+    return trimmed;
+  }
+  const suffix = trimmed.slice(1).replace(/^[/\\]+/, "");
+  return suffix ? join(app.getPath("home"), suffix) : app.getPath("home");
+}
 
 function shouldOpenExternal(url: string): boolean {
   if (!url) {
@@ -361,7 +599,7 @@ function buildBustlyAdminUrl(params: Record<string, string | null | undefined>, 
   return url.toString();
 }
 
-function parseDeepLink(url: string): { url: string; route: string | null } | null {
+function parseDeepLink(url: string): DeepLinkPayload | null {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -376,10 +614,15 @@ function parseDeepLink(url: string): { url: string; route: string | null } | nul
   const routeFromPath = normalizeDeepLinkRoute(parsed.pathname);
   const routeFromHost =
     parsed.hostname && parsed.hostname !== "open" ? normalizeDeepLinkRoute(parsed.hostname) : null;
+  const workspaceId =
+    parsed.searchParams.get("workspace_id")?.trim() ||
+    parsed.searchParams.get("workspaceId")?.trim() ||
+    null;
 
   return {
     url,
     route: routeFromQuery ?? routeFromPath ?? routeFromHost ?? null,
+    workspaceId,
   };
 }
 
@@ -395,25 +638,38 @@ function focusMainWindow() {
 }
 
 function dispatchDeepLink(url: string): boolean {
-  const payload = parseDeepLink(url);
-  if (!payload) {
-    return false;
-  }
+  void (async () => {
+    const payload = parseDeepLink(url);
+    if (!payload) {
+      writeMainLog(`[DeepLink] ignored url=${url} reason=parse_failed`);
+      return;
+    }
 
-  pendingDeepLink = payload;
-  writeMainLog(`[DeepLink] received url=${payload.url} route=${payload.route ?? "(none)"}`);
+    pendingDeepLink = payload;
+    writeMainLog(
+      `[DeepLink] received url=${payload.url} route=${payload.route ?? "(none)"} workspaceId=${payload.workspaceId ?? "(none)"}`,
+    );
 
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    ensureWindow();
-    return true;
-  }
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      writeMainLog("[DeepLink] main window missing; creating window and keeping payload pending");
+      ensureWindow();
+      return;
+    }
 
-  focusMainWindow();
-  if (payload.route) {
-    loadRendererWindow(mainWindow, { hash: payload.route });
-  }
-  mainWindow.webContents.send(DEEP_LINK_CHANNEL, payload);
-  pendingDeepLink = null;
+    focusMainWindow();
+    if (payload.workspaceId?.trim()) {
+      try {
+        await setActiveWorkspaceInternal(payload.workspaceId);
+      } catch (error) {
+        writeMainLog(
+          `[DeepLink] workspace switch failed workspaceId=${payload.workspaceId} error=${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    writeMainLog("[DeepLink] dispatching payload to renderer");
+    mainWindow.webContents.send(DEEP_LINK_CHANNEL, payload);
+    pendingDeepLink = null;
+  })();
   return true;
 }
 
@@ -421,13 +677,10 @@ function flushPendingDeepLink() {
   if (!pendingDeepLink || !mainWindow || mainWindow.isDestroyed()) {
     return;
   }
-  const payload = pendingDeepLink;
+  writeMainLog(
+    `[DeepLink] flush pending route=${pendingDeepLink.route ?? "(none)"} workspaceId=${pendingDeepLink.workspaceId ?? "(none)"}`,
+  );
   focusMainWindow();
-  if (payload.route) {
-    loadRendererWindow(mainWindow, { hash: payload.route });
-  }
-  mainWindow.webContents.send(DEEP_LINK_CHANNEL, payload);
-  pendingDeepLink = null;
 }
 
 function registerProtocolClient() {
@@ -446,7 +699,6 @@ function registerProtocolClient() {
   }
 }
 let initResult: InitializationResult | null = null;
-let mainLogPath: string | null = null;
 
 // Gateway configuration
 const GATEWAY_HOST = "127.0.0.1";
@@ -458,7 +710,7 @@ const BUSTLY_MODEL_GATEWAY_BASE_URL_ENV = process.env.BUSTLY_MODEL_GATEWAY_BASE_
 const BUSTLY_MODEL_GATEWAY_BASE_URL =
   BUSTLY_MODEL_GATEWAY_BASE_URL_ENV || BUSTLY_MODEL_GATEWAY_BASE_URL_DEFAULT;
 const BUSTLY_MODEL_GATEWAY_USER_AGENT =
-  process.env.BUSTLY_MODEL_GATEWAY_USER_AGENT?.trim() || "openclaw/2026.2.24";
+  process.env.BUSTLY_MODEL_GATEWAY_USER_AGENT?.trim() || `bustly/${app.getVersion()}`;
 const BUSTLY_ROUTE_MODELS = [
   {
     routeKey: "chat.standard",
@@ -660,144 +912,310 @@ function resolveElectronConfigPath(): string {
   return resolveElectronIsolatedConfigPath();
 }
 
-function resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId: string): string {
-  const agentId = buildBustlyWorkspaceAgentId(workspaceId);
-  const stateDir = resolveElectronStateDir();
-  return join(stateDir, "workspaces", agentId);
+function resolveGatewayLastGoodConfigPath(): string {
+  return join(resolveElectronStateDir(), "electron", "gateway", "openclaw.last-good.json");
 }
 
-function resolveBustlyWorkspaceAgentSessionKey(workspaceId: string): string {
-  return buildAgentMainSessionKey({ agentId: buildBustlyWorkspaceAgentId(workspaceId) });
+function hasGatewayLastGoodConfigSnapshot(): boolean {
+  return existsSync(resolveGatewayLastGoodConfigPath());
+}
+
+function snapshotGatewayLastGoodConfig(): void {
+  const configPath = resolveElectronConfigPath();
+  if (!existsSync(configPath)) {
+    return;
+  }
+  const snapshotPath = resolveGatewayLastGoodConfigPath();
+  mkdirSync(dirname(snapshotPath), { recursive: true, mode: 0o700 });
+  copyFileSync(configPath, snapshotPath);
+  writeMainLog(`[Gateway] Saved last-good config snapshot to ${snapshotPath}`);
+}
+
+function restoreGatewayLastGoodConfigSnapshot(): void {
+  const snapshotPath = resolveGatewayLastGoodConfigPath();
+  if (!existsSync(snapshotPath)) {
+    throw new Error("No last working gateway config is available");
+  }
+  const configPath = resolveElectronConfigPath();
+  mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 });
+  copyFileSync(snapshotPath, configPath);
+  writeMainLog(`[Gateway] Restored last-good config snapshot from ${snapshotPath}`);
+}
+
+function clearGatewayAutoRestartTimer(): void {
+  if (gatewayAutoRestartTimer) {
+    clearTimeout(gatewayAutoRestartTimer);
+    gatewayAutoRestartTimer = null;
+  }
+}
+
+function isLikelyGatewayConfigError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("invalid config") ||
+    normalized.includes("legacy config") ||
+    normalized.includes("requires gateway.") ||
+    normalized.includes("requires gateway ") ||
+    normalized.includes("gateway.bind=") ||
+    normalized.includes("refusing to bind gateway") ||
+    normalized.includes("tailscale") ||
+    normalized.includes("allowedorigins") ||
+    normalized.includes("trusted-proxy")
+  );
+}
+
+function scheduleGatewayAutoRestart(reason: string): void {
+  if (gatewayAutoRestartTimer || gatewayShutdownExpected || gatewayStartupInFlight || gatewayProcess) {
+    return;
+  }
+  const attempt = gatewayAutoRestartAttempt + 1;
+  const delayMs = Math.min(1_000 * 2 ** (attempt - 1), 10_000);
+  gatewayAutoRestartAttempt = attempt;
+  writeMainWarn(`[Gateway] Unexpected exit. Restart attempt ${attempt} in ${delayMs}ms: ${reason}`);
+  emitGatewayLifecycle("starting", `Gateway interrupted. Recovering${attempt > 1 ? ` (attempt ${attempt})` : ""}...`);
+  gatewayAutoRestartTimer = setTimeout(() => {
+    gatewayAutoRestartTimer = null;
+    void startGateway().catch((error) => {
+      writeMainError("[Gateway] Auto-restart failed:", error);
+    });
+  }, delayMs);
+}
+
+function resolveBustlyWorkspaceAgentWorkspaceDir(
+  workspaceId: string,
+  agentName: string = DEFAULT_BUSTLY_AGENT_NAME,
+): string {
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(workspaceId);
+  const normalizedAgentName = normalizeBustlyAgentName(agentName);
+  const stateDir = resolveElectronStateDir();
+  return join(stateDir, "workspaces", normalizedWorkspaceId, "agents", normalizedAgentName);
+}
+
+function resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir: string): string {
+  return join(agentWorkspaceDir, ".bustly-agent.json");
+}
+
+function isPathInsideDir(parentDir: string, candidatePath: string): boolean {
+  const parent = resolve(parentDir);
+  const candidate = resolve(candidatePath);
+  const rel = relative(parent, candidate);
+  return rel === "" || (!rel.startsWith("..") && !rel.startsWith("../"));
+}
+
+function removeDirIfWithinRoot(targetDir: string | undefined, rootDir: string): void {
+  const trimmed = targetDir?.trim();
+  if (!trimmed) {
+    return;
+  }
+  const resolvedTarget = resolve(trimmed);
+  if (!isPathInsideDir(rootDir, resolvedTarget)) {
+    writeMainWarn(
+      `[Workspace] Refusing to delete path outside allowed root target=${resolvedTarget} root=${resolve(rootDir)}`,
+    );
+    return;
+  }
+  rmSync(resolvedTarget, { recursive: true, force: true });
+}
+
+function loadBustlyAgentMetadata(agentWorkspaceDir: string): BustlyAgentMetadata {
+  const metadataPath = resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir);
+  if (!existsSync(metadataPath)) {
+    return {};
+  }
+  try {
+    const raw = readFileSync(metadataPath, "utf-8");
+    const parsed = JSON.parse(raw) as BustlyAgentMetadata;
+    return {
+      icon: parsed.icon?.trim() || undefined,
+      createdAt:
+        typeof parsed.createdAt === "number" && Number.isFinite(parsed.createdAt)
+          ? parsed.createdAt
+          : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function saveBustlyAgentMetadata(agentWorkspaceDir: string, metadata: BustlyAgentMetadata): void {
+  mkdirSync(agentWorkspaceDir, { recursive: true });
+  writeFileSync(
+    resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir),
+    JSON.stringify(metadata, null, 2),
+    "utf-8",
+  );
+}
+
+function resolveBustlyAgentCreatedAt(
+  agentWorkspaceDir: string,
+  metadata: BustlyAgentMetadata,
+): number | null {
+  if (typeof metadata.createdAt === "number" && Number.isFinite(metadata.createdAt)) {
+    return metadata.createdAt;
+  }
+  for (const candidatePath of [agentWorkspaceDir, resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir)]) {
+    if (!existsSync(candidatePath)) {
+      continue;
+    }
+    try {
+      const stats = statSync(candidatePath);
+      const fallbackCreatedAt =
+        Number.isFinite(stats.birthtimeMs) && stats.birthtimeMs > 0
+          ? stats.birthtimeMs
+          : Number.isFinite(stats.ctimeMs) && stats.ctimeMs > 0
+            ? stats.ctimeMs
+            : Number.isFinite(stats.mtimeMs) && stats.mtimeMs > 0
+              ? stats.mtimeMs
+              : 0;
+      if (fallbackCreatedAt > 0) {
+        return Math.floor(fallbackCreatedAt);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function buildBustlyConversationSessionKey(agentId: string): string {
+  return buildBustlyAgentConversationSessionKey(agentId, randomUUID());
+}
+
+function listBustlyAgentConversationSessions(agentId: string): BustlyWorkspaceAgentSessionSummary[] {
+  const store = loadSessionStore(resolveDefaultSessionStorePath(agentId));
+  return Object.entries(store)
+    .filter(([sessionKey]) => isBustlyAgentConversationSessionKey(sessionKey, agentId))
+    .map(([sessionKey, entry]) => ({
+      agentId,
+      sessionKey,
+      name: entry.label?.trim() || "New conversation",
+      icon: entry.icon?.trim() || undefined,
+      updatedAt: entry.updatedAt ?? null,
+    }))
+    .sort((left, right) => {
+      const leftUpdatedAt = left.updatedAt ?? 0;
+      const rightUpdatedAt = right.updatedAt ?? 0;
+      if (leftUpdatedAt !== rightUpdatedAt) {
+        return rightUpdatedAt - leftUpdatedAt;
+      }
+      return left.name.localeCompare(right.name);
+    });
+}
+
+function listBustlyWorkspaceAgentIds(cfg: OpenClawConfig, workspaceId: string): string[] {
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(workspaceId);
+  if (!normalizedWorkspaceId) {
+    return [];
+  }
+  const prefix = buildBustlyWorkspaceAgentPrefix(normalizedWorkspaceId);
+  return listAgentEntries(cfg)
+    .filter((entry) => entry.id === `bustly-${normalizedWorkspaceId}` || entry.id.startsWith(prefix))
+    .map((entry) => entry.id);
+}
+
+function applyBustlyWorkspaceCollaborationConfig(
+  cfg: OpenClawConfig,
+  workspaceId: string,
+): OpenClawConfig {
+  void workspaceId;
+  // Subagent orchestration is intentionally disabled for Electron initialization.
+  // Keep workspace agents isolated until the desktop client has explicit support for it.
+  return cfg;
 }
 
 function resolveBustlyWorkspaceIdFromOAuthState(): string {
   return BustlyOAuth.readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
 }
 
-function listEnabledBustlyPresetChannels() {
-  return BUSTLY_PRESET_CHANNELS
-    .filter((entry) => entry.enabled !== false)
-    .slice()
-    .toSorted((a, b) => a.order - b.order);
-}
-
-function hasMissingBustlyWorkspaceSessions(agentId: string): boolean {
-  const presets = listEnabledBustlyPresetChannels();
-  const store = loadSessionStore(resolveDefaultSessionStorePath(agentId));
-  const mainSessionKey = buildAgentMainSessionKey({ agentId });
-  if (!store[mainSessionKey]) {
+async function hasMissingBustlyWorkspaceSetup(workspaceId: string): Promise<boolean> {
+  const cfg = loadConfig();
+  const workspaceAgentIds = new Set(listBustlyWorkspaceAgentIds(cfg, workspaceId));
+  const mainAgentId = buildBustlyWorkspaceAgentId(workspaceId);
+  if (!workspaceAgentIds.has(mainAgentId)) {
     return true;
   }
+  const presets = await loadEnabledBustlyRemoteAgentPresets();
   return presets.some((preset) => {
-    const storeKey = buildBustlyAgentPresetChannelSessionKey(agentId, preset.slug);
-    return !store[storeKey];
+    const agentId = buildBustlyWorkspaceAgentId(workspaceId, preset.slug);
+    return !workspaceAgentIds.has(agentId);
   });
 }
 
-async function ensureBustlyMainSession(params: { agentId: string }): Promise<void> {
-  const storePath = resolveDefaultSessionStorePath(params.agentId);
-  const mainSessionKey = buildAgentMainSessionKey({ agentId: params.agentId });
-  await updateSessionStore(storePath, (store) => {
-    const existing = store[mainSessionKey];
-    if (!existing) {
-      store[mainSessionKey] = {
-        sessionId: randomUUID(),
-        updatedAt: Date.now(),
-        label: BUSTLY_MAIN_AGENT_PRESET.label,
-        icon: BUSTLY_MAIN_AGENT_PRESET.icon,
-      };
-      return store;
-    }
-    const label = existing.label?.trim();
-    if (!label) {
-      existing.label = BUSTLY_MAIN_AGENT_PRESET.label;
-    }
-    const icon = existing.icon?.trim();
-    if (!icon) {
-      existing.icon = BUSTLY_MAIN_AGENT_PRESET.icon;
-    }
-    return store;
-  });
-}
-
-async function ensureBustlyPresetChannels(params: { agentId: string }): Promise<void> {
-  const legacyPresetLabels = new Map<string, string>([
-    ["daily-ops", "Daily Ops"],
-    ["campaigns", "Campaigns"],
-    ["inventory", "Inventory"],
-    ["support", "Support"],
-  ]);
-  const legacyPresetIcons = new Set(["ChartBar", "TrendUp", "ChatCircleText", "Package", "Storefront", "User", "Tag"]);
-  const presets = listEnabledBustlyPresetChannels();
-  if (presets.length === 0) {
+function setBustlyAgentMetadata(params: {
+  workspaceDir: string;
+  icon?: string;
+  createdAt?: number;
+}): void {
+  const nextIcon = params.icon?.trim();
+  const nextCreatedAt =
+    typeof params.createdAt === "number" && Number.isFinite(params.createdAt)
+      ? params.createdAt
+      : undefined;
+  if (!nextIcon && nextCreatedAt === undefined) {
     return;
   }
-
-  const cfg = loadConfig();
-  const storePath = resolveDefaultSessionStorePath(params.agentId);
-
-  await updateSessionStore(storePath, async (store) => {
-    for (const preset of presets) {
-      const storeKey = buildBustlyAgentPresetChannelSessionKey(params.agentId, preset.slug);
-      const existing = store[storeKey];
-      const nextPatch: {
-        key: string;
-        label?: string;
-        icon?: string;
-        model?: string;
-      } = { key: storeKey };
-
-      const existingLabel = existing?.label?.trim();
-      const shouldReplaceLegacyLabel =
-        existingLabel != null &&
-        existingLabel.length > 0 &&
-        existingLabel === legacyPresetLabels.get(preset.slug);
-      if (!existingLabel || shouldReplaceLegacyLabel) {
-        nextPatch.label = preset.label;
-      }
-      if (shouldReplaceLegacyLabel || !existing?.icon?.trim() || legacyPresetIcons.has(existing.icon.trim())) {
-        nextPatch.icon = preset.icon;
-      }
-      if (!existing?.modelOverride?.trim() && preset.model?.trim()) {
-        nextPatch.model = preset.model.trim();
-      }
-      if (!("label" in nextPatch) && !("icon" in nextPatch) && !("model" in nextPatch)) {
-        continue;
-      }
-
-      const applied = await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey,
-        patch: nextPatch,
-      });
-      if (!applied.ok) {
-        throw new Error(applied.error.message);
-      }
-    }
-    return store;
+  const current = loadBustlyAgentMetadata(params.workspaceDir);
+  saveBustlyAgentMetadata(params.workspaceDir, {
+    ...current,
+    icon: nextIcon ?? current.icon,
+    createdAt: nextCreatedAt ?? current.createdAt,
   });
+}
+
+async function ensureBustlyPresetAgents(params: {
+  workspaceId: string;
+  workspaceName?: string;
+}): Promise<void> {
+  const presets = await loadEnabledBustlyRemoteAgentPresets();
+  for (const preset of presets) {
+    if (preset.slug === DEFAULT_BUSTLY_AGENT_NAME || preset.isMain) {
+      continue;
+    }
+    const agentId = buildBustlyWorkspaceAgentId(params.workspaceId, preset.slug);
+    const config = loadConfig();
+    if (!listAgentEntries(config).some((entry) => entry.id === agentId)) {
+      await createBustlyWorkspaceAgent({
+        workspaceId: params.workspaceId,
+        workspaceName: params.workspaceName,
+        agentName: preset.slug,
+        displayName: preset.label,
+        icon: preset.icon,
+      });
+      continue;
+    }
+    const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(params.workspaceId, preset.slug);
+    setBustlyAgentMetadata({
+      workspaceDir,
+      icon: preset.icon,
+    });
+  }
 }
 
 async function ensureBustlyWorkspaceAgentConfig(params: {
   workspaceId: string;
   workspaceName?: string;
-}): Promise<{ agentId: string; sessionKey: string; workspaceDir: string }> {
+  agentName?: string;
+}): Promise<{ agentId: string; workspaceDir: string }> {
   const workspaceId = params.workspaceId.trim();
   if (!workspaceId) {
     throw new Error("Bustly workspaceId is required.");
   }
+  const agentName = normalizeBustlyAgentName(params.agentName);
   const configPath = resolveElectronConfigPath();
   if (!existsSync(configPath)) {
     throw new Error(`OpenClaw config not found at ${configPath}`);
   }
 
-  const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId);
-  const agentId = buildBustlyWorkspaceAgentId(workspaceId);
-  const sessionKey = resolveBustlyWorkspaceAgentSessionKey(workspaceId);
+  const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId, agentName);
+  const agentId = buildBustlyWorkspaceAgentId(workspaceId, agentName);
   const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
   const providedWorkspaceName = params.workspaceName?.trim();
-  const nextName = providedWorkspaceName || workspaceId;
+  const mainPreset = await loadBustlyMainAgentPreset();
+  const preset = (await loadBustlyRemoteAgentPresets()).find((entry) => entry.slug === agentName);
+  const nextName =
+    agentName === DEFAULT_BUSTLY_AGENT_NAME
+      ? mainPreset.label
+      : preset?.label || providedWorkspaceName || agentName;
   const configWithoutMain =
     listAgentEntries(config).some((entry) => entry.id === "main")
       ? pruneAgentConfig(config, "main").config
@@ -822,38 +1240,292 @@ async function ensureBustlyWorkspaceAgentConfig(params: {
       defaults: {
         ...updated.agents?.defaults,
         workspace: workspaceDir,
+        skipBootstrap: true,
       },
-      list: normalizedNextList,
+      list: stripPerAgentSkipBootstrap(normalizedNextList),
     },
   };
+  const synchronizedConfig = applyBustlyWorkspaceCollaborationConfig(nextConfig, workspaceId);
 
-  if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
-    writeFileSync(configPath, JSON.stringify(nextConfig, null, 2));
+  if (JSON.stringify(synchronizedConfig) !== JSON.stringify(config)) {
+    writeFileSync(configPath, JSON.stringify(synchronizedConfig, null, 2));
   }
 
   await initializeBustlyWorkspaceBootstrap({
     workspaceDir,
     workspaceId,
     workspaceName: providedWorkspaceName,
+    agentName,
+  });
+  setBustlyAgentMetadata({
+    workspaceDir,
+    icon: agentName === DEFAULT_BUSTLY_AGENT_NAME ? mainPreset.icon : preset?.icon,
   });
 
-  await ensureBustlyMainSession({ agentId });
-  await ensureBustlyPresetChannels({ agentId });
+  await ensureBustlyPresetAgents({
+    workspaceId,
+    workspaceName: providedWorkspaceName,
+  });
 
-  return { agentId, sessionKey, workspaceDir };
+  return { agentId, workspaceDir };
+}
+
+async function createBustlyWorkspaceAgent(params: {
+  workspaceId: string;
+  workspaceName?: string;
+  agentName: string;
+  displayName?: string;
+  icon?: string;
+}): Promise<{ agentId: string; workspaceDir: string }> {
+  const workspaceId = params.workspaceId.trim();
+  if (!workspaceId) {
+    throw new Error("Bustly workspaceId is required.");
+  }
+  const agentName = normalizeBustlyAgentName(params.agentName);
+  const displayName = params.displayName?.trim() || agentName;
+  const icon = params.icon?.trim() || "SquaresFour";
+  const configPath = resolveElectronConfigPath();
+  if (!existsSync(configPath)) {
+    throw new Error(`OpenClaw config not found at ${configPath}`);
+  }
+
+  const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId, agentName);
+  const agentId = buildBustlyWorkspaceAgentId(workspaceId, agentName);
+  const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+
+  if (listAgentEntries(config).some((entry) => entry.id === agentId)) {
+    throw new Error(`Agent "${agentName}" already exists in this workspace.`);
+  }
+
+  const configWithoutMain =
+    listAgentEntries(config).some((entry) => entry.id === "main")
+      ? pruneAgentConfig(config, "main").config
+      : config;
+  const updated = applyAgentConfig(configWithoutMain, {
+    agentId,
+    name: displayName,
+    workspace: workspaceDir,
+  });
+  const synchronizedConfig = applyBustlyWorkspaceCollaborationConfig({
+    ...updated,
+    agents: {
+      ...updated.agents,
+      defaults: {
+        ...updated.agents?.defaults,
+        skipBootstrap: true,
+      },
+      list: stripPerAgentSkipBootstrap(updated.agents?.list),
+    },
+  }, workspaceId);
+  if (JSON.stringify(synchronizedConfig) !== JSON.stringify(config)) {
+    writeFileSync(configPath, JSON.stringify(synchronizedConfig, null, 2));
+  }
+
+  await initializeBustlyWorkspaceBootstrap({
+    workspaceDir,
+    workspaceId,
+    workspaceName: params.workspaceName,
+    agentName,
+  });
+  setBustlyAgentMetadata({
+    workspaceDir,
+    icon,
+    createdAt: Date.now(),
+  });
+
+  return { agentId, workspaceDir };
+}
+
+function listBustlyWorkspaceAgents(workspaceId: string): BustlyWorkspaceAgentSummary[] {
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(workspaceId);
+  if (!normalizedWorkspaceId) {
+    return [];
+  }
+
+  const cfg = loadConfig();
+  const prefix = buildBustlyWorkspaceAgentPrefix(normalizedWorkspaceId);
+  return listAgentEntries(cfg)
+    .filter((entry) => entry.id === `bustly-${normalizedWorkspaceId}` || entry.id.startsWith(prefix))
+    .map((entry) => {
+      const agentId = entry.id;
+      const agentName =
+        agentId === `bustly-${normalizedWorkspaceId}`
+          ? DEFAULT_BUSTLY_AGENT_NAME
+          : normalizeBustlyAgentName(agentId.slice(prefix.length) || DEFAULT_BUSTLY_AGENT_NAME);
+      const workspaceDir = entry.workspace?.trim() || resolveBustlyWorkspaceAgentWorkspaceDir(normalizedWorkspaceId, agentName);
+      const metadata = loadBustlyAgentMetadata(workspaceDir);
+      const sessions = listBustlyAgentConversationSessions(agentId);
+      const displayName = entry.name?.trim() || agentName;
+      const createdAt = resolveBustlyAgentCreatedAt(workspaceDir, metadata);
+      return {
+        agentId,
+        agentName,
+        name: displayName,
+        icon: metadata.icon,
+        isMain: agentName === DEFAULT_BUSTLY_AGENT_NAME,
+        createdAt,
+        updatedAt: sessions[0]?.updatedAt ?? metadata.createdAt ?? null,
+      };
+    })
+    .sort((left, right) => {
+      if (left.isMain && !right.isMain) {
+        return -1;
+      }
+      if (right.isMain && !left.isMain) {
+        return 1;
+      }
+      const leftCreatedAt = left.createdAt ?? 0;
+      const rightCreatedAt = right.createdAt ?? 0;
+      if (leftCreatedAt !== rightCreatedAt) {
+        return rightCreatedAt - leftCreatedAt;
+      }
+      return left.name.localeCompare(right.name);
+    });
+}
+
+function listBustlyWorkspaceAgentSessions(params: {
+  workspaceId: string;
+  agentId: string;
+}): BustlyWorkspaceAgentSessionSummary[] {
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(params.workspaceId);
+  if (!normalizedWorkspaceId) {
+    return [];
+  }
+  const agentId = params.agentId.trim();
+  if (!agentId.startsWith(buildBustlyWorkspaceAgentPrefix(normalizedWorkspaceId))) {
+    return [];
+  }
+  return listBustlyAgentConversationSessions(agentId);
+}
+
+async function createBustlyWorkspaceAgentSession(params: {
+  workspaceId: string;
+  agentId: string;
+  label?: string;
+}): Promise<BustlyWorkspaceAgentSessionSummary> {
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(params.workspaceId);
+  const agentId = params.agentId.trim();
+  const agentPrefix = buildBustlyWorkspaceAgentPrefix(normalizedWorkspaceId);
+  if (!normalizedWorkspaceId || !agentId.startsWith(agentPrefix)) {
+    throw new Error("Agent does not belong to this workspace.");
+  }
+
+  const sessionKey = buildBustlyConversationSessionKey(agentId);
+  const storePath = resolveDefaultSessionStorePath(agentId);
+  const label = params.label?.trim() || "New conversation";
+  const updatedAt = Date.now();
+  await updateSessionStore(storePath, (store) => {
+    store[sessionKey] = {
+      sessionId: randomUUID(),
+      updatedAt,
+      label,
+    };
+    return store;
+  });
+  return {
+    agentId,
+    sessionKey,
+    name: label,
+    updatedAt,
+  };
+}
+
+async function updateBustlyWorkspaceAgent(params: {
+  workspaceId: string;
+  agentId: string;
+  displayName?: string;
+  icon?: string;
+}): Promise<void> {
+  const configPath = resolveElectronConfigPath();
+  if (!existsSync(configPath)) {
+    throw new Error(`OpenClaw config not found at ${configPath}`);
+  }
+  const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+  const entry = listAgentEntries(config).find((candidate) => candidate.id === params.agentId);
+  if (!entry) {
+    throw new Error(`Agent "${params.agentId}" not found.`);
+  }
+
+  const nextName = params.displayName?.trim();
+  const nextIcon = params.icon?.trim();
+  let nextConfig = config;
+  if (nextName) {
+    nextConfig = applyAgentConfig(nextConfig, {
+      agentId: params.agentId,
+      name: nextName,
+    });
+  }
+  if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
+    writeFileSync(configPath, JSON.stringify(nextConfig, null, 2));
+  }
+
+  if (nextIcon) {
+    const normalizedWorkspaceId = normalizeBustlyWorkspaceId(params.workspaceId);
+    const agentName = normalizeBustlyAgentName(params.agentId.slice(buildBustlyWorkspaceAgentPrefix(normalizedWorkspaceId).length));
+    setBustlyAgentMetadata({
+      workspaceDir: entry.workspace?.trim() || resolveBustlyWorkspaceAgentWorkspaceDir(normalizedWorkspaceId, agentName),
+      icon: nextIcon,
+    });
+  }
+}
+
+async function deleteBustlyWorkspaceAgent(params: {
+  workspaceId: string;
+  agentId: string;
+}): Promise<void> {
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(params.workspaceId);
+  const normalizedAgentId = normalizeAgentId(params.agentId);
+  const mainAgentId = buildBustlyWorkspaceAgentId(normalizedWorkspaceId);
+  if (normalizedAgentId === mainAgentId) {
+    throw new Error("The main workspace agent cannot be deleted.");
+  }
+
+  const configPath = resolveElectronConfigPath();
+  if (!existsSync(configPath)) {
+    throw new Error(`OpenClaw config not found at ${configPath}`);
+  }
+  const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+  const entry = listAgentEntries(config).find(
+    (candidate) => normalizeAgentId(candidate.id) === normalizedAgentId,
+  );
+  if (!entry) {
+    throw new Error(`Agent "${params.agentId}" not found.`);
+  }
+
+  const agentName =
+    normalizeBustlyAgentName(
+      entry.id.slice(buildBustlyWorkspaceAgentPrefix(normalizedWorkspaceId).length),
+    ) || DEFAULT_BUSTLY_AGENT_NAME;
+  const workspaceDir =
+    entry.workspace?.trim() ||
+    resolveBustlyWorkspaceAgentWorkspaceDir(normalizedWorkspaceId, agentName);
+  const stateDir = resolveElectronStateDir();
+  const workspaceAgentsRoot = join(stateDir, "workspaces", normalizedWorkspaceId, "agents");
+  const agentStateDir = join(stateDir, "agents", normalizedAgentId);
+
+  const result = pruneAgentConfig(config, entry.id);
+  const synchronizedConfig = applyBustlyWorkspaceCollaborationConfig(result.config, normalizedWorkspaceId);
+  if (JSON.stringify(synchronizedConfig) !== JSON.stringify(config)) {
+    writeFileSync(configPath, JSON.stringify(synchronizedConfig, null, 2));
+  }
+
+  removeDirIfWithinRoot(workspaceDir, workspaceAgentsRoot);
+  removeDirIfWithinRoot(agentStateDir, join(stateDir, "agents"));
 }
 
 async function syncBustlyWorkspaceAgent(params: {
   workspaceId?: string;
   workspaceName?: string;
+  agentName?: string;
   forceInit?: boolean;
-}): Promise<{ agentId: string; sessionKey: string; workspaceDir: string } | null> {
+}): Promise<{ agentId: string; workspaceDir: string } | null> {
   const workspaceId = params.workspaceId?.trim() || resolveBustlyWorkspaceIdFromOAuthState();
   if (!workspaceId) {
     return null;
   }
+  const agentName = normalizeBustlyAgentName(params.agentName);
   const configPath = resolveElectronConfigPath();
-  const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId);
+  const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId, agentName);
   if (params.forceInit === true || !existsSync(configPath)) {
     const result = await initializeOpenClaw({
       force: params.forceInit === true,
@@ -871,22 +1543,61 @@ async function syncBustlyWorkspaceAgent(params: {
   return await ensureBustlyWorkspaceAgentConfig({
     workspaceId,
     workspaceName: params.workspaceName,
+    agentName,
   });
 }
 
 async function synchronizeBustlyWorkspaceContext(params?: {
   workspaceId?: string;
   workspaceName?: string;
+  agentName?: string;
   selectedModelInput?: string;
   forceInit?: boolean;
-}): Promise<{ agentId: string; sessionKey: string; workspaceDir: string } | null> {
+}): Promise<{ agentId: string; workspaceDir: string } | null> {
   const agentBinding = await syncBustlyWorkspaceAgent({
     workspaceId: params?.workspaceId,
     workspaceName: params?.workspaceName,
+    agentName: params?.agentName,
     forceInit: params?.forceInit,
   });
   syncBustlyConfigFile(resolveElectronConfigPath(), params?.selectedModelInput?.trim());
   return agentBinding;
+}
+
+async function setActiveWorkspaceInternal(workspaceId: string, workspaceName?: string): Promise<{
+  agentId?: string;
+}> {
+  const nextWorkspaceId = workspaceId.trim();
+  if (!nextWorkspaceId) {
+    throw new Error("Missing workspaceId");
+  }
+  const currentWorkspaceId = BustlyOAuth.readBustlyOAuthState()?.user?.workspaceId?.trim() || "";
+  writeMainLog(
+    `[Workspace] set active requested current=${currentWorkspaceId || "(none)"} next=${nextWorkspaceId}`,
+  );
+  if (currentWorkspaceId === nextWorkspaceId) {
+    writeMainLog(`[Workspace] set active skipped; already on ${nextWorkspaceId}`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("bustly-login-refresh");
+    }
+    return {};
+  }
+  BustlyOAuth.setActiveWorkspaceId(nextWorkspaceId);
+  syncSentryBustlyScope();
+  syncBustlyConfigFile(resolveElectronConfigPath());
+  const agentBinding = await synchronizeBustlyWorkspaceContext({
+    workspaceId: nextWorkspaceId,
+    workspaceName,
+  });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("bustly-login-refresh");
+  }
+  writeMainLog(
+    `[Workspace] set active completed next=${nextWorkspaceId} agentId=${agentBinding?.agentId ?? "(none)"}`,
+  );
+  return {
+    agentId: agentBinding?.agentId,
+  };
 }
 
 function prependPathEntry(pathValue: string, entry: string): string {
@@ -902,7 +1613,7 @@ function prependPathEntry(pathValue: string, entry: string): string {
 }
 
 function prependPathEntries(pathValue: string, entries: Array<string | null | undefined>): string {
-  return entries.reduceRight((currentPath, entry) => {
+  return entries.reduceRight<string>((currentPath, entry) => {
     const normalized = entry?.trim();
     if (!normalized) {
       return currentPath;
@@ -913,43 +1624,6 @@ function prependPathEntries(pathValue: string, entries: Array<string | null | un
 
 function getPathDelimiter(): string {
   return process.platform === "win32" ? ";" : ":";
-}
-
-function ensureMainLogPath(): string {
-  if (mainLogPath) {
-    return mainLogPath;
-  }
-  const logDir = resolve(resolveElectronStateDir(), "electron", "logs");
-  mkdirSync(logDir, { recursive: true, mode: 0o700 });
-  mainLogPath = resolve(logDir, "main.log");
-  return mainLogPath;
-}
-
-function writeMainLog(message: string) {
-  const line = `[${new Date().toISOString()}] ${message}\n`;
-  const writeLine = () => {
-    const logPath = ensureMainLogPath();
-    mkdirSync(dirname(logPath), { recursive: true, mode: 0o700 });
-    appendFileSync(logPath, line, "utf-8");
-  };
-
-  try {
-    writeLine();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      try {
-        mainLogPath = null;
-        writeLine();
-      } catch (retryError) {
-        console.error("[Main log] Failed to write:", retryError);
-      }
-    } else {
-      console.error("[Main log] Failed to write:", error);
-    }
-  }
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send("main-log", { message });
-  }
 }
 
 function loadLoginShellEnvironment(shellPath: string, homeDir: string): Record<string, string> {
@@ -1015,10 +1689,10 @@ function loadElectronEnvVars(): Record<string, string> {
           envVars[key] = value;
         }
       }
-      console.log(`[Env] Loaded environment variables from ${envPath}:`, Object.keys(envVars));
+      writeMainInfo(`[Env] Loaded environment variables from ${envPath}:`, Object.keys(envVars));
       break;
     } catch (error) {
-      console.error(`[Env] Failed to load ${envPath}:`, error);
+      writeMainError(`[Env] Failed to load ${envPath}:`, error);
     }
   }
 
@@ -1046,13 +1720,8 @@ function buildElectronCliEnv(params?: {
       appPath,
     })
     : null;
-  const bundledBustlyBinDir = resolveBundledBustlyBinDir({
-    resourcesPath,
-    appPath,
-  });
   const effectivePath = prependPathEntries(fixedPath, [
     bundledCliShim?.shimDir,
-    bundledBustlyBinDir,
   ]);
   const bunInstall = process.env.BUN_INSTALL?.trim() || resolve(homeDir, ".bun");
   const homebrewPrefix = process.env.HOMEBREW_PREFIX?.trim() || "/opt/homebrew";
@@ -1083,6 +1752,7 @@ function buildElectronCliEnv(params?: {
     NODE_ENV: "production",
     OPENCLAW_PROFILE: ELECTRON_OPENCLAW_PROFILE,
     OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+    OPENCLAW_PREFER_BUNDLED_PLUGINS: "1",
     ...(existsSync(bundledSkillsDir) ? { OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir } : {}),
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: resolveElectronConfigPath(),
@@ -1098,10 +1768,9 @@ function buildElectronCliEnv(params?: {
     COLORTERM: process.env.COLORTERM?.trim() || "truecolor",
     TERM_PROGRAM: process.env.TERM_PROGRAM?.trim() || "OpenClaw",
     NODE_PATH: effectiveNodePath,
-    ...(bundledCliShim || bundledBustlyBinDir
+    ...(bundledCliShim
       ? {
         OPENCLAW_EXEC_PATH_PREPEND: [
-          bundledBustlyBinDir,
           bundledCliShim?.shimDir,
         ]
           .filter((value) => Boolean(value && value.length > 0))
@@ -1113,6 +1782,21 @@ function buildElectronCliEnv(params?: {
       : {}),
     ...(bundledVersion ? { OPENCLAW_BUNDLED_VERSION: bundledVersion } : {}),
   };
+}
+
+function resolveGatewayWorkerPath(): string {
+  const candidates = [
+    resolve(__dirname, "gateway-worker.js"),
+    resolve(__dirname, "gateway-worker-dev.js"),
+    resolve(__dirname, "..", "gateway-worker.js"),
+    resolve(__dirname, "..", "gateway-worker-dev.js"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return resolve(__dirname, app.isPackaged ? "gateway-worker.js" : "gateway-worker-dev.js");
 }
 
 function sendUpdateStatus(event: string, payload?: Record<string, unknown>) {
@@ -1219,10 +1903,10 @@ function loadGatewayConfig(): { port: number; bind: string; token?: string } | n
     const bind = config.gateway?.bind ?? "loopback";
     const token = config.gateway?.auth?.token;
 
-    console.log(`Loaded gateway config: port=${port}, bind=${bind}, auth=${token ? "token" : "none"}`);
+    writeMainInfo(`Loaded gateway config: port=${port}, bind=${bind}, auth=${token ? "token" : "none"}`);
     return { port, bind, token };
   } catch (error) {
-    console.error("Failed to load gateway config:", error);
+    writeMainError("Failed to load gateway config:", error);
     return null;
   }
 }
@@ -1433,28 +2117,40 @@ async function resolveGatewayStartupPort(
  * Start the OpenClaw Gateway process
  */
 async function startGateway(): Promise<boolean> {
+  if (gatewayStartPromise) {
+    return gatewayStartPromise;
+  }
+  gatewayStartPromise = (async () => {
   const oauthCallbackPort = await startOAuthCallbackServer();
-  console.log("[Bustly] OAuth callback server started on port", oauthCallbackPort);
+  writeMainInfo(`[Bustly] OAuth callback server started on port ${oauthCallbackPort}`);
 
   const startAt = Date.now();
   if (gatewayProcess) {
-    console.log("Gateway already running");
     writeMainLog("Gateway already running");
     emitGatewayLifecycle("ready", null);
     return true;
   }
 
+  clearGatewayAutoRestartTimer();
+  gatewayShutdownExpected = false;
+  gatewayStartupInFlight = true;
+  gatewayLastWorkerFailure = null;
   emitGatewayLifecycle("starting", "Starting gateway...");
 
   const cliPath = resolveOpenClawCliPath({
-    info: (message) => console.log(message),
-    error: (message) => console.error(message),
+    info: (message) => writeMainInfo(message),
+    error: (message) => writeMainError(message),
   });
   if (!cliPath) {
     throw new Error("OpenClaw CLI not found");
   }
+  const gatewayWorkerPath = resolveGatewayWorkerPath();
+  if (!existsSync(gatewayWorkerPath)) {
+    throw new Error(`Gateway worker not found at ${gatewayWorkerPath}`);
+  }
 
-  console.log(`Starting gateway with CLI: ${cliPath}`);
+  writeMainInfo(`Starting gateway with CLI: ${cliPath}`);
+  writeMainInfo(`Starting gateway worker: ${gatewayWorkerPath}`);
 
   // Try to load config first, otherwise use initialization result or defaults
   const loadedConfig = loadGatewayConfig();
@@ -1480,27 +2176,17 @@ async function startGateway(): Promise<boolean> {
   );
   if (switched) {
     const warning = `Preferred gateway port ${preferredGatewayPort} is occupied; switching to ${selectedGatewayPort}.`;
-    console.warn(`[Gateway] ${warning}`);
-    writeMainLog(`[Gateway] ${warning}`);
+    writeMainWarn(`[Gateway] ${warning}`);
   }
   gatewayPort = selectedGatewayPort;
 
   return await new Promise((resolvePromise, reject) => {
-    console.log(`Starting gateway on port ${gatewayPort} with bind=${gatewayBind}`);
-    console.log(`Authentication: ${loadedConfig?.token ? "token" : "none (local development mode)"}`);
-
-    const args = [
-      "gateway",
-      "run",
-      "--port", String(gatewayPort),
-      "--bind", gatewayBind,
-      "--allow-unconfigured",
-    ];
+    writeMainInfo(`Starting gateway on port ${gatewayPort} with bind=${gatewayBind}`);
+    writeMainInfo(`Authentication: ${loadedConfig?.token ? "token" : "none (local development mode)"}`);
 
     // Store token for WS URL
     if (gatewayToken) {
-      console.log(`Using token: ${gatewayToken.slice(0, 8)}...`);
-      args.push("--token", gatewayToken);
+      writeMainInfo(`Using token: ${gatewayToken.slice(0, 8)}...`);
     }
 
     const recentStdout: string[] = [];
@@ -1512,28 +2198,6 @@ async function startGateway(): Promise<boolean> {
       }
     };
 
-    const invocation = resolveCliInvocation(cliPath, args, { includeBundledNode: true });
-    if (!invocation) {
-      writeMainLog("Failed to locate node binary in bundled resources.");
-      reject(new Error("Node binary not found for OpenClaw CLI"));
-      return;
-    }
-    const nodePath = invocation.nodePath ?? null;
-    if (invocation.isMjs && nodePath) {
-      try {
-        const nodeVersion = spawnSync(nodePath, ["-v"], { encoding: "utf-8" }).stdout?.trim();
-        const nodeArch = spawnSync(nodePath, ["-p", "process.arch"], { encoding: "utf-8" })
-          .stdout?.trim();
-        writeMainLog(`Gateway node runtime: path=${nodePath} version=${nodeVersion ?? "unknown"} arch=${nodeArch ?? "unknown"}`);
-      } catch (error) {
-        writeMainLog(`Gateway node runtime probe failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    writeMainLog(
-      `Gateway launch inputs: cli=${cliPath} node=${nodePath ?? "n/a"} port=${gatewayPort} bind=${gatewayBind}`,
-    );
-    const spawnCommand = invocation.command;
-    const spawnArgs = invocation.args;
     const appPath = app.getAppPath();
     const resourcesPath = process.resourcesPath || appPath;
     const bundledPluginsDir = ensureBundledExtensionsDir({
@@ -1559,13 +2223,8 @@ async function startGateway(): Promise<boolean> {
       resourcesPath,
       appPath,
     });
-    const bundledBustlyBinDir = resolveBundledBustlyBinDir({
-      resourcesPath,
-      appPath,
-    });
     const effectivePath = prependPathEntries(fixedPath, [
       bundledCliShim?.shimDir,
-      bundledBustlyBinDir,
     ]);
     const appNodeModules = resolve(appPath, "node_modules");
     const resourcesNodeModules = resolve(resourcesPath, "node_modules");
@@ -1585,21 +2244,64 @@ async function startGateway(): Promise<boolean> {
       .filter((value) => Boolean(value && value.length > 0))
       .map((value) => `${value}(${existsSync(value!) ? "exists" : "missing"})`)
       .join(" | ");
+    const nodePath = resolveElectronRunAsNodeExecPath();
+    writeMainLog(
+      `Gateway runtime: execPath=${nodePath} mode=electron-run-as-node helper=${nodePath !== process.execPath ? "yes" : "no"}`,
+    );
 
     const spawnEnv = buildElectronCliEnv({ cliPath, oauthCallbackPort });
     if (existsSync(bundledPluginsDir)) {
       spawnEnv.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
     }
+    spawnEnv.ELECTRON_RUN_AS_NODE = "1";
+    spawnEnv.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
+    spawnEnv.OPENCLAW_ELECTRON_GATEWAY_BIND = gatewayBind;
+    if (gatewayToken) {
+      spawnEnv.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+    } else {
+      delete spawnEnv.OPENCLAW_GATEWAY_TOKEN;
+    }
     writeMainLog(
-      `Gateway env: SHELL=${shellPath} OPENCLAW_LOAD_SHELL_ENV=1 NODE_PATH=${effectiveNodePath || "(empty)"} PATH_HEAD=${effectivePath.split(getPathDelimiter())[0] ?? "(empty)"} cliShim=${bundledCliShim?.shimPath ?? "(none)"} appPath=${appPath} resourcesPath=${resourcesPath} candidates=${nodePathStatus || "(none)"} rawOpenClawNodeModules=${openclawNodeModules} rawResourcesNodeModules=${resourcesNodeModules} rawAppNodeModules=${appNodeModules} inheritedNodePath=${inheritedNodePath ?? "(none)"}`,
+      `Gateway env: SHELL=${shellPath} OPENCLAW_LOAD_SHELL_ENV=1 NODE_PATH=${effectiveNodePath || "(empty)"} PATH_HEAD=${effectivePath.split(getPathDelimiter())[0] ?? "(empty)"} cliShim=${bundledCliShim?.shimPath ?? "(none)"} appPath=${appPath} resourcesPath=${resourcesPath} candidates=${nodePathStatus || "(none)"} rawOpenClawNodeModules=${openclawNodeModules} rawResourcesNodeModules=${resourcesNodeModules} rawAppNodeModules=${appNodeModules} inheritedNodePath=${inheritedNodePath ?? "(none)"} worker=${gatewayWorkerPath}`,
     );
 
     writeMainLog(
-      `Gateway spawn: command=${spawnCommand} args=${spawnArgs.join(" ")}`,
+      `Gateway fork: execPath=${nodePath} module=${gatewayWorkerPath} port=${gatewayPort} bind=${gatewayBind}`,
     );
-    gatewayProcess = spawn(spawnCommand, spawnArgs, {
+    gatewayProcess = fork(gatewayWorkerPath, [], {
       env: spawnEnv,
-      stdio: "pipe",
+      execPath: nodePath,
+      silent: true,
+    });
+
+    gatewayProcess.on("message", (payload: unknown) => {
+      if (!payload || typeof payload !== "object") {
+        return;
+      }
+      const message = payload as { type?: unknown; kind?: unknown; message?: unknown };
+      if (
+        message.type === "gateway-worker-startup-error" &&
+        (message.kind === "config" || message.kind === "runtime") &&
+        typeof message.message === "string"
+      ) {
+        gatewayLastWorkerFailure = {
+          kind: message.kind,
+          message: message.message,
+        };
+        writeMainWarn(`[Gateway worker startup error] ${message.kind}: ${message.message}`);
+        return;
+      }
+      if (
+        message.type === "gateway-worker-fatal" &&
+        message.kind === "runtime" &&
+        typeof message.message === "string"
+      ) {
+        gatewayLastWorkerFailure = {
+          kind: "runtime",
+          message: message.message,
+        };
+        writeMainError(`[Gateway worker fatal] ${message.message}`);
+      }
     });
 
     gatewayProcess.stdout?.on("data", (data) => {
@@ -1608,7 +2310,6 @@ async function startGateway(): Promise<boolean> {
         pushRecent(recentStdout, output);
         writeMainLog(`Gateway stdout: ${output}`);
       }
-      console.log(`[Gateway stdout]: ${output}`);
       mainWindow?.webContents.send("gateway-log", { stream: "stdout", message: output });
     });
 
@@ -1616,34 +2317,44 @@ async function startGateway(): Promise<boolean> {
       const output = data.toString().trim();
       if (output) {
         pushRecent(recentStderr, output);
-        writeMainLog(`Gateway stderr: ${output}`);
+        writeMainError(`Gateway stderr: ${output}`);
       }
-      console.error(`[Gateway stderr]: ${output}`);
       mainWindow?.webContents.send("gateway-log", { stream: "stderr", message: output });
     });
 
     gatewayProcess.on("error", (error) => {
-      console.error("[Gateway error]:", error);
-      writeMainLog(`Gateway spawn error: ${error instanceof Error ? error.message : String(error)}`);
+      writeMainError("[Gateway error]:", error);
+      gatewayStartupInFlight = false;
       gatewayProcess = null;
       reject(error);
     });
 
     gatewayProcess.on("exit", (code, signal) => {
-      console.log(`[Gateway exit]: code=${code}, signal=${signal}`);
+      const exitReason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
       writeMainLog(
-        `Gateway exited during startup: code=${code ?? "null"} signal=${signal ?? "null"}`,
+        `Gateway exited: ${exitReason}`,
       );
       if (recentStderr.length > 0) {
         writeMainLog(`Gateway stderr tail:\n${recentStderr.join("\n")}`);
       } else if (recentStdout.length > 0) {
         writeMainLog(`Gateway stdout tail:\n${recentStdout.join("\n")}`);
       }
+      const startupFailure = gatewayStartupInFlight;
+      gatewayStartupInFlight = false;
       gatewayProcess = null;
       mainWindow?.webContents.send("gateway-exit", { code, signal });
+      if (!startupFailure && !gatewayShutdownExpected) {
+        const failureMessage = gatewayLastWorkerFailure?.message || `Gateway exited unexpectedly (${exitReason})`;
+        if (gatewayLastWorkerFailure?.kind === "config" || isLikelyGatewayConfigError(failureMessage)) {
+          emitGatewayLifecycle("error", failureMessage, {
+            canRestoreLastGoodConfig: hasGatewayLastGoodConfigSnapshot(),
+          });
+          return;
+        }
+        scheduleGatewayAutoRestart(failureMessage);
+      }
     });
 
-    const startupTimeoutMs = 45_000;
     const exitPromise = new Promise<never>((_resolve, rejectExit) => {
       gatewayProcess?.once("exit", (code, signal) => {
         rejectExit(
@@ -1652,7 +2363,7 @@ async function startGateway(): Promise<boolean> {
       });
     });
     const readyPromise = (async () => {
-      const ready = await waitForGatewayPort(gatewayPort, startupTimeoutMs);
+      const ready = await waitForGatewayPort(gatewayPort, null);
       if (!ready) {
         throw new Error(`Gateway port ${gatewayPort} not ready`);
       }
@@ -1663,13 +2374,17 @@ async function startGateway(): Promise<boolean> {
       .then(() => {
         const elapsedMs = Date.now() - startAt;
         writeMainLog(`Gateway startup ready in ${elapsedMs}ms`);
-        console.log("Gateway started successfully");
+        gatewayStartupInFlight = false;
+        gatewayAutoRestartAttempt = 0;
+        gatewayLastWorkerFailure = null;
+        snapshotGatewayLastGoodConfig();
         emitGatewayLifecycle("ready", null);
         resolvePromise(true);
       })
       .catch((error) => {
         const elapsedMs = Date.now() - startAt;
         writeMainLog(`Gateway startup failed after ${elapsedMs}ms`);
+        gatewayStartupInFlight = false;
         const stderrTail = recentStderr.length > 0 ? recentStderr.join("\n") : "";
         const stdoutTail = recentStdout.length > 0 ? recentStdout.join("\n") : "";
         if (stderrTail) {
@@ -1677,15 +2392,27 @@ async function startGateway(): Promise<boolean> {
         } else if (stdoutTail) {
           writeMainLog(`Gateway startup stdout:\n${stdoutTail}`);
         }
+        const lifecycleMessage =
+          gatewayLastWorkerFailure?.message ||
+          (error instanceof Error ? error.message : String(error));
+        const configFailure =
+          gatewayLastWorkerFailure?.kind === "config" ||
+          isLikelyGatewayConfigError([lifecycleMessage, stderrTail, stdoutTail].filter(Boolean).join("\n"));
         if (gatewayProcess && !gatewayProcess.killed) {
+          gatewayShutdownExpected = true;
           gatewayProcess.kill("SIGTERM");
         }
         emitGatewayLifecycle(
           "error",
-          error instanceof Error ? error.message : String(error),
+          lifecycleMessage,
+          { canRestoreLastGoodConfig: configFailure && hasGatewayLastGoodConfigSnapshot() },
         );
         reject(error);
       });
+  });
+  })();
+  return await gatewayStartPromise.finally(() => {
+    gatewayStartPromise = null;
   });
 }
 
@@ -1695,12 +2422,14 @@ async function startGateway(): Promise<boolean> {
 function stopGateway(): Promise<boolean> {
   return new Promise((resolve) => {
     if (!gatewayProcess) {
-      console.log("Gateway not running");
+      writeMainInfo("Gateway not running");
       resolve(true);
       return;
     }
 
-    console.log("Stopping gateway...");
+    clearGatewayAutoRestartTimer();
+    gatewayShutdownExpected = true;
+    writeMainInfo("Stopping gateway");
     emitGatewayLifecycle("stopping", "Restarting gateway...");
 
     gatewayProcess.kill("SIGTERM");
@@ -1708,7 +2437,7 @@ function stopGateway(): Promise<boolean> {
     // Force kill after 5 seconds
     const timeout = setTimeout(() => {
       if (gatewayProcess && !gatewayProcess.killed) {
-        console.log("Force killing gateway...");
+        writeMainWarn("Force killing gateway");
         gatewayProcess.kill("SIGKILL");
       }
     }, 5000);
@@ -1716,7 +2445,7 @@ function stopGateway(): Promise<boolean> {
     gatewayProcess.on("exit", () => {
       clearTimeout(timeout);
       gatewayProcess = null;
-      console.log("Gateway stopped");
+      writeMainInfo("Gateway stopped");
       resolve(true);
     });
   });
@@ -1730,9 +2459,9 @@ function buildControlUiUrl(params: { port: number; token?: string | null }) {
   return `${baseUrl}?token=${params.token}`;
 }
 
-async function waitForGatewayPort(port: number, timeoutMs = 20_000): Promise<boolean> {
+async function waitForGatewayPort(port: number, timeoutMs: number | null = 20_000): Promise<boolean> {
   const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
+  while (timeoutMs === null || Date.now() - start < timeoutMs) {
     const ready = await new Promise<boolean>((resolve) => {
       const socket = new Socket();
       const onDone = (result: boolean) => {
@@ -1930,7 +2659,7 @@ function createWindow(): void {
   // Load the app
   if (process.env.NODE_ENV === "development") {
     loadRendererWindow(mainWindow);
-    mainWindow.webContents.openDevTools();
+    mainWindow.webContents.openDevTools({ mode: "detach" });
   } else {
     loadRendererWindow(mainWindow);
   }
@@ -2200,7 +2929,7 @@ function setupIpcHandlers(): void {
       }
       // If API key is provided, re-initialize config with the API key
       if (apiKey && apiKey.trim()) {
-        console.log("[Gateway] Re-initializing with API key...");
+        writeMainInfo("[Gateway] Re-initializing with API key...");
         const workspaceId = resolveBustlyWorkspaceIdFromOAuthState();
         const result = await initializeOpenClaw({
           force: true,
@@ -2236,6 +2965,27 @@ function setupIpcHandlers(): void {
     }
   });
 
+  ipcMain.handle("gateway-restore-last-good-config", async () => {
+    try {
+      clearGatewayAutoRestartTimer();
+      if (gatewayProcess) {
+        await stopGateway();
+      }
+      restoreGatewayLastGoodConfigSnapshot();
+      gatewayLastWorkerFailure = null;
+      gatewayAutoRestartAttempt = 0;
+      emitGatewayLifecycle("starting", "Restoring last working gateway config...");
+      await startGateway();
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      emitGatewayLifecycle("error", message, {
+        canRestoreLastGoodConfig: hasGatewayLastGoodConfigSnapshot(),
+      });
+      return { success: false, error: message };
+    }
+  });
+
   // Get gateway status
   ipcMain.handle("gateway-status", () => {
     const configToken = readGatewayTokenFromConfig();
@@ -2261,7 +3011,7 @@ function setupIpcHandlers(): void {
     const wsUrl = token
       ? `ws://${GATEWAY_HOST}:${gatewayPort}?token=${token}`
       : `ws://${GATEWAY_HOST}:${gatewayPort}`;
-    console.log(
+    writeMainInfo(
       `[Gateway Token] connect-config configPath=${resolveOpenClawConfigPath()} configToken=${configToken ? `${configToken.slice(0, 8)}...` : "(missing)"} cachedToken=${gatewayToken ? `${gatewayToken.slice(0, 8)}...` : "(missing)"} chosen=${token ? `${token.slice(0, 8)}...` : "(missing)"}`,
     );
     return {
@@ -2485,6 +3235,25 @@ function setupIpcHandlers(): void {
     }
   });
 
+  ipcMain.handle("open-local-path", async (_event, rawPath: string) => {
+    const targetPath = typeof rawPath === "string" ? rawPath.trim() : "";
+    if (!isOpenableLocalPath(targetPath)) {
+      return { success: false, error: "Expected an openable local path." };
+    }
+    try {
+      const error = await shell.openPath(resolveOpenableLocalPath(targetPath));
+      if (error) {
+        return { success: false, error };
+      }
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
   // Get app info
   ipcMain.handle("get-app-info", () => {
     return {
@@ -2575,33 +3344,131 @@ function setupIpcHandlers(): void {
   ipcMain.handle(
     "bustly-set-active-workspace",
     async (_event, workspaceId: string, workspaceName?: string) => {
-    emitGatewayLifecycle("starting", "Switching workspace...");
     try {
-      BustlyOAuth.setActiveWorkspaceId(workspaceId);
-      syncBustlyConfigFile(resolveElectronConfigPath());
-      const agentBinding = await synchronizeBustlyWorkspaceContext({
-        workspaceId,
-        workspaceName,
-      });
-      if (gatewayProcess) {
-        await stopGateway();
-        await startGateway();
-      }
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("bustly-login-refresh");
-      }
+      const agentBinding = await setActiveWorkspaceInternal(workspaceId, workspaceName);
       return {
         success: true,
         agentId: agentBinding?.agentId,
-        sessionKey: agentBinding?.sessionKey,
       };
     } catch (error) {
-      emitGatewayLifecycle("ready", null);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
       };
     }
+    },
+  );
+
+  ipcMain.handle("bustly-list-agents", async (_event, workspaceId?: string) => {
+    try {
+      const nextWorkspaceId = workspaceId?.trim() || resolveBustlyWorkspaceIdFromOAuthState();
+      if (!nextWorkspaceId) {
+        return [];
+      }
+      return listBustlyWorkspaceAgents(nextWorkspaceId);
+    } catch {
+      return [];
+    }
+  });
+
+  ipcMain.handle("bustly-list-agent-sessions", async (_event, workspaceId: string, agentId: string) => {
+    try {
+      return listBustlyWorkspaceAgentSessions({ workspaceId, agentId });
+    } catch {
+      return [];
+    }
+  });
+
+  ipcMain.handle(
+    "bustly-create-agent",
+    async (
+      _event,
+      workspaceId: string,
+      name: string,
+      icon?: string,
+      workspaceName?: string,
+    ) => {
+      try {
+        const trimmedName = typeof name === "string" ? name.trim() : "";
+        if (!trimmedName) {
+          return { success: false, error: "Agent name is required." };
+        }
+        const result = await createBustlyWorkspaceAgent({
+          workspaceId,
+          workspaceName,
+          agentName: trimmedName,
+          displayName: trimmedName,
+          icon,
+        });
+        return {
+          success: true,
+          agentId: result.agentId,
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "bustly-create-agent-session",
+    async (
+      _event,
+      params: { workspaceId: string; agentId: string; label?: string },
+    ) => {
+      try {
+        const result = await createBustlyWorkspaceAgentSession(params);
+        return {
+          success: true,
+          sessionKey: result.sessionKey,
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "bustly-update-agent",
+    async (
+      _event,
+      params: { workspaceId: string; agentId: string; name?: string; icon?: string },
+    ) => {
+      try {
+        await updateBustlyWorkspaceAgent({
+          workspaceId: params.workspaceId,
+          agentId: params.agentId,
+          displayName: params.name,
+          icon: params.icon,
+        });
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "bustly-delete-agent",
+    async (_event, params: { workspaceId: string; agentId: string }) => {
+      try {
+        await deleteBustlyWorkspaceAgent(params);
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
     },
   );
 
@@ -2620,22 +3487,20 @@ function setupIpcHandlers(): void {
     const loginAttemptId = bustlyLoginAttemptId + 1;
     bustlyLoginAttemptId = loginAttemptId;
     try {
-      console.log("[Bustly Login] Starting Bustly OAuth login flow");
+      writeMainInfo("[Bustly Login] Starting Bustly OAuth login flow");
       bustlyLoginCancelled = false;
 
       // Initialize OAuth flow (clears any existing state)
       const oauthState = BustlyOAuth.initBustlyOAuthFlow();
-      console.log("[Bustly Login] OAuth state initialized, traceId:", oauthState.loginTraceId);
+      writeMainInfo("[Bustly Login] OAuth state initialized");
 
       // Start OAuth callback server
       const oauthPort = await startOAuthCallbackServer();
-      console.log("[Bustly Login] OAuth callback server started on port", oauthPort);
+      writeMainInfo(`[Bustly Login] OAuth callback server started on port ${oauthPort}`);
 
       // Generate login URL
       const redirectUri = `http://127.0.0.1:${oauthPort}/authorize`;
       const loginUrl = generateLoginUrl(oauthState.loginTraceId!, redirectUri);
-
-      console.log("[Bustly Login] Got login URL, opening browser...");
 
       // Open login URL in browser
       await shell.openExternal(loginUrl);
@@ -2645,12 +3510,12 @@ function setupIpcHandlers(): void {
         await delay(2000);
 
         if (loginAttemptId !== bustlyLoginAttemptId) {
-          console.log("[Bustly Login] Login superseded by a newer attempt");
+          writeMainInfo("[Bustly Login] Login superseded by a newer attempt");
           return { success: false, canceled: true };
         }
 
         if (bustlyLoginCancelled) {
-          console.log("[Bustly Login] Login canceled by user");
+          writeMainInfo("[Bustly Login] Login canceled by user");
           stopOAuthCallbackServer();
           return { success: false, canceled: true };
         }
@@ -2659,9 +3524,8 @@ function setupIpcHandlers(): void {
 
         if (code) {
           // Got the code, now exchange for token
-          console.log("[Bustly Login] Got authorization code, exchanging token...");
           const apiResponse = await exchangeToken(code);
-          console.log(
+          writeMainInfo(
             `[Bustly Login] Token exchange response received user=${apiResponse.data.userEmail} workspace=${apiResponse.data.workspaceId} hasSupabaseSession=${Boolean(apiResponse.data.extras?.supabase_session?.access_token)}`,
           );
 
@@ -2692,6 +3556,10 @@ function setupIpcHandlers(): void {
               userId: apiResponse.data.userId,
               userName: apiResponse.data.userName,
               userEmail: apiResponse.data.userEmail,
+              userAvatarUrl:
+                supabaseSession.user?.user_metadata?.avatar_url?.trim()
+                || supabaseSession.user?.user_metadata?.picture?.trim()
+                || undefined,
               userAccessToken: supabaseSession.access_token,
               userRefreshToken: supabaseSession.refresh_token,
               sessionExpiresIn: supabaseSession.expires_in,
@@ -2705,6 +3573,7 @@ function setupIpcHandlers(): void {
               anonKey: searchDataConfig.search_DATA_SUPABASE_ANON_KEY ?? "",
             } : undefined,
           });
+          syncSentryBustlyScope();
 
           // Stop OAuth callback server
           stopOAuthCallbackServer();
@@ -2716,16 +3585,16 @@ function setupIpcHandlers(): void {
           try {
             syncBustlyConfigFile(resolveElectronConfigPath());
           } catch (syncError) {
-            console.warn("[Bustly Login] Failed to sync bustly provider config:", syncError);
+            writeMainWarn("[Bustly Login] Failed to sync bustly provider config:", syncError);
           }
 
-          console.log("[Bustly Login] Login successful! Config stored in bustlyOauth.json");
+          writeMainInfo("[Bustly Login] Login successful");
           void (async () => {
             try {
-              console.log("[Bustly Login] Bootstrapping local desktop session...");
+              writeMainInfo("[Bustly Login] Bootstrapping local desktop session");
               await bootstrapDesktopSession();
             } catch (bootstrapError) {
-              console.error("[Bustly Login] Bootstrap error:", bootstrapError);
+              writeMainError("[Bustly Login] Bootstrap error:", bootstrapError);
             } finally {
               if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send("bustly-login-refresh");
@@ -2738,7 +3607,7 @@ function setupIpcHandlers(): void {
 
       }
     } catch (error) {
-      console.error("[Bustly Login] Error:", error);
+      writeMainError("[Bustly Login] Error:", error);
       // Stop OAuth callback server on error
       stopOAuthCallbackServer();
       return {
@@ -2759,16 +3628,17 @@ function setupIpcHandlers(): void {
   // Bustly OAuth logout
   ipcMain.handle("bustly-logout", async () => {
     try {
-      console.log("[Bustly Logout] Logging out...");
+      writeMainInfo("[Bustly Logout] Logging out");
       BustlyOAuth.logoutBustly();
+      syncSentryBustlyScope();
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("bustly-login-refresh");
       }
-      console.log("[Bustly Logout] Logged out successfully");
+      writeMainInfo("[Bustly Logout] Logged out successfully");
 
       return { success: true };
     } catch (error) {
-      console.error("[Bustly Logout] Error:", error);
+      writeMainError("[Bustly Logout] Error:", error);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -2782,7 +3652,23 @@ function setupIpcHandlers(): void {
       await shell.openExternal(url);
       return { success: true };
     } catch (error) {
-      console.error("[Bustly Settings] Error:", error);
+      writeMainError("[Bustly Settings] Error:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle("bustly-report-issue", async () => {
+    try {
+      const archivePath = await createBustlyIssueReportArchive();
+      return {
+        success: true,
+        archivePath,
+      };
+    } catch (error) {
+      writeMainError("[Bustly Report Issue] Error:", error);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -2799,7 +3685,7 @@ function setupIpcHandlers(): void {
       await shell.openExternal(url);
       return { success: true };
     } catch (error) {
-      console.error("[Bustly Workspace Settings] Error:", error);
+      writeMainError("[Bustly Workspace Settings] Error:", error);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -2816,7 +3702,7 @@ function setupIpcHandlers(): void {
       await shell.openExternal(url);
       return { success: true };
     } catch (error) {
-      console.error("[Bustly Workspace Invite] Error:", error);
+      writeMainError("[Bustly Workspace Invite] Error:", error);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -2833,7 +3719,7 @@ function setupIpcHandlers(): void {
       await shell.openExternal(url);
       return { success: true };
     } catch (error) {
-      console.error("[Bustly Workspace Manage] Error:", error);
+      writeMainError("[Bustly Workspace Manage] Error:", error);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -2850,7 +3736,7 @@ function setupIpcHandlers(): void {
       await shell.openExternal(url);
       return { success: true };
     } catch (error) {
-      console.error("[Bustly Workspace Manage] Error:", error);
+      writeMainError("[Bustly Workspace Manage] Error:", error);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -2866,7 +3752,7 @@ function setupIpcHandlers(): void {
       await shell.openExternal(url);
       return { success: true };
     } catch (error) {
-      console.error("[Bustly Workspace Create] Error:", error);
+      writeMainError("[Bustly Workspace Create] Error:", error);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -2877,6 +3763,9 @@ function setupIpcHandlers(): void {
   ipcMain.handle("deep-link-consume-pending", () => {
     const next = pendingDeepLink;
     pendingDeepLink = null;
+    writeMainLog(
+      `[DeepLink] consume pending route=${next?.route ?? "(none)"} workspaceId=${next?.workspaceId ?? "(none)"}`,
+    );
     return next;
   });
 }
@@ -2889,14 +3778,17 @@ if (!gotSingleInstanceLock) {
 app.on("second-instance", (_event, argv) => {
   const deepLinkArg = argv.find((value) => value.startsWith(`${APP_PROTOCOL}://`));
   if (deepLinkArg) {
+    writeMainLog(`[DeepLink] second-instance argv matched ${deepLinkArg}`);
     dispatchDeepLink(deepLinkArg);
     return;
   }
+  writeMainLog("[DeepLink] second-instance without protocol arg");
   focusMainWindow();
 });
 
 app.on("open-url", (event, url) => {
   event.preventDefault();
+  writeMainLog(`[DeepLink] open-url ${url}`);
   dispatchDeepLink(url);
 });
 
@@ -2914,9 +3806,9 @@ void app.whenReady().then(async () => {
     const envPaths = [
       // Development: dist/main-dev.js -> ../.env = apps/electron/.env
       // Production: dist/main/index.js -> ../../.env = apps/electron/.env
-      process.env.NODE_ENV === "development"
-        ? resolve(__dirname, "../.env")
-        : resolve(__dirname, "../../.env"),
+      resolve(__dirname, "../../.env"),
+      resolve(__dirname, "../.env"),
+      resolve(process.cwd(), ".env"),
     ];
 
     for (const envPath of envPaths) {
@@ -2933,7 +3825,7 @@ void app.whenReady().then(async () => {
               }
             }
           }
-          console.log(
+          writeMainInfo(
             `[Env] Loaded environment variables from ${envPath}:`,
             Object.keys(process.env).filter(
               (k) => k.startsWith("OPENCLAW_") || k.startsWith("BUSTLY_"),
@@ -2942,7 +3834,7 @@ void app.whenReady().then(async () => {
           break;
         }
       } catch (error) {
-        console.error(`[Env] Failed to load ${envPath}:`, error);
+        writeMainError(`[Env] Failed to load ${envPath}:`, error);
       }
     }
   };
@@ -2986,7 +3878,6 @@ void app.whenReady().then(async () => {
 
   setupIpcHandlers();
 
-  console.log("=== OpenClaw Desktop starting ===");
   writeMainLog("OpenClaw Desktop starting");
   logStartupPaths();
   writeMainLog(`mainLogPath=${ensureMainLogPath()}`);
@@ -2994,12 +3885,10 @@ void app.whenReady().then(async () => {
   writeMainLog(`appVersion=${app.getVersion()} electron=${process.versions.electron}`);
 
   const configPath = getConfigPath();
-  console.log(`[Init] configPath=${configPath ?? "unresolved"}`);
   writeMainLog(`configPath=${configPath ?? "unresolved"}`);
   // Check if we need to initialize or re-initialize (fix broken config)
   const fullyInitialized = isFullyInitialized();
   const bustlyLoggedIn = await BustlyOAuth.isBustlyLoggedIn();
-  console.log(`[Init] fullyInitialized=${fullyInitialized}`);
   writeMainLog(`fullyInitialized=${fullyInitialized} bustlyLoggedIn=${bustlyLoggedIn}`);
   const needsInit = !fullyInitialized;
   needsOnboardAtLaunch = needsInit && !bustlyLoggedIn;
@@ -3008,37 +3897,31 @@ void app.whenReady().then(async () => {
 
   if (needsInit) {
     if (bustlyLoggedIn) {
-      console.log("[Init] Bustly session found; bootstrapping desktop session.");
       writeMainLog("Bustly session found; bootstrapping desktop session.");
       try {
         await bootstrapDesktopSession();
-        console.log("[Init] Desktop session bootstrap complete");
         writeMainLog("Desktop session bootstrap complete");
       } catch (error) {
-        console.error("[Init] Failed to bootstrap desktop session:", error);
-        writeMainLog(`Desktop session bootstrap failed: ${error instanceof Error ? error.message : String(error)}`);
+        writeMainError("[Init] Failed to bootstrap desktop session:", error);
       }
     } else {
-      console.log("[Init] Skipping auto-initialization; waiting for login.");
       writeMainLog("Skipping auto-initialization; waiting for login.");
     }
   } else {
-    console.log("[Init] Configuration already exists and is valid");
     writeMainLog("Configuration already exists and is valid");
     if (bustlyLoggedIn) {
       const workspaceId = resolveBustlyWorkspaceIdFromOAuthState();
-      const agentId = workspaceId ? buildBustlyWorkspaceAgentId(workspaceId) : "";
-      if (agentId && hasMissingBustlyWorkspaceSessions(agentId)) {
+      if (workspaceId && await hasMissingBustlyWorkspaceSetup(workspaceId)) {
         try {
           await synchronizeBustlyWorkspaceContext();
-          writeMainLog("Synchronized Bustly workspace context for missing main session or preset channels");
+          writeMainLog("Synchronized Bustly workspace context for missing main session or preset agents");
         } catch (error) {
           writeMainLog(
-            `Bustly workspace sync failed while restoring main session or preset channels: ${error instanceof Error ? error.message : String(error)}`,
+            `Bustly workspace sync failed while restoring main session or preset agents: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
       } else {
-        writeMainLog("Skipped Bustly workspace sync; main session and preset channels already exist");
+        writeMainLog("Skipped Bustly workspace sync; main session and preset agents already exist");
       }
     }
     // Load existing config to get port and token
@@ -3054,38 +3937,34 @@ void app.whenReady().then(async () => {
 
   if (!needsInit) {
     // Auto-start gateway
-    console.log("[Gateway] Auto-starting gateway...");
     writeMainLog("Gateway auto-starting");
     try {
       await startGateway();
-      console.log("[Gateway] ✓ Gateway started successfully");
       writeMainLog("Gateway started successfully");
     } catch (error) {
-      console.error("[Gateway] ✗ Failed to start gateway:", error);
-      writeMainLog(`Gateway failed to start: ${error instanceof Error ? error.message : String(error)}`);
+      writeMainError("[Gateway] ✗ Failed to start gateway:", error);
     }
   }
 });
 
 app.on("window-all-closed", async () => {
-  console.log("[Lifecycle] All windows closed");
+  writeMainInfo("[Lifecycle] All windows closed");
 
   // On non-macOS platforms, quit the app when all windows are closed
   if (process.platform !== "darwin") {
-    console.log("[Lifecycle] Quitting app (non-macOS)");
+    writeMainInfo("[Lifecycle] Quitting app (non-macOS)");
     app.quit();
   }
 });
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    console.log("[Lifecycle] Reactivating app (create new window)");
+    writeMainInfo("[Lifecycle] Reactivating app (create new window)");
     ensureWindow();
   }
 });
 
 app.on("before-quit", async () => {
-  console.log("[Lifecycle] App about to quit");
   writeMainLog("App about to quit");
 
   if (updateInstalling) {
@@ -3095,26 +3974,23 @@ app.on("before-quit", async () => {
 
   // Ensure gateway is stopped before quitting
   if (gatewayProcess) {
-    console.log("[Gateway] Force stopping gateway before quit...");
+    writeMainInfo("[Gateway] Force stopping gateway before quit...");
     try {
       await stopGateway();
-      console.log("[Gateway] ✓ Gateway stopped");
     } catch (error) {
-      console.error("[Gateway] ✗ Failed to stop gateway:", error);
+      writeMainError("[Gateway] ✗ Failed to stop gateway:", error);
     }
   }
 
   // Stop OAuth callback server
-  console.log("[Bustly] Stopping OAuth callback server...");
+  writeMainInfo("[Bustly] Stopping OAuth callback server");
   stopOAuthCallbackServer();
 });
 
 process.on("uncaughtException", (error) => {
-  console.error("[Main] uncaughtException:", error);
-  writeMainLog(`uncaughtException: ${error?.stack ?? String(error)}`);
+  writeMainError("[Main] uncaughtException:", error);
 });
 
 process.on("unhandledRejection", (reason) => {
-  console.error("[Main] unhandledRejection:", reason);
-  writeMainLog(`unhandledRejection: ${reason instanceof Error ? reason.stack : String(reason)}`);
+  writeMainError("[Main] unhandledRejection:", reason);
 });

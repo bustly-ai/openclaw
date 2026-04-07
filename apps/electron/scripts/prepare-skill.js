@@ -6,6 +6,7 @@ const repoRoot = resolve(import.meta.dirname, "..", "..", "..");
 const bustlySkillsRoot = resolve(repoRoot, "bustly-skills");
 const sourceSkillsDir = resolve(bustlySkillsRoot, "skills");
 const targetSkillsDir = resolve(repoRoot, "skills");
+const electronBustlySkillsTargetDir = resolve(repoRoot, "apps", "electron", "resources", "bustly-skills");
 
 function fail(message) {
   console.error(`[prepare-skill] ${message}`);
@@ -22,81 +23,31 @@ function run(command, args, cwd) {
   }
 }
 
-function runCapture(command, args, cwd) {
-  const result = spawnSync(command, args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["inherit", "pipe", "pipe"],
-  });
-  if (result.status !== 0) {
-    const stderr = result.stderr?.trim();
-    const stdout = result.stdout?.trim();
-    if (stderr) {
-      console.error(stderr);
-    } else if (stdout) {
-      console.error(stdout);
-    }
-    process.exit(result.status ?? 1);
-  }
-  return result.stdout?.trim() || "";
-}
-
 function parseArgs(argv) {
-  let branch = "main";
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--") {
       continue;
     }
     if (arg === "--help" || arg === "-h") {
-      console.log("Usage: pnpm run prepare-skill -- [branch]");
-      console.log("   or: pnpm run prepare-skill -- --branch <branch>");
+      console.log("Usage: pnpm run prepare-skill");
       process.exit(0);
-    }
-    if (arg === "--branch" || arg === "-b") {
-      const next = argv[index + 1]?.trim();
-      if (!next) {
-        fail(`Missing value for ${arg}`);
-      }
-      branch = next;
-      index += 1;
-      continue;
     }
     if (arg.startsWith("-")) {
       fail(`Unknown option: ${arg}`);
     }
-    branch = arg.trim() || branch;
+    fail(`Unexpected argument: ${arg}`);
   }
-  if (!branch) {
-    fail("Branch name cannot be empty.");
-  }
-  return branch;
-}
 
-function ensureCleanSubmodule() {
-  const status = runCapture("git", ["status", "--porcelain"], bustlySkillsRoot);
-  if (status) {
-    fail("bustly-skills has uncommitted changes. Clean the submodule before running prepare-skill.");
-  }
-}
-
-function ensureBranch(branch) {
-  run("git", ["submodule", "update", "--init", "bustly-skills"], repoRoot);
-  ensureCleanSubmodule();
-  run("git", ["fetch", "origin", branch], bustlySkillsRoot);
-
-  const hasLocalBranch = spawnSync("git", ["rev-parse", "--verify", `refs/heads/${branch}`], {
-    cwd: bustlySkillsRoot,
-    stdio: "ignore",
-  }).status === 0;
-
-  if (hasLocalBranch) {
-    run("git", ["checkout", branch], bustlySkillsRoot);
-    run("git", ["pull", "--ff-only", "origin", branch], bustlySkillsRoot);
+  if (existsSync(sourceSkillsDir)) {
+    console.log(
+      "[prepare-skill] Using existing local bustly-skills checkout without resetting its branch or commit",
+    );
     return;
   }
 
-  run("git", ["checkout", "-b", branch, "--track", `origin/${branch}`], bustlySkillsRoot);
+  console.log("[prepare-skill] Initializing bustly-skills submodule");
+  run("git", ["submodule", "update", "--init", "bustly-skills"], repoRoot);
 }
 
 function copySkills() {
@@ -126,7 +77,35 @@ function copySkills() {
   );
 }
 
-const branch = parseArgs(process.argv.slice(2));
-console.log(`[prepare-skill] Preparing skills from bustly-skills (${branch})`);
-ensureBranch(branch);
+function shouldCopyBustlySkillsBundle(source) {
+  const relative = source.slice(bustlySkillsRoot.length).replace(/^[/\\]/, "");
+  if (!relative) {
+    return true;
+  }
+  const firstSegment = relative.split(/[/\\]/)[0];
+  return ["README.md", "package.json", "bin", "scripts", "skills", "platforms"].includes(firstSegment);
+}
+
+function copyBustlySkillsBundle() {
+  if (!existsSync(bustlySkillsRoot)) {
+    fail(`Missing bustly-skills submodule: ${bustlySkillsRoot}`);
+  }
+
+  rmSync(electronBustlySkillsTargetDir, { recursive: true, force: true });
+  mkdirSync(electronBustlySkillsTargetDir, { recursive: true });
+
+  cpSync(bustlySkillsRoot, electronBustlySkillsTargetDir, {
+    recursive: true,
+    dereference: true,
+    filter: shouldCopyBustlySkillsBundle,
+  });
+
+  console.log(
+    `[prepare-skill] Copied bustly-skills bundle to ${electronBustlySkillsTargetDir}`,
+  );
+}
+
+parseArgs(process.argv.slice(2));
+console.log("[prepare-skill] Preparing skills from local bustly-skills checkout");
 copySkills();
+copyBustlySkillsBundle();

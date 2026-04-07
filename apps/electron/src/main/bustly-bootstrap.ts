@@ -3,9 +3,9 @@ import { homedir } from "node:os";
 import * as path from "node:path";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
-  isWorkspaceOnboardingCompleted,
   loadWorkspaceTemplate,
 } from "../../../../src/agents/workspace";
+import { normalizeBustlyAgentName } from "../shared/bustly-agent.js";
 import type { BustlyOAuthState } from "./bustly-types.js";
 import { readBustlyOAuthState } from "./bustly-oauth.js";
 
@@ -543,39 +543,39 @@ async function buildBustlyBootstrapContext(params: {
     klaviyoMappings,
     aliexpressMappings,
   ] = await Promise.all([
-      fetchMany<ShopifyMappingRow>(
+      fetchManyOptional<ShopifyMappingRow>(
         client.from("workspace_shopify_mappings").select("shopify_shop_id, role, status").eq("workspace_id", workspaceId),
-        "workspace_shopify_mappings lookup failed",
+        { label: "workspace_shopify_mappings lookup failed", warnings },
       ),
-    fetchMany<BigCommerceMappingRow>(
+    fetchManyOptional<BigCommerceMappingRow>(
       client.from("workspace_bigcommerce_mappings").select("store_hash, role, status").eq("workspace_id", workspaceId),
-      "workspace_bigcommerce_mappings lookup failed",
+      { label: "workspace_bigcommerce_mappings lookup failed", warnings },
     ),
-    fetchMany<WooMappingRow>(
+    fetchManyOptional<WooMappingRow>(
       client
         .from("workspace_woocommerce_mappings")
         .select("woocommerce_account_id, site_url, site_id, role, status")
         .eq("workspace_id", workspaceId),
-      "workspace_woocommerce_mappings lookup failed",
+      { label: "workspace_woocommerce_mappings lookup failed", warnings },
     ),
-    fetchMany<MagentoMappingRow>(
+    fetchManyOptional<MagentoMappingRow>(
       client.from("workspace_magento_mappings").select("magento_account_id, role, status").eq("workspace_id", workspaceId),
-      "workspace_magento_mappings lookup failed",
+      { label: "workspace_magento_mappings lookup failed", warnings },
     ),
-    fetchMany<GoogleAdsMappingRow>(
+    fetchManyOptional<GoogleAdsMappingRow>(
       client.from("workspace_google_ads_mappings").select("customer_id, role, status").eq("workspace_id", workspaceId),
-      "workspace_google_ads_mappings lookup failed",
+      { label: "workspace_google_ads_mappings lookup failed", warnings },
     ),
-    fetchMany<KlaviyoMappingRow>(
+    fetchManyOptional<KlaviyoMappingRow>(
       client.from("workspace_klaviyo_mappings").select("klaviyo_account_id, role, status").eq("workspace_id", workspaceId),
-      "workspace_klaviyo_mappings lookup failed",
+      { label: "workspace_klaviyo_mappings lookup failed", warnings },
     ),
-    fetchMany<AliExpressMappingRow>(
+    fetchManyOptional<AliExpressMappingRow>(
       client
         .from("workspace_aliexpress_mappings")
         .select("aliexpress_account_id, account_id, account_name, shop_name, role, status")
         .eq("workspace_id", workspaceId),
-      "workspace_aliexpress_mappings lookup failed",
+      { label: "workspace_aliexpress_mappings lookup failed", warnings },
     ),
   ]);
 
@@ -936,9 +936,25 @@ function buildTemplateValues(context: BustlyBootstrapContext): Record<string, st
 async function loadRenderedTemplate(
   name: string,
   values: Record<string, string>,
+  opts?: {
+    agentName?: string;
+  },
 ): Promise<string> {
-  const template = await loadWorkspaceTemplate(name);
-  return `${MANAGED_MARKER}\n${renderTemplate(template, values).trim()}\n`;
+  const candidateNames = opts?.agentName
+    ? [`agents/${normalizeBustlyAgentName(opts.agentName)}/${name}`, name]
+    : [name];
+  for (const candidateName of candidateNames) {
+    try {
+      const template = await loadWorkspaceTemplate(candidateName);
+      return `${MANAGED_MARKER}\n${renderTemplate(template, values).trim()}\n`;
+    } catch (error) {
+      if (candidateName !== name) {
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Missing Bustly template for ${name}`);
 }
 
 async function writeManagedFile(filePath: string, content: string): Promise<void> {
@@ -963,13 +979,9 @@ export async function initializeBustlyWorkspaceBootstrap(params: {
   workspaceDir: string;
   workspaceId: string;
   workspaceName?: string;
+  agentName?: string;
   force?: boolean;
 }): Promise<void> {
-  const completed = await isWorkspaceOnboardingCompleted(params.workspaceDir);
-  if (completed && !params.force) {
-    return;
-  }
-
   const context = await buildBustlyBootstrapContext({
     workspaceId: params.workspaceId,
     workspaceName: params.workspaceName,
@@ -979,14 +991,13 @@ export async function initializeBustlyWorkspaceBootstrap(params: {
 
   await fs.mkdir(workspaceDir, { recursive: true });
 
-  const [agents, soul, identity, user, tools, heartbeat, bootstrap] = await Promise.all([
-    loadRenderedTemplate("AGENTS.md", values),
-    loadRenderedTemplate("SOUL.md", values),
-    loadRenderedTemplate("IDENTITY.md", values),
-    loadRenderedTemplate("USER.md", values),
-    loadRenderedTemplate("TOOLS.md", values),
-    loadRenderedTemplate("HEARTBEAT.md", values),
-    loadRenderedTemplate("BOOTSTRAP.md", values),
+  const [agents, soul, identity, user, tools, heartbeat] = await Promise.all([
+    loadRenderedTemplate("AGENTS.md", values, { agentName: params.agentName }),
+    loadRenderedTemplate("SOUL.md", values, { agentName: params.agentName }),
+    loadRenderedTemplate("IDENTITY.md", values, { agentName: params.agentName }),
+    loadRenderedTemplate("USER.md", values, { agentName: params.agentName }),
+    loadRenderedTemplate("TOOLS.md", values, { agentName: params.agentName }),
+    loadRenderedTemplate("HEARTBEAT.md", values, { agentName: params.agentName }),
   ]);
 
   await Promise.all([
@@ -996,6 +1007,6 @@ export async function initializeBustlyWorkspaceBootstrap(params: {
     writeManagedFile(path.join(workspaceDir, "USER.md"), user),
     writeManagedFile(path.join(workspaceDir, "TOOLS.md"), tools),
     writeManagedFile(path.join(workspaceDir, "HEARTBEAT.md"), heartbeat),
-    writeManagedFile(path.join(workspaceDir, "BOOTSTRAP.md"), bootstrap),
+    fs.rm(path.join(workspaceDir, "BOOTSTRAP.md"), { force: true }),
   ]);
 }

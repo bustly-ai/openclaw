@@ -53,7 +53,7 @@ const allowedTags = [
   "tr", "ul", "img",
 ];
 
-const allowedAttrs = ["class", "href", "rel", "target", "title", "start", "src", "alt"];
+const allowedAttrs = ["class", "href", "rel", "target", "title", "start", "src", "alt", "data-local-path"];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
   ALLOWED_ATTR: allowedAttrs,
@@ -66,6 +66,21 @@ const MARKDOWN_PARSE_LIMIT = 40_000;
 const MARKDOWN_CACHE_LIMIT = 200;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const markdownCache = new Map<string, string>();
+const WINDOWS_ABSOLUTE_PATH_RE = /^[A-Za-z]:[\\/]/;
+const HOME_RELATIVE_PATH_RE = /^~(?:[\\/]|$)/;
+
+export function isAbsoluteLocalMarkdownPath(value: string | null | undefined): boolean {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("\\\\") ||
+    WINDOWS_ABSOLUTE_PATH_RE.test(trimmed) ||
+    HOME_RELATIVE_PATH_RE.test(trimmed)
+  );
+}
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -100,6 +115,12 @@ function installHooks() {
     }
     const href = node.getAttribute("href");
     if (!href) {
+      return;
+    }
+    if (isAbsoluteLocalMarkdownPath(href)) {
+      node.setAttribute("data-local-path", href);
+      node.setAttribute("rel", "noopener");
+      node.setAttribute("target", "_self");
       return;
     }
     node.setAttribute("rel", "noreferrer noopener");
@@ -942,6 +963,12 @@ function isStreamEventNode(node: TimelineNode): boolean {
   return node.tone !== "user";
 }
 
+function isStreamingAssistantTextNode(
+  node: TimelineNode,
+): node is Extract<TimelineNode, { kind: "text"; tone: "assistant" }> {
+  return node.kind === "text" && node.tone === "assistant" && node.streaming === true;
+}
+
 function buildStreamFoldNode(items: TimelineNode[]): Extract<TimelineNode, { kind: "streamFold" }> | null {
   if (items.length === 0) {
     return null;
@@ -1046,19 +1073,40 @@ export function collapseStreamingEvents(
     return nodes;
   }
 
+  const firstEventIndex = eventIndices[0];
+  const secondToLastEventIndex = eventIndices[eventIndices.length - 2];
   const lastEventIndex = eventIndices[eventIndices.length - 1];
-  if (lastEventIndex == null) {
+  if (firstEventIndex == null || secondToLastEventIndex == null || lastEventIndex == null) {
     return nodes;
   }
 
-  // Keep only the latest event visible and collapse every earlier event into the fold capsule.
-  const hiddenIndices = eventIndices.slice(0, -1);
+  // Keep the first event visible for orientation, and keep the latest two events visible
+  // so the current run still feels live. Collapse only the middle stretch.
+  const hiddenIndices = eventIndices.slice(1, -2);
   if (hiddenIndices.length === 0) {
     return nodes;
   }
 
   const hiddenIndexSet = new Set(hiddenIndices);
-  const hiddenItems = hiddenIndices.map((index) => nodes[index]);
+  let latestAssistantIndex = -1;
+  for (let index = eventIndices.length - 1; index >= 0; index -= 1) {
+    const candidateIndex = eventIndices[index];
+    const candidate = candidateIndex == null ? null : nodes[candidateIndex];
+    if (candidate && isStreamingAssistantTextNode(candidate)) {
+      latestAssistantIndex = candidateIndex;
+      break;
+    }
+  }
+  if (latestAssistantIndex >= 0 && latestAssistantIndex !== lastEventIndex) {
+    hiddenIndexSet.delete(latestAssistantIndex);
+  }
+  if (hiddenIndexSet.size === 0) {
+    return nodes;
+  }
+
+  const hiddenItems = hiddenIndices
+    .filter((index) => hiddenIndexSet.has(index))
+    .map((index) => nodes[index]);
   const foldNode = buildStreamFoldNode(hiddenItems);
   if (!foldNode) {
     return nodes;

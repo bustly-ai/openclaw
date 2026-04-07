@@ -56,6 +56,22 @@ describe("workspace remote templates", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://example.com/openclaw-prompts/AGENTS.md");
   });
 
+  it("preserves nested template paths when fetching remote templates", async () => {
+    const home = await makeTempRoot();
+    const fetchMock = vi.fn(async () => new Response("# Overview Agents\n", { status: 200 }));
+
+    const content = await loadRemoteWorkspaceTemplate("agents/overview/AGENTS.md", {
+      env: {
+        OPENCLAW_HOME: home,
+        BUSTLY_WORKSPACE_TEMPLATE_BASE_URL: "https://example.com/openclaw-prompts",
+      } as NodeJS.ProcessEnv,
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    expect(content).toBe("# Overview Agents\n");
+    expect(fetchMock).toHaveBeenCalledWith("https://example.com/openclaw-prompts/agents/overview/AGENTS.md");
+  });
+
   it("falls back to local templates when remote fetch fails", async () => {
     const env = {
       BUSTLY_WORKSPACE_TEMPLATE_BASE_URL: "https://example.com/openclaw-prompts",

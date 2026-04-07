@@ -5,6 +5,7 @@ import type { SessionSystemPromptReport } from "../../../config/sessions/types.j
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { AuthStorage, ModelRegistry } from "../../pi-model-discovery.js";
+import type { AssistantRequestMetric } from "../../../infra/assistant-request-metrics.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { RunEmbeddedPiAgentParams } from "./params.js";
 
@@ -50,6 +51,7 @@ export type EmbeddedRunAttemptResult = {
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
   compactionCount?: number;
+  assistantRequestMetrics?: AssistantRequestMetric[];
   /** Client tool call detected (OpenResponses hosted tools). */
   clientToolCall?: { name: string; params: Record<string, unknown> };
 };

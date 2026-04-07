@@ -1,3 +1,4 @@
+import type { AssistantRequestMetric } from "../infra/assistant-request-metrics.js";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { TypingController } from "./reply/typing.js";
 
@@ -53,6 +54,7 @@ export type GetReplyOptions = {
     runId: string;
     aborted: boolean;
     hasAssistantMessage: boolean;
+    assistantRequestMetrics?: AssistantRequestMetric[];
   }) => void;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */

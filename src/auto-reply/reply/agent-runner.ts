@@ -38,6 +38,10 @@ import {
   isAudioPayload,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
+import {
+  appendFastReplyTurnToSessionTranscript,
+  runFastReplyGate,
+} from "./fast-reply-gate.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
@@ -372,29 +376,159 @@ export async function runReplyAgent(params: {
     });
   try {
     const runStartedAt = Date.now();
-    const runOutcome = await runAgentTurnWithFallback({
+    type SuccessfulRunOutcome = Exclude<
+      Awaited<ReturnType<typeof runAgentTurnWithFallback>>,
+      { kind: "final"; payload: ReplyPayload }
+    > & {
+      selectedProvider?: string;
+      selectedModel?: string;
+    };
+
+    const gateOutcome = await runFastReplyGate({
       commandBody,
       followupRun,
       sessionCtx,
       opts,
-      typingSignals,
-      blockReplyPipeline,
-      blockStreamingEnabled,
-      blockReplyChunking,
-      resolvedBlockStreamingBreak,
-      applyReplyToMode,
-      shouldEmitToolResult,
-      shouldEmitToolOutput,
-      pendingToolTasks,
-      resetSessionAfterCompactionFailure,
-      resetSessionAfterRoleOrderingConflict,
-      isHeartbeat,
-      sessionKey,
-      getActiveSessionEntry: () => activeSessionEntry,
-      activeSessionStore,
-      storePath,
-      resolvedVerboseLevel,
+      onAssistantMessageStart: async () => {
+        await typingSignals.signalMessageStart();
+        await opts?.onAssistantMessageStart?.();
+      },
+      onPartialReply: async (payload) => {
+        if (!payload.text) {
+          return;
+        }
+        await typingSignals.signalTextDelta(payload.text);
+        await opts?.onPartialReply?.({
+          text: payload.text,
+          mediaUrls: payload.mediaUrls,
+        });
+      },
     });
+
+    let runOutcome:
+      | SuccessfulRunOutcome
+      | {
+          kind: "final";
+          payload: ReplyPayload;
+        };
+    if (gateOutcome.kind === "success") {
+      const runResult = gateOutcome.runResult;
+      const endedAt = Date.now();
+      const durationMs = Math.max(0, runResult.meta?.durationMs ?? 0);
+      const startedAt = endedAt - durationMs;
+      const fastReplyText = (runResult.payloads ?? [])
+        .map((payload) => payload.text?.trim())
+        .filter((text): text is string => Boolean(text))
+        .join("\n\n")
+        .trim();
+      try {
+        await appendFastReplyTurnToSessionTranscript({
+          sessionFile: followupRun.run.sessionFile,
+          sessionId: followupRun.run.sessionId,
+          workspaceDir: followupRun.run.workspaceDir,
+          commandBody,
+          payloads: runResult.payloads ?? [],
+          provider: gateOutcome.provider,
+          model: gateOutcome.model,
+          timeoutMs: followupRun.run.timeoutMs,
+          usage: runResult.meta?.agentMeta?.lastCallUsage ?? runResult.meta?.agentMeta?.usage,
+        });
+      } catch (err) {
+        defaultRuntime.error(`Failed to mirror fast reply into session transcript: ${String(err)}`);
+      }
+      opts?.onModelSelected?.({
+        provider: gateOutcome.provider,
+        model: gateOutcome.model,
+        thinkLevel: "off",
+      });
+      opts?.onAgentRunSettled?.({
+        runId: gateOutcome.runId,
+        aborted: runResult.meta?.aborted === true,
+        hasAssistantMessage: runResult.meta?.hasAssistantMessage === true,
+        assistantRequestMetrics: runResult.meta?.assistantRequestMetrics,
+      });
+      runOutcome = {
+        kind: "success",
+        runId: gateOutcome.runId,
+        runResult,
+        fallbackProvider: gateOutcome.provider,
+        fallbackModel: gateOutcome.model,
+        fallbackAttempts: [],
+        didLogHeartbeatStrip: false,
+        autoCompactionCompleted: false,
+        selectedProvider: gateOutcome.provider,
+        selectedModel: gateOutcome.model,
+      };
+    } else if (gateOutcome.kind === "handoff") {
+      try {
+        await appendFastReplyTurnToSessionTranscript({
+          sessionFile: followupRun.run.sessionFile,
+          sessionId: followupRun.run.sessionId,
+          workspaceDir: followupRun.run.workspaceDir,
+          commandBody,
+          payloads: [{ text: gateOutcome.prefaceText }],
+          provider: gateOutcome.provider,
+          model: gateOutcome.model,
+          timeoutMs: followupRun.run.timeoutMs,
+        });
+      } catch (err) {
+        defaultRuntime.error(`Failed to mirror fast gate handoff into session transcript: ${String(err)}`);
+      }
+      opts?.onAgentRunSettled?.({
+        runId: gateOutcome.runId,
+        aborted: false,
+        hasAssistantMessage: true,
+        assistantRequestMetrics: gateOutcome.assistantRequestMetrics,
+      });
+      runOutcome = await runAgentTurnWithFallback({
+        commandBody,
+        followupRun,
+        sessionCtx,
+        opts,
+        retryWithoutNewUser: true,
+        typingSignals,
+        blockReplyPipeline,
+        blockStreamingEnabled,
+        blockReplyChunking,
+        resolvedBlockStreamingBreak,
+        applyReplyToMode,
+        shouldEmitToolResult,
+        shouldEmitToolOutput,
+        pendingToolTasks,
+        resetSessionAfterCompactionFailure,
+        resetSessionAfterRoleOrderingConflict,
+        isHeartbeat,
+        sessionKey,
+        getActiveSessionEntry: () => activeSessionEntry,
+        activeSessionStore,
+        storePath,
+        resolvedVerboseLevel,
+      });
+    } else {
+      runOutcome = await runAgentTurnWithFallback({
+        commandBody,
+        followupRun,
+        sessionCtx,
+        opts,
+        typingSignals,
+        blockReplyPipeline,
+        blockStreamingEnabled,
+        blockReplyChunking,
+        resolvedBlockStreamingBreak,
+        applyReplyToMode,
+        shouldEmitToolResult,
+        shouldEmitToolOutput,
+        pendingToolTasks,
+        resetSessionAfterCompactionFailure,
+        resetSessionAfterRoleOrderingConflict,
+        isHeartbeat,
+        sessionKey,
+        getActiveSessionEntry: () => activeSessionEntry,
+        activeSessionStore,
+        storePath,
+        resolvedVerboseLevel,
+      });
+    }
 
     if (runOutcome.kind === "final") {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
@@ -407,6 +541,8 @@ export async function runReplyAgent(params: {
       fallbackModel,
       fallbackAttempts,
       directlySentBlockKeys,
+      selectedProvider: selectedProviderOverride,
+      selectedModel: selectedModelOverride,
     } = runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
 
@@ -449,8 +585,8 @@ export async function runReplyAgent(params: {
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
     const verboseEnabled = resolvedVerboseLevel !== "off";
-    const selectedProvider = followupRun.run.provider;
-    const selectedModel = followupRun.run.model;
+    const selectedProvider = selectedProviderOverride ?? followupRun.run.provider;
+    const selectedModel = selectedModelOverride ?? followupRun.run.model;
     const fallbackStateEntry =
       activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
     const fallbackTransition = resolveFallbackTransition({

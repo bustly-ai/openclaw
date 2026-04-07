@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { loginOpenAICodex, loginAntigravity } from "@mariozechner/pi-ai";
 import { loadConfig } from "../../../../src/config/config.js";
 import * as BustlyOAuth from "./bustly-oauth.js";
+import { writeMainError, writeMainInfo, writeMainWarn } from "./logger.js";
 
 let oauthPromptResolver: ((value: string) => void) | null = null;
 
@@ -30,10 +31,14 @@ function getOAuthCallbackPort(): number {
   try {
     const config = loadConfig();
     const port = config.bustlyOAuth?.callbackPort ?? DEFAULT_OAUTH_CALLBACK_PORT;
-    console.log(`[Bustly OAuth] Using callback port: ${port} (from ${config.bustlyOAuth?.callbackPort ? 'config' : 'default'})`);
+    writeMainInfo(
+      `[Bustly OAuth] Using callback port ${port} (${config.bustlyOAuth?.callbackPort ? "config" : "default"})`,
+    );
     return port;
   } catch {
-    console.log(`[Bustly OAuth] Failed to load config, using default port: ${DEFAULT_OAUTH_CALLBACK_PORT}`);
+    writeMainWarn(
+      `[Bustly OAuth] Failed to load config, using default port ${DEFAULT_OAUTH_CALLBACK_PORT}`,
+    );
     return DEFAULT_OAUTH_CALLBACK_PORT;
   }
 }
@@ -59,13 +64,6 @@ export function generateLoginUrl(
   const state = BustlyOAuth.readBustlyOAuthState();
   const deviceId = state?.deviceId ?? "";
 
-  console.log("[Bustly OAuth] generateLoginUrl - loginTraceId:", loginTraceId);
-  console.log("[Bustly OAuth] generateLoginUrl - deviceId:", deviceId);
-  console.log("[Bustly OAuth] generateLoginUrl - redirectUri:", redirectUri);
-  console.log("[Bustly OAuth] generateLoginUrl - apiBaseUrl:", apiBaseUrl);
-  console.log("[Bustly OAuth] generateLoginUrl - webBaseUrl:", webBaseUrl);
-  console.log("[Bustly OAuth] generateLoginUrl - clientId:", clientId);
-
   // Build the OAuth URL with all the parameters
   const params = new URLSearchParams({
     client_id: clientId,
@@ -75,8 +73,6 @@ export function generateLoginUrl(
   });
 
   const loginUrl = `${webBaseUrl}/admin/auth?${params.toString()}`;
-
-  console.log("[Bustly OAuth] Final loginUrl:", loginUrl);
   return loginUrl;
 }
 
@@ -87,48 +83,39 @@ export function generateLoginUrl(
 export async function startOAuthCallbackServer(): Promise<number> {
   if (oauthServer) {
     const currentPort = oauthServerPort ?? getOAuthCallbackPort();
-    console.log("[Bustly OAuth] OAuth server already running on port", currentPort);
+    writeMainInfo(`[Bustly OAuth] OAuth server already running on port ${currentPort}`);
     return currentPort;
   }
 
   const configuredPort = getOAuthCallbackPort();
-  console.log("[Bustly OAuth] Starting OAuth callback server on port", configuredPort);
+  writeMainInfo(`[Bustly OAuth] Starting OAuth callback server on port ${configuredPort}`);
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const currentPort = oauthServerPort ?? configuredPort;
-    console.log("=".repeat(60));
-    console.log("[Bustly OAuth] Received request:", req.method, req.url);
-    console.log("=".repeat(60));
 
     const urlRaw = req.url;
     if (!urlRaw) {
-      console.log("[Bustly OAuth] No URL in request");
+      writeMainWarn("[Bustly OAuth] Callback request missing URL");
       res.statusCode = 400;
       res.end("Bad Request");
       return;
     }
 
     const url = new URL(urlRaw, `http://127.0.0.1:${currentPort}`);
-    console.log("[Bustly OAuth] Pathname:", url);
 
     // Check if this is an OAuth callback
     if (url.pathname !== "/authorize") {
-      console.log("[Bustly OAuth] Not an OAuth callback, returning 404");
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Not Found");
       return;
     }
 
-    console.log("[Bustly OAuth] OAuth callback detected!");
-
     const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
-    console.log("[Bustly OAuth] Authorization Code:", code ? code.substring(0, 10) + "..." : "MISSING");
-    console.log("[Bustly OAuth] State (loginTraceId):", state);
 
     if (!code) {
-      console.log("[Bustly OAuth] Missing authorization code - rendering error page");
+      writeMainWarn("[Bustly OAuth] Missing authorization code in callback");
       res.statusCode = 400;
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.end(`
@@ -154,7 +141,7 @@ export async function startOAuthCallbackServer(): Promise<number> {
     // Verify state matches our login trace ID
     const oauthState = BustlyOAuth.readBustlyOAuthState();
     if (!oauthState || oauthState.loginTraceId !== state) {
-      console.log("[Bustly OAuth] Invalid state, not matching our login trace ID");
+      writeMainWarn("[Bustly OAuth] Invalid OAuth callback state");
       res.statusCode = 400;
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.end(`
@@ -179,17 +166,13 @@ export async function startOAuthCallbackServer(): Promise<number> {
 
     // Store the auth code in state
     BustlyOAuth.setBustlyAuthCode(code);
-    console.log("[Bustly OAuth] Authorization code stored in state");
 
     // Notify the waiting promise if any
     // The IPC handler in index.ts will handle token exchange
     if (oauthCodeResolver) {
-      console.log("[Bustly OAuth] Notifying waiting promise");
       oauthCodeResolver(code);
       oauthCodeResolver = null;
     }
-
-    console.log("[Bustly OAuth] Waiting for IPC handler to exchange token...");
 
     // Render success page
     res.statusCode = 200;
@@ -223,8 +206,7 @@ export async function startOAuthCallbackServer(): Promise<number> {
       </html>
     `);
 
-    console.log("[Bustly OAuth] Success page rendered, callback handled successfully");
-    console.log("=".repeat(60));
+    writeMainInfo("[Bustly OAuth] Callback received and authorization code stored");
   });
 
   oauthServer = server;
@@ -235,7 +217,7 @@ export async function startOAuthCallbackServer(): Promise<number> {
         const address = server.address() as AddressInfo | null;
         const actualPort = address?.port ?? portToTry;
         oauthServerPort = actualPort;
-        console.log("[Bustly OAuth] OAuth callback server listening on http://127.0.0.1:" + actualPort);
+        writeMainInfo(`[Bustly OAuth] OAuth callback server listening on http://127.0.0.1:${actualPort}`);
         cleanup();
         resolve(actualPort);
       };
@@ -259,11 +241,11 @@ export async function startOAuthCallbackServer(): Promise<number> {
     if (nodeErr.code !== "EADDRINUSE") {
       oauthServer = null;
       oauthServerPort = null;
-      console.error("[Bustly OAuth] OAuth server failed to start:", err);
+      writeMainError("[Bustly OAuth] OAuth server failed to start:", err);
       throw err;
     }
 
-    console.warn(
+    writeMainWarn(
       `[Bustly OAuth] Port ${configuredPort} is in use; retrying on a random loopback port`,
     );
     try {
@@ -271,7 +253,7 @@ export async function startOAuthCallbackServer(): Promise<number> {
     } catch (fallbackErr) {
       oauthServer = null;
       oauthServerPort = null;
-      console.error("[Bustly OAuth] OAuth server fallback start failed:", fallbackErr);
+      writeMainError("[Bustly OAuth] OAuth server fallback start failed:", fallbackErr);
       throw fallbackErr;
     }
   }
@@ -282,9 +264,9 @@ export async function startOAuthCallbackServer(): Promise<number> {
  */
 export function stopOAuthCallbackServer(): void {
   if (oauthServer) {
-    console.log("[Bustly OAuth] Stopping OAuth callback server...");
+    writeMainInfo("[Bustly OAuth] Stopping OAuth callback server");
     oauthServer.close(() => {
-      console.log("[Bustly OAuth] OAuth callback server stopped");
+      writeMainInfo("[Bustly OAuth] OAuth callback server stopped");
     });
     oauthServer = null;
     oauthServerPort = null;
@@ -328,6 +310,13 @@ export type BustlyTokenApiResponse = {
         expires_in?: number;
         expires_at?: number;
         token_type?: string;
+        user?: {
+          user_metadata?: {
+            avatar_url?: string;
+            picture?: string;
+            full_name?: string;
+          };
+        };
       };
     };
     skills?: string[];
@@ -339,11 +328,7 @@ export type BustlyTokenApiResponse = {
  * Returns the full API response including extras field
  */
 export async function exchangeToken(code: string): Promise<BustlyTokenApiResponse> {
-  console.log("[Bustly OAuth] Exchanging authorization code for access token");
-  console.log("[Bustly OAuth] Auth code:", code.substring(0, 10) + "...");
-
   const clientId = process.env.BUSTLY_CLIENT_ID ?? "openclaw-desktop";
-  console.log("[Bustly OAuth] Client ID:", clientId);
 
   const apiBaseUrl = process.env.BUSTLY_API_BASE_URL;
   if (!apiBaseUrl) {
@@ -352,7 +337,7 @@ export async function exchangeToken(code: string): Promise<BustlyTokenApiRespons
     );
   }
   const apiEndpoint = `${apiBaseUrl.replace(/\/+$/, "")}/api/oauth/getToken`;
-  console.log("[Bustly OAuth] API endpoint:", apiEndpoint);
+  writeMainInfo("[Bustly OAuth] Exchanging authorization code for access token");
 
   const response = await fetch(apiEndpoint, {
     method: "POST",
@@ -366,42 +351,25 @@ export async function exchangeToken(code: string): Promise<BustlyTokenApiRespons
     }),
   });
 
-  console.log("[Bustly OAuth] Response status:", response.status, response.statusText);
-
   if (!response.ok) {
     const errorText = await response.text();
-    console.error("[Bustly OAuth] Failed:", response.status, errorText);
+    writeMainError(`[Bustly OAuth] Token exchange failed status=${response.status} ${errorText}`);
     throw new Error(`Token exchange failed: ${response.status} ${errorText}`);
   }
 
   const apiResponse = (await response.json()) as BustlyTokenApiResponse;
-  console.log("[Bustly OAuth] Full token exchange response:", JSON.stringify(apiResponse, null, 2));
-
-  console.log(
-    "[Bustly OAuth] API response - code:",
-    apiResponse.code,
-    "status:",
-    apiResponse.status,
-    "message:",
-    apiResponse.message,
-  );
 
   // Check API response: status must be "0" for success
   if (apiResponse.status !== "0") {
-    console.error(
-      "[Bustly OAuth] API returned error status:",
-      apiResponse.status,
-      "-",
-      apiResponse.message,
+    writeMainError(
+      `[Bustly OAuth] API returned error status=${apiResponse.status} message=${apiResponse.message}`,
     );
     throw new Error(apiResponse.message || "Token exchange failed");
   }
 
-  console.log("[Bustly OAuth] Token exchange successful!");
-  console.log("   User:", apiResponse.data.userName);
-  console.log("   Email:", apiResponse.data.userEmail);
-  console.log("   Workspace:", apiResponse.data.workspaceId);
-  console.log("   Has extras:", !!apiResponse.data.extras);
+  writeMainInfo(
+    `[Bustly OAuth] Token exchange successful user=${apiResponse.data.userEmail} workspace=${apiResponse.data.workspaceId}`,
+  );
 
   return apiResponse;
 }

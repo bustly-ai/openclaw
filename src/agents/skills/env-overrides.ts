@@ -144,9 +144,35 @@ function createEnvReverter(updates: EnvUpdate[]) {
   };
 }
 
-export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
-  const { skills, config } = params;
+function applyRuntimeEnvOverrides(params: {
+  updates: EnvUpdate[];
+  runtimeEnv?: Record<string, string | undefined>;
+}) {
+  const runtimeEnv = params.runtimeEnv;
+  if (!runtimeEnv) {
+    return;
+  }
+
+  for (const [rawKey, rawValue] of Object.entries(runtimeEnv)) {
+    const key = rawKey.trim();
+    const value = typeof rawValue === "string" ? rawValue.trim() : "";
+    if (!key || !value) {
+      continue;
+    }
+    params.updates.push({ key, prev: process.env[key] });
+    process.env[key] = value;
+  }
+}
+
+export function applySkillEnvOverrides(params: {
+  skills: SkillEntry[];
+  config?: OpenClawConfig;
+  runtimeEnv?: Record<string, string | undefined>;
+}) {
+  const { skills, config, runtimeEnv } = params;
   const updates: EnvUpdate[] = [];
+
+  applyRuntimeEnvOverrides({ updates, runtimeEnv });
 
   for (const entry of skills) {
     const skillKey = resolveSkillKey(entry.skill, entry);
@@ -170,12 +196,15 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
 export function applySkillEnvOverridesFromSnapshot(params: {
   snapshot?: SkillSnapshot;
   config?: OpenClawConfig;
+  runtimeEnv?: Record<string, string | undefined>;
 }) {
-  const { snapshot, config } = params;
+  const { snapshot, config, runtimeEnv } = params;
   if (!snapshot) {
     return () => {};
   }
   const updates: EnvUpdate[] = [];
+
+  applyRuntimeEnvOverrides({ updates, runtimeEnv });
 
   for (const skill of snapshot.skills) {
     const skillConfig = resolveSkillConfig(config, skill.name);

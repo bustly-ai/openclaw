@@ -2,8 +2,14 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+} from "@mariozechner/pi-ai";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { resetAssistantRequestMetricsForTest } from "../../infra/assistant-request-metrics.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import * as sessions from "../../config/sessions.js";
@@ -29,6 +35,10 @@ type EmbeddedRunParams = {
 const state = vi.hoisted(() => ({
   runEmbeddedPiAgentMock: vi.fn(),
   runCliAgentMock: vi.fn(),
+  completeMock: vi.fn(),
+  streamMock: vi.fn(),
+  resolveModelMock: vi.fn(),
+  getApiKeyForModelMock: vi.fn(),
 }));
 
 let modelFallbackModule: typeof import("../../agents/model-fallback.js");
@@ -67,6 +77,35 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
 }));
 
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+  return {
+    ...actual,
+    complete: (model: unknown, context: unknown, options: unknown) =>
+      state.completeMock(model, context, options),
+    stream: (model: unknown, context: unknown, options: unknown) =>
+      state.streamMock(model, context, options),
+  };
+});
+
+vi.mock("../../agents/pi-embedded-runner/model.js", () => ({
+  resolveModel: (
+    provider: string,
+    model: string,
+    agentDir: string | undefined,
+    cfg: unknown,
+  ) => state.resolveModelMock(provider, model, agentDir, cfg),
+}));
+
+vi.mock("../../agents/model-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/model-auth.js")>();
+  return {
+    ...actual,
+    getApiKeyForModel: (params: unknown) => state.getApiKeyForModelMock(params),
+    requireApiKey: (auth: { apiKey?: string }) => auth.apiKey ?? "",
+  };
+});
+
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (params: unknown) => state.runCliAgentMock(params),
 }));
@@ -86,8 +125,33 @@ beforeAll(async () => {
 beforeEach(() => {
   state.runEmbeddedPiAgentMock.mockClear();
   state.runCliAgentMock.mockClear();
+  state.completeMock.mockClear();
+  state.streamMock.mockClear();
+  state.resolveModelMock.mockReset();
+  state.getApiKeyForModelMock.mockReset();
+  resetAssistantRequestMetricsForTest();
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+  state.resolveModelMock.mockReturnValue({
+    model: {
+      id: "chat.standard",
+      name: "Bustly Standard",
+      api: "openai-completions",
+      provider: "bustly",
+      baseUrl: "https://gw.bustly.ai/api/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    },
+    authStorage: {},
+    modelRegistry: {},
+  });
+  state.getApiKeyForModelMock.mockResolvedValue({
+    apiKey: "test-key",
+    mode: "api-key",
+  });
 });
 
 function createMinimalRun(params?: {
@@ -175,6 +239,36 @@ function createMinimalRun(params?: {
   };
 }
 
+function createMockAssistantStream(
+  events: AssistantMessageEvent[],
+  result?: AssistantMessage,
+) {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    for (const event of events) {
+      stream.push(event);
+    }
+    if (result) {
+      stream.end(result);
+    }
+  });
+  return stream;
+}
+
+async function waitForFileText(filePath: string): Promise<string> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      return await fs.readFile(filePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for payload log at ${filePath}`);
+}
+
 async function seedSessionStore(params: {
   storePath: string;
   sessionKey: string;
@@ -186,6 +280,36 @@ async function seedSessionStore(params: {
     JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
     "utf-8",
   );
+}
+
+async function readTranscriptMessages(sessionFile: string) {
+  const raw = await fs.readFile(sessionFile, "utf-8");
+  return raw
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } })
+    .filter((entry) => entry.type === "message")
+    .map((entry) => entry.message ?? {});
+}
+
+async function writeTranscriptMessages(
+  sessionFile: string,
+  messages: Array<Record<string, unknown>>,
+) {
+  const lines = [
+    JSON.stringify({ type: "session", id: "session", version: 1, timestamp: new Date().toISOString() }),
+    ...messages.map((message) => JSON.stringify({ type: "message", message })),
+  ];
+  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+  await fs.writeFile(sessionFile, `${lines.join("\n")}\n`, "utf-8");
+}
+
+function readTextContent(content: unknown): string | undefined {
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const first = content[0] as { type?: string; text?: string } | undefined;
+  return first?.type === "text" ? first.text : undefined;
 }
 
 function createBaseRun(params: {
@@ -310,6 +434,706 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("runReplyAgent fast reply gate", () => {
+  const bustlyConfig = {
+    models: {
+      providers: {
+        bustly: {
+          baseUrl: "https://gw.bustly.ai/api/v1",
+          models: [],
+        },
+      },
+    },
+  };
+
+  it("returns direct fast replies from bustly standard without entering the main agent loop", async () => {
+    const tempDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-fast-gate-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const onAgentRunSettled = vi.fn();
+    const onPartialReply = vi.fn();
+    const onAssistantMessageStart = vi.fn();
+    const streamedMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Quick answer" }],
+      api: "openai-completions",
+      provider: "bustly",
+      model: "chat.standard",
+      usage: {
+        input: 12,
+        output: 8,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 20,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+    state.streamMock.mockReturnValueOnce(
+      createMockAssistantStream(
+        [
+          {
+            type: "start",
+            partial: {
+              ...streamedMessage,
+              content: [],
+            },
+          },
+          {
+            type: "text_start",
+            contentIndex: 0,
+            partial: {
+              ...streamedMessage,
+              content: [{ type: "text", text: "" }],
+            },
+          },
+          {
+            type: "text_delta",
+            contentIndex: 0,
+            delta: "Quick",
+            partial: {
+              ...streamedMessage,
+              content: [{ type: "text", text: "Quick" }],
+            },
+          },
+          {
+            type: "text_delta",
+            contentIndex: 0,
+            delta: " answer",
+            partial: streamedMessage,
+          },
+          {
+            type: "text_end",
+            contentIndex: 0,
+            content: "Quick answer",
+            partial: streamedMessage,
+          },
+          {
+            type: "done",
+            reason: "stop",
+            message: streamedMessage,
+          },
+        ],
+        streamedMessage,
+      ),
+    );
+
+    const { run } = createMinimalRun({
+      opts: {
+        runId: "run-fast-gate",
+        onAgentRunSettled,
+        onPartialReply,
+        onAssistantMessageStart,
+      },
+      runOverrides: {
+        sessionFile,
+        workspaceDir: tempDir,
+        config: bustlyConfig,
+        extraSystemPrompt: "HEAVY_CTX_SHOULD_NOT_BE_INCLUDED",
+      },
+    });
+    const result = await run();
+
+    expect(result).toMatchObject({ text: "Quick answer" });
+    expect(state.streamMock).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(state.streamMock.mock.calls[0]?.[0]).toMatchObject({
+      provider: "bustly",
+      id: "chat.standard",
+      reasoning: false,
+    });
+    expect(state.streamMock.mock.calls[0]?.[1]).toMatchObject({
+      tools: [expect.objectContaining({ name: "enter_agent_loop" })],
+      messages: [expect.objectContaining({ role: "user", content: "hello" })],
+    });
+    expect(state.streamMock.mock.calls[0]?.[1]).toMatchObject({
+      systemPrompt: expect.stringContaining("You are the fast reply gate for inbound messages."),
+    });
+    expect(String(state.streamMock.mock.calls[0]?.[1]?.systemPrompt ?? "")).toContain(
+      "Except for simple greetings or lightweight social niceties",
+    );
+    expect(String(state.streamMock.mock.calls[0]?.[1]?.systemPrompt ?? "")).not.toContain(
+      "HEAVY_CTX_SHOULD_NOT_BE_INCLUDED",
+    );
+    const fastGatePayload = { reasoning_effort: "high" } as Record<string, unknown>;
+    const onPayload = state.streamMock.mock.calls[0]?.[2]?.onPayload as
+      | ((payload: unknown) => void)
+      | undefined;
+    expect(onPayload).toBeTypeOf("function");
+    onPayload?.(fastGatePayload);
+    expect(fastGatePayload).toEqual({
+      reasoning: {
+        effort: "none",
+      },
+    });
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenNthCalledWith(1, {
+      text: "Quick",
+      mediaUrls: undefined,
+    });
+    expect(onPartialReply).toHaveBeenNthCalledWith(2, {
+      text: " answer",
+      mediaUrls: undefined,
+    });
+    expect(onAgentRunSettled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.stringMatching(/-fast-gate$/),
+        aborted: false,
+        hasAssistantMessage: true,
+        assistantRequestMetrics: [
+          expect.objectContaining({
+            ttftMs: expect.any(Number),
+            ttlrMs: expect.any(Number),
+          }),
+        ],
+      }),
+    );
+
+    const messages = await readTranscriptMessages(sessionFile);
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(readTextContent(messages[0]?.content)).toBe("hello");
+    expect(readTextContent(messages[1]?.content)).toBe("Quick answer");
+  });
+
+  it("logs the fast gate request payload after reasoning compat has been applied", async () => {
+    await withStateDirEnv("openclaw-fast-gate-payload-", async ({ stateDir }) => {
+      vi.stubEnv("OPENCLAW_PAYLOAD_LOG", "1");
+
+      const tempDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-fast-gate-payload-"));
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const streamedMessage: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "Quick answer" }],
+        api: "openai-completions",
+        provider: "bustly",
+        model: "chat.standard",
+        usage: {
+          input: 12,
+          output: 8,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 20,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+
+      state.streamMock.mockImplementationOnce((_model, _context, options) => {
+        const payload = {
+          model: "chat.standard",
+          messages: [{ role: "user", content: "hello" }],
+          stream: true,
+          stream_options: { include_usage: true },
+          store: false,
+          max_completion_tokens: 512,
+          tools: [{ type: "function", function: { name: "enter_agent_loop" } }],
+          tool_choice: "auto",
+          reasoning_effort: "high",
+        } as Record<string, unknown>;
+        (options as { onPayload?: (payload: unknown) => void } | undefined)?.onPayload?.(payload);
+        return createMockAssistantStream(
+          [
+            {
+              type: "done",
+              reason: "stop",
+              message: streamedMessage,
+            },
+          ],
+          streamedMessage,
+        );
+      });
+
+      const { run } = createMinimalRun({
+        opts: {
+          runId: "run-fast-gate-payload",
+        },
+        runOverrides: {
+          sessionFile,
+          workspaceDir: tempDir,
+          config: bustlyConfig,
+        },
+      });
+
+      await run();
+
+      const payloadLogPath = path.join(stateDir, "logs", "model-payload.jsonl");
+      const fileText = await waitForFileText(payloadLogPath);
+      const lines = fileText
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const requestLine = lines.find((line) => line.stage === "request");
+
+      expect(requestLine).toBeTruthy();
+      expect(requestLine.request.request).toMatchObject({
+        reasoning: {
+          effort: "none",
+        },
+      });
+      expect(requestLine.request.request).not.toHaveProperty("reasoning_effort");
+      expect(state.streamMock.mock.calls[0]?.[2]).toMatchObject({
+        headers: expect.objectContaining({
+          "X-Run-Id": "run-fast-gate-payload",
+        }),
+      });
+    });
+
+    vi.unstubAllEnvs();
+  });
+
+  it("includes only the latest two loop turns in the fast gate context", async () => {
+    const tempDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-fast-gate-history-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTranscriptMessages(sessionFile, [
+      {
+        role: "user",
+        content: [{ type: "text", text: "old non-loop question" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "old non-loop answer" }],
+        stopReason: "stop",
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "loop question 1" }],
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "working 1" },
+          { type: "toolCall", id: "call-1", name: "exec", arguments: {} },
+        ],
+        stopReason: "toolUse",
+        timestamp: 4,
+      },
+      {
+        role: "toolResult",
+        content: [{ type: "text", text: "tool output 1" }],
+        timestamp: 5,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "loop final 1" }],
+        stopReason: "stop",
+        timestamp: 6,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "loop question 2" }],
+        timestamp: 7,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "working 2" },
+          { type: "toolCall", id: "call-2", name: "exec", arguments: {} },
+        ],
+        stopReason: "toolUse",
+        timestamp: 8,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "loop final 2" }],
+        stopReason: "stop",
+        timestamp: 9,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "loop question 3" }],
+        timestamp: 10,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "working 3" },
+          { type: "toolCall", id: "call-3", name: "exec", arguments: {} },
+        ],
+        stopReason: "toolUse",
+        timestamp: 11,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "loop final 3" }],
+        stopReason: "stop",
+        timestamp: 12,
+      },
+    ]);
+
+    const streamedMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Quick answer" }],
+      api: "openai-completions",
+      provider: "bustly",
+      model: "chat.standard",
+      usage: {
+        input: 12,
+        output: 8,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 20,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+    state.streamMock.mockImplementationOnce((_model, context) => {
+      expect(context.systemPrompt).toContain("You are Bustly, a Commerce Operating Agent for merchants.");
+      expect(context.systemPrompt).toContain("Any commerce-related request must call the tool.");
+      expect(context.messages).toMatchObject([
+        { role: "user", content: "loop question 2" },
+        { role: "assistant", content: "loop final 2" },
+        { role: "user", content: "loop question 3" },
+        { role: "assistant", content: "loop final 3" },
+        { role: "user", content: "hello" },
+      ]);
+      return createMockAssistantStream(
+        [
+          {
+            type: "done",
+            reason: "stop",
+            message: streamedMessage,
+          },
+        ],
+        streamedMessage,
+      );
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        sessionFile,
+        workspaceDir: tempDir,
+        config: bustlyConfig,
+      },
+    });
+
+    await run();
+    expect(state.streamMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("streams a short preface and continues into the main agent loop when the fast gate requests escalation", async () => {
+    const tempDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-fast-gate-handoff-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const fastGateEvents: Array<{ stream: string; data?: Record<string, unknown> }> = [];
+    const onAgentRunSettled = vi.fn();
+    const onPartialReply = vi.fn();
+    const onAssistantMessageStart = vi.fn();
+    const toolUseMessage: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "I'm checking the latest business changes now.",
+        },
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "enter_agent_loop",
+          arguments: { reply: "I'm checking the latest business changes now." },
+        },
+      ],
+      api: "openai-completions",
+      provider: "bustly",
+      model: "chat.standard",
+      usage: {
+        input: 12,
+        output: 8,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 20,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      stopReason: "toolUse",
+      timestamp: Date.now(),
+    };
+    state.streamMock.mockReturnValueOnce(
+      createMockAssistantStream(
+        [
+          {
+            type: "start",
+            partial: {
+              ...toolUseMessage,
+              content: [],
+            },
+          },
+          {
+            type: "text_start",
+            contentIndex: 0,
+            partial: {
+              ...toolUseMessage,
+              content: [{ type: "text", text: "" }],
+            },
+          },
+          {
+            type: "text_delta",
+            contentIndex: 0,
+            delta: "I'm checking",
+            partial: {
+              ...toolUseMessage,
+              content: [{ type: "text", text: "I'm checking" }],
+            },
+          },
+          {
+            type: "text_delta",
+            contentIndex: 0,
+            delta: " the latest business changes now.",
+            partial: {
+              ...toolUseMessage,
+              content: [toolUseMessage.content[0] as Extract<
+                AssistantMessage["content"][number],
+                { type: "text" }
+              >],
+            },
+          },
+          {
+            type: "toolcall_start",
+            contentIndex: 1,
+            partial: {
+              ...toolUseMessage,
+              content: [
+                toolUseMessage.content[0] as Extract<
+                  AssistantMessage["content"][number],
+                  { type: "text" }
+                >,
+              ],
+            },
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 1,
+            toolCall: toolUseMessage.content[1] as Extract<
+              AssistantMessage["content"][number],
+              { type: "toolCall" }
+            >,
+            partial: toolUseMessage,
+          },
+          {
+            type: "done",
+            reason: "toolUse",
+            message: toolUseMessage,
+          },
+        ],
+        toolUseMessage,
+      ),
+    );
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Main loop answer" }],
+      meta: {
+        hasAssistantMessage: true,
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+        },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      opts: {
+        onPartialReply,
+        onAssistantMessageStart,
+        onAgentRunSettled,
+      },
+      runOverrides: {
+        sessionFile,
+        workspaceDir: tempDir,
+        config: bustlyConfig,
+      },
+    });
+    const off = onAgentEvent((evt) => {
+      if (evt.runId.endsWith("-fast-gate")) {
+        fastGateEvents.push({
+          stream: evt.stream,
+          data: evt.data,
+        });
+      }
+    });
+    const result = await run();
+    off();
+
+    expect(result).toMatchObject({ text: "Main loop answer" });
+    expect(state.streamMock).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(fastGateEvents.map((evt) => evt.stream)).toEqual([
+      "lifecycle",
+      "assistant",
+      "assistant",
+      "assistant",
+    ]);
+    expect(fastGateEvents[0]?.data).toMatchObject({ phase: "start" });
+    expect(fastGateEvents[1]?.data).toMatchObject({
+      text: "I'm checking",
+      delta: "I'm checking",
+    });
+    expect(fastGateEvents[2]?.data).toMatchObject({
+      text: "I'm checking the latest business changes now.",
+      delta: " the latest business changes now.",
+    });
+    expect(fastGateEvents[3]?.data).toMatchObject({
+      segmentBreak: true,
+    });
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenNthCalledWith(1, {
+      text: "I'm checking",
+      mediaUrls: undefined,
+    });
+    expect(onPartialReply).toHaveBeenNthCalledWith(2, {
+      text: " the latest business changes now.",
+      mediaUrls: undefined,
+    });
+    expect(onAgentRunSettled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.stringMatching(/-fast-gate$/),
+        aborted: false,
+        hasAssistantMessage: true,
+        assistantRequestMetrics: [
+          expect.objectContaining({
+            ttftMs: expect.any(Number),
+            ttlrMs: expect.any(Number),
+          }),
+        ],
+      }),
+    );
+    expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      provider: "anthropic",
+      model: "claude",
+      retryWithoutNewUser: true,
+    });
+    const messages = await readTranscriptMessages(sessionFile);
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(readTextContent(messages[0]?.content)).toBe("hello");
+    expect(readTextContent(messages[1]?.content)).toBe("I'm checking the latest business changes now.");
+  });
+
+  it("uses the fast gate tool reply when the model escalates without assistant text", async () => {
+    const onPartialReply = vi.fn();
+    const onAssistantMessageStart = vi.fn();
+    const toolUseMessage: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "enter_agent_loop",
+          arguments: { reply: "我先看一下，马上回来。" },
+        },
+      ],
+      api: "openai-completions",
+      provider: "bustly",
+      model: "chat.standard",
+      usage: {
+        input: 12,
+        output: 8,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 20,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      stopReason: "toolUse",
+      timestamp: Date.now(),
+    };
+    state.streamMock.mockReturnValueOnce(
+      createMockAssistantStream(
+        [
+          {
+            type: "start",
+            partial: {
+              ...toolUseMessage,
+              content: [],
+            },
+          },
+          {
+            type: "toolcall_start",
+            contentIndex: 0,
+            partial: {
+              ...toolUseMessage,
+              content: [],
+            },
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: toolUseMessage.content[0] as Extract<
+              AssistantMessage["content"][number],
+              { type: "toolCall" }
+            >,
+            partial: toolUseMessage,
+          },
+          {
+            type: "done",
+            reason: "toolUse",
+            message: toolUseMessage,
+          },
+        ],
+        toolUseMessage,
+      ),
+    );
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Main loop answer" }],
+      meta: {
+        hasAssistantMessage: true,
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+        },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      opts: {
+        onPartialReply,
+        onAssistantMessageStart,
+      },
+      runOverrides: {
+        config: bustlyConfig,
+      },
+    });
+
+    const result = await run();
+
+    expect(result).toMatchObject({ text: "Main loop answer" });
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith({
+      text: "我先看一下，马上回来。",
+      mediaUrls: undefined,
+    });
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
   });
 });
 

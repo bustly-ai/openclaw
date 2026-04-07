@@ -133,6 +133,8 @@ function buildMessagingSection(params: {
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
+    "- sessions_send returns `status: \"ok\"` once the target session accepts the message; any agent-to-agent follow-up continues in the background.",
+    "- If sessions_send returns `acceptance.status = \"received\"` with `acceptance.replyStatus = \"pending\"`, treat that as: the other session has received the message and may reply later. Do not describe it as a failure or as \"no reply\".",
     "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
     "- `[System Message] ...` blocks are internal context and are not user-visible by default.",
     `- If a \`[System Message]\` reports completed cron/subagent work and asks for a user update, rewrite it in your normal assistant voice and send that update (do not forward raw system text or default to ${SILENT_REPLY_TOKEN}).`,
@@ -174,8 +176,37 @@ function buildInteractionSection() {
   return [
     "## Interaction",
     "Reply in the user's language by default. If they switch languages, follow their latest message unless they ask for a different language.",
-    "In the OpenClaw client, the user cannot run OpenClaw commands in a terminal themselves. When OpenClaw-related commands are needed, run them for the user and report the result.",
-    "After creating a file for the user, open the directory containing that file.",
+    "In the Bustly client, do not run or ask the user to run Gateway lifecycle/service commands such as `openclaw gateway run`, `openclaw gateway install`, `openclaw gateway uninstall`, `openclaw gateway start`, `openclaw gateway stop`, `openclaw gateway restart`, or `openclaw daemon install|uninstall|start|stop|restart`. If the Gateway needs recovery, tell the user to restart the Bustly client instead.",
+    "In the Bustly client, the user cannot run OpenClaw commands in a terminal themselves. When OpenClaw-related commands are needed, run them for the user and report the result. Ask only if access, approvals, or safety constraints block you.",
+    "When your reply includes a local image path, always render it as Markdown image syntax with the absolute path as the target, for example `![image](/absolute/path/to/image.png)`. Do not leave the image path as plain text.",
+    "When your reply includes a local file path or directory path that the user may open, always render it as a Markdown link with the absolute path as the target, for example `[report.pdf](/absolute/path/to/report.pdf)` or `[open folder](/absolute/path/to/folder/)`. Do not leave openable local paths as plain text or only in code spans.",
+    "After generating or modifying any file for the user, return the directory path containing that file in your reply so the user can inspect it.",
+    "",
+  ];
+}
+
+function buildChannelConnectionSection(params: {
+  isMinimal: boolean;
+  availableTools: Set<string>;
+  execToolName: string;
+  processToolName: string;
+}) {
+  if (params.isMinimal) {
+    return [];
+  }
+  if (!params.availableTools.has("exec")) {
+    return [];
+  }
+  return [
+    "## Channel Connection Workflow",
+    "When the user asks to connect/link/login a chat channel (especially WeChat/Weixin): follow this strict order and do not improvise.",
+    "0) Do not call `memory_search`, `memory_get`, `web_search`, or `web_fetch` before local channel/plugin checks complete.",
+    `1) Run \`${params.execToolName}\` to inspect local availability first (for example: \`openclaw plugins list --json\`, \`openclaw channels list\`).`,
+    "2) If plugin `openclaw-weixin` is installed/enabled locally, use the official command `openclaw channels login --channel openclaw-weixin`.",
+    "3) If an exec result says `Command still running`, continue by polling the same process until completion; do not switch to docs/web fallback early.",
+    "4) Only consult docs/web when local commands definitively show plugin missing or unsupported.",
+    "5) Never recommend third-party WeChat plugins when `openclaw-weixin` is present locally.",
+    "6) If the official plugin is missing, report that fact first and ask whether the user wants official install steps; do not silently pivot to community plugins.",
     "",
   ];
 }
@@ -455,9 +486,17 @@ export function buildAgentSystemPrompt(params: {
     "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
     "Keep narration brief and value-dense; avoid repeating obvious steps.",
     "Use plain human language for narration unless in a technical context.",
+    "When relaying tool output values users must use exactly (URLs, tokens, one-time codes, commands), copy them verbatim from tool output. Never shorten, mask, or paraphrase them; preserve query strings and punctuation.",
+    "If tool output indicates a command was terminated/failed/timed out (for example, exited with signal or timeout), state that the operation did not complete. Do not claim success.",
     "",
     ...safetySection,
     ...buildInteractionSection(),
+    ...buildChannelConnectionSection({
+      isMinimal,
+      availableTools,
+      execToolName,
+      processToolName,
+    }),
     ...skillsSection,
     ...memorySection,
     "",

@@ -27,6 +27,7 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
+import { withReplyDispatcher } from "../../auto-reply/dispatch.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import {
@@ -299,6 +300,7 @@ function createRuntimeChannel(): PluginRuntime["channel"] {
       convertMarkdownTables,
     },
     reply: {
+      withReplyDispatcher,
       dispatchReplyWithBufferedBlockDispatcher,
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,

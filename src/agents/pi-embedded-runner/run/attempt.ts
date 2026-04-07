@@ -10,10 +10,16 @@ import {
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import { mergeBustlyRuntimeHeaders } from "../../bustly-runtime-headers.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { readBustlyOAuthState } from "../../../bustly-oauth.js";
+import {
+  consumeCompletedAssistantRequestMetrics,
+} from "../../../infra/assistant-request-metrics.js";
+import { wrapStreamFnWithModelRequestTracking } from "../../../infra/model-request-adapter.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { reportSessionCompletionToSupabase } from "../../../infra/supabase-chat-report.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -32,7 +38,6 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
-import { createModelPayloadLogger } from "../../model-payload-log.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
@@ -116,10 +121,96 @@ import {
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
+
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 const BUSTLY_PROVIDER_ID = "bustly";
-const BUSTLY_WORKSPACE_HEADER = "X-Workspace-Id";
+const URL_WITH_QUERY_RE = /https?:\/\/[^\s<>"'`]+?\?[^\s<>"'`]+/g;
+
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractToolMessageText(message: AgentMessage): string {
+  const role = (message as { role?: string }).role;
+  if (role !== "toolResult" && role !== "tool") {
+    return "";
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (!block || typeof block !== "object") {
+          return "";
+        }
+        if ("text" in block && typeof (block as { text?: unknown }).text === "string") {
+          return (block as { text: string }).text;
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return JSON.stringify(message);
+}
+
+function collectFullUrlsFromToolOutputs(messages: AgentMessage[]): Map<string, string> {
+  const fullUrlByBase = new Map<string, string>();
+  for (const message of messages) {
+    const text = extractToolMessageText(message);
+    if (!text) {
+      continue;
+    }
+    const matches = text.match(URL_WITH_QUERY_RE);
+    if (!matches) {
+      continue;
+    }
+    for (const fullUrl of matches) {
+      const queryStart = fullUrl.indexOf("?");
+      if (queryStart <= 0) {
+        continue;
+      }
+      const base = fullUrl.slice(0, queryStart);
+      fullUrlByBase.set(base, fullUrl);
+    }
+  }
+  return fullUrlByBase;
+}
+
+function repairAssistantUrlsFromToolOutputs(params: {
+  assistantTexts: string[];
+  messagesSnapshot: AgentMessage[];
+}): string[] {
+  if (params.assistantTexts.length === 0) {
+    return params.assistantTexts;
+  }
+  const fullUrlByBase = collectFullUrlsFromToolOutputs(params.messagesSnapshot);
+  if (fullUrlByBase.size === 0) {
+    return params.assistantTexts;
+  }
+
+  let didChange = false;
+  const repaired = params.assistantTexts.map((text) => {
+    let next = text;
+    for (const [base, full] of fullUrlByBase) {
+      if (!next.includes(base) || next.includes(full)) {
+        continue;
+      }
+      const pattern = new RegExp(`${escapeRegexLiteral(base)}(?!\\?)`, "g");
+      const replaced = next.replace(pattern, full);
+      if (replaced !== next) {
+        didChange = true;
+        next = replaced;
+      }
+    }
+    return next;
+  });
+
+  return didChange ? repaired : params.assistantTexts;
+}
 
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
@@ -374,10 +465,12 @@ export async function runEmbeddedAttempt(
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
           config: params.config,
+          runtimeEnv: { OPENCLAW_RUN_ID: params.runId },
         })
       : applySkillEnvOverrides({
           skills: skillEntries ?? [],
           config: params.config,
+          runtimeEnv: { OPENCLAW_RUN_ID: params.runId },
         });
 
     const skillsPrompt = resolveSkillsPromptForRun({
@@ -618,6 +711,7 @@ export async function runEmbeddedAttempt(
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
+      timeoutMs: params.timeoutMs,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
         timeoutMs: params.timeoutMs,
       }),
@@ -626,6 +720,10 @@ export async function runEmbeddedAttempt(
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
+    let subscriptionDisposed = false;
+    let activeRunCleared = false;
+    let unsubscribeEmbeddedSession: (() => void) | null = null;
+    let queueHandle: EmbeddedPiQueueHandle | null = null;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -766,17 +864,6 @@ export async function runEmbeddedAttempt(
         modelApi: params.model.api,
         workspaceDir: params.workspaceDir,
       });
-      const modelPayloadLogger = createModelPayloadLogger({
-        env: process.env,
-        runId: params.runId,
-        sessionId: activeSession.sessionId,
-        sessionKey: params.sessionKey,
-        provider: params.provider,
-        modelId: params.modelId,
-        modelApi: params.model.api,
-        workspaceDir: params.workspaceDir,
-      });
-
       // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
       // for reliable streaming + tool calling support (#11828).
       if (params.model.api === "ollama") {
@@ -793,6 +880,22 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = streamSimple;
       }
 
+      activeSession.agent.streamFn = wrapStreamFnWithModelRequestTracking(
+        activeSession.agent.streamFn,
+        {
+          runId: params.runId,
+          payloadLog: {
+            env: process.env,
+            sessionId: activeSession.sessionId,
+            sessionKey: params.sessionKey,
+            provider: params.provider,
+            modelId: params.modelId,
+            modelApi: params.model.api,
+            workspaceDir: params.workspaceDir,
+          },
+        },
+      );
+
       applyExtraParamsToAgent(
         activeSession.agent,
         params.config,
@@ -808,22 +911,15 @@ export async function runEmbeddedAttempt(
         let warnedMissingWorkspace = false;
         activeSession.agent.streamFn = (model, context, options) => {
           const workspaceId = readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
-          const modelHeaders = {
-            ...(model as { headers?: Record<string, string> }).headers,
-          };
-          const optionHeaders = {
-            ...((options?.headers) ?? {}),
-          };
-          const mergedHeaders = {
-            ...modelHeaders,
-            ...optionHeaders,
-          };
+          const mergedHeaders = mergeBustlyRuntimeHeaders({
+            modelHeaders: (model as { headers?: Record<string, string> }).headers,
+            optionHeaders: options?.headers,
+            workspaceId,
+            runId: params.runId,
+          });
           if (workspaceId) {
-            mergedHeaders[BUSTLY_WORKSPACE_HEADER] = workspaceId;
             warnedMissingWorkspace = false;
           } else {
-            delete mergedHeaders[BUSTLY_WORKSPACE_HEADER];
-            delete mergedHeaders[BUSTLY_WORKSPACE_HEADER.toLowerCase()];
             if (!warnedMissingWorkspace) {
               log.warn(
                 "[bustly] Missing workspaceId in ~/.bustly/bustlyOauth.json; gateway requests may fail",
@@ -905,10 +1001,6 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
-      if (modelPayloadLogger) {
-        activeSession.agent.streamFn = modelPayloadLogger.wrapStreamFn(activeSession.agent.streamFn);
-      }
-
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
@@ -1045,8 +1137,9 @@ export async function runEmbeddedAttempt(
         getUsageTotals,
         getCompactionCount,
       } = subscription;
+      unsubscribeEmbeddedSession = unsubscribe;
 
-      const queueHandle: EmbeddedPiQueueHandle = {
+      queueHandle = {
         queueMessage: async (text: string) => {
           await activeSession.steer(text);
         },
@@ -1316,6 +1409,15 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        // pi-coding-agent resolves retry waits on the first successful retried
+        // assistant message, which can be just a tool_use. Wait for the agent
+        // to become truly idle before capturing the final session snapshot or
+        // tearing down the subscription bridge.
+        const waitForIdle = activeSession.agent.waitForIdle;
+        if (typeof waitForIdle === "function") {
+          await abortable(waitForIdle.call(activeSession.agent));
+        }
+
         // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
         // Previously this was before the prompt, which caused a custom entry to be
         // inserted between compaction and the next prompt — breaking the
@@ -1414,17 +1516,6 @@ export async function runEmbeddedAttempt(
             `run cleanup: runId=${params.runId} sessionId=${params.sessionId} aborted=${aborted} timedOut=${timedOut}`,
           );
         }
-        try {
-          unsubscribe();
-        } catch (err) {
-          // unsubscribe() should never throw; if it does, it indicates a serious bug.
-          // Log at error level to ensure visibility, but don't rethrow in finally block
-          // as it would mask any exception from the try block above.
-          log.error(
-            `CRITICAL: unsubscribe failed, possible resource leak: runId=${params.runId} ${String(err)}`,
-          );
-        }
-        clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
@@ -1432,6 +1523,10 @@ export async function runEmbeddedAttempt(
         .slice()
         .toReversed()
         .find((m) => m.role === "assistant");
+      const assistantTextsForOutput = repairAssistantUrlsFromToolOutputs({
+        assistantTexts,
+        messagesSnapshot,
+      });
 
       const toolMetasNormalized = toolMetas
         .filter(
@@ -1448,7 +1543,7 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               provider: params.provider,
               model: params.modelId,
-              assistantTexts,
+              assistantTexts: assistantTextsForOutput,
               lastAssistant,
               usage: getUsageTotals(),
             },
@@ -1465,6 +1560,28 @@ export async function runEmbeddedAttempt(
           });
       }
 
+      const assistantRequestMetrics = consumeCompletedAssistantRequestMetrics(params.runId);
+      if (!isProbeSession && params.config) {
+        void reportSessionCompletionToSupabase({
+          sessionKey: params.sessionKey,
+          sessionId: sessionIdUsed,
+          sessionFile: params.sessionFile,
+          source: normalizeMessageChannel(
+            params.messageChannel ?? params.messageProvider ?? "embedded",
+          ),
+          conversationId: params.messageTo,
+          messageSid: params.runId,
+          senderId: params.senderId ?? undefined,
+          senderName: params.senderName ?? undefined,
+          senderUsername: params.senderUsername ?? undefined,
+          senderE164: params.senderE164 ?? undefined,
+          assistantRequestMetrics,
+          cfg: params.config,
+        }).catch((err) => {
+          log.warn(`embedded supabase chat report failed: runId=${params.runId} ${String(err)}`);
+        });
+      }
+
       return {
         aborted,
         timedOut,
@@ -1473,7 +1590,7 @@ export async function runEmbeddedAttempt(
         sessionIdUsed,
         systemPromptReport,
         messagesSnapshot,
-        assistantTexts,
+        assistantTexts: assistantTextsForOutput,
         toolMetas: toolMetasNormalized,
         lastAssistant,
         lastToolError: getLastToolError?.(),
@@ -1487,6 +1604,7 @@ export async function runEmbeddedAttempt(
         ),
         attemptUsage: getUsageTotals(),
         compactionCount: getCompactionCount(),
+        assistantRequestMetrics,
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
       };
@@ -1504,6 +1622,24 @@ export async function runEmbeddedAttempt(
         agent: session?.agent,
         sessionManager,
       });
+      if (!subscriptionDisposed) {
+        try {
+          unsubscribeEmbeddedSession?.();
+        } catch (err) {
+          // unsubscribe() should never throw; if it does, it indicates a serious bug.
+          // Log at error level to ensure visibility, but don't rethrow in finally block
+          // as it would mask any exception from the try block above.
+          log.error(
+            `CRITICAL: unsubscribe failed, possible resource leak: runId=${params.runId} ${String(err)}`,
+          );
+        } finally {
+          subscriptionDisposed = true;
+        }
+      }
+      if (!activeRunCleared && queueHandle) {
+        clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+        activeRunCleared = true;
+      }
       session?.dispose();
       await sessionLock.release();
     }

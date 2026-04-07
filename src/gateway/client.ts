@@ -95,6 +95,7 @@ export class GatewayClient {
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
   private tickTimer: NodeJS.Timeout | null = null;
+  private tickMarkedStale = false;
 
   constructor(opts: GatewayClientOptions) {
     this.opts = {
@@ -217,6 +218,10 @@ export class GatewayClient {
 
   stop() {
     this.closed = true;
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
@@ -329,6 +334,7 @@ export class GatewayClient {
             ? helloOk.policy.tickIntervalMs
             : 30_000;
         this.lastTick = Date.now();
+        this.tickMarkedStale = false;
         this.startTickWatch();
         this.opts.onHelloOk?.(helloOk);
       })
@@ -370,6 +376,7 @@ export class GatewayClient {
         }
         if (evt.event === "tick") {
           this.lastTick = Date.now();
+          this.tickMarkedStale = false;
         }
         this.opts.onEvent?.(evt);
         return;
@@ -455,8 +462,13 @@ export class GatewayClient {
         return;
       }
       const gap = Date.now() - this.lastTick;
-      if (gap > this.tickIntervalMs * 2) {
-        this.ws?.close(4000, "tick timeout");
+      if (gap > this.tickIntervalMs * 2 && !this.tickMarkedStale) {
+        // Missing keepalive ticks should not force a disconnect. Some server-side
+        // broadcasts intentionally drop slow tick events, so treat this as a stale
+        // connection signal and let the socket lifecycle decide whether reconnect
+        // is actually needed.
+        this.tickMarkedStale = true;
+        logDebug(`gateway client tick stale after ${gap}ms`);
       }
     }, interval);
   }

@@ -8,6 +8,22 @@ const INLINE_SIMPLE_COMMAND_RE = /(?:^|\s)\/(help|commands|whoami|id)(?=$|\s|:)/
 
 const INLINE_STATUS_RE = /(?:^|\s)\/status(?=$|\s|:)(?:\s*:\s*)?/gi;
 
+function normalizeStrippedInlineText(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t\f\v]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .trim();
+}
+
+function stripMatchedInlineDirective(body: string, match: RegExpMatchArray): string {
+  const matchStart = match.index ?? 0;
+  const slashOffset = match[0].indexOf("/");
+  const start = slashOffset >= 0 ? matchStart + slashOffset : matchStart;
+  const end = matchStart + match[0].length;
+  return normalizeStrippedInlineText(`${body.slice(0, start)} ${body.slice(end)}`);
+}
+
 export function extractInlineSimpleCommand(body?: string): {
   command: string;
   cleaned: string;
@@ -24,7 +40,7 @@ export function extractInlineSimpleCommand(body?: string): {
   if (!command) {
     return null;
   }
-  const cleaned = body.replace(match[0], " ").replace(/\s+/g, " ").trim();
+  const cleaned = stripMatchedInlineDirective(body, match);
   return { command, cleaned };
 }
 
@@ -36,6 +52,13 @@ export function stripInlineStatus(body: string): {
   if (!trimmed) {
     return { cleaned: "", didStrip: false };
   }
-  const cleaned = trimmed.replace(INLINE_STATUS_RE, " ").replace(/\s+/g, " ").trim();
-  return { cleaned, didStrip: cleaned !== trimmed };
+  const matches = Array.from(trimmed.matchAll(INLINE_STATUS_RE));
+  if (matches.length === 0) {
+    return { cleaned: trimmed, didStrip: false };
+  }
+  let cleaned = trimmed;
+  for (const match of matches.toReversed()) {
+    cleaned = stripMatchedInlineDirective(cleaned, match);
+  }
+  return { cleaned, didStrip: true };
 }

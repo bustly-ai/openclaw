@@ -20,7 +20,11 @@ import {
   deriveScenarioLabel,
   resolveSessionIconComponent,
 } from "../../lib/session-icons";
-import { buildBustlyWorkspaceMainSessionKey } from "../../../shared/bustly-agent";
+import {
+  buildBustlyAgentDraftViewKey,
+  buildBustlyWorkspaceAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../../../shared/bustly-agent";
 import { resolveBustlyPresetUseCases, type BustlyPresetUseCase } from "../../../shared/bustly-preset-channels";
 import { extractText, extractThinking } from "../../lib/chat-extract";
 import PortalTooltip from "../ui/PortalTooltip";
@@ -33,10 +37,11 @@ import {
   type InputArtifactKind,
 } from "./input-artifacts";
 import { shouldPreserveLocalTimelineItem } from "./history-merge";
-import { recoverSessionViewState } from "./runtime-recovery";
+import { recoverSessionViewState, shouldDiscardRecoveredPendingRuns } from "./runtime-recovery";
 import { collapseProcessedTurn, collapseStreamingEvents, resolveToolDisplay, formatToolDetail } from "./utils";
 import type { TimelineArtifact, TimelineNode } from "./types";
 import { useAppState } from "../../providers/AppStateProvider";
+import { useGlobalLoader } from "../../providers/GlobalLoaderProvider";
 
 type ChatRole = "user" | "assistant" | "thinking" | "system";
 
@@ -102,7 +107,6 @@ type SessionUsageSummary = {
 };
 
 type RunTerminalState = "final" | "aborted" | "error";
-type ConnectionNoticeTone = "warning" | "error";
 type ReconnectStatus = {
   runId: string;
 };
@@ -206,6 +210,31 @@ function nextId(prefix: string) {
 
 function notifySidebarTasksRefresh() {
   window.dispatchEvent(new Event(SIDEBAR_TASKS_REFRESH_EVENT));
+}
+
+function readHistoryRunId(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const rec = message as Record<string, unknown>;
+  const nested =
+    rec.message && typeof rec.message === "object" ? (rec.message as Record<string, unknown>) : null;
+  const candidates = [
+    rec.runId,
+    rec.run_id,
+    nested?.runId,
+    nested?.run_id,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const trimmed = candidate.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
 }
 
 function isSessionViewRunning(view: SessionViewState): boolean {
@@ -355,7 +384,7 @@ function describeExecutionError(reason: string): string {
     normalized.includes("forbidden") ||
     normalized.includes("403")
   ) {
-    return "The current provider credentials were rejected. Refresh the provider auth and retry the request.";
+    return "Please login again to refresh your credentials.";
   }
   return "Execution stopped before the agent could finish this run. Retry the request or check the gateway connection and model availability.";
 }
@@ -779,6 +808,7 @@ function PlaceholderTicker({ items }: { items: string[] }) {
 
 export default function ChatPage() {
   const { ensureGatewayReady, gatewayReady } = useAppState();
+  const { showGlobalLoading, hideGlobalLoading, showLoader, hideLoader } = useGlobalLoader();
   const location = useLocation();
   const navigate = useNavigate();
   const [connected, setConnected] = useState(false);
@@ -789,10 +819,6 @@ export default function ChatPage() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [contextPaths, setContextPaths] = useState<ContextPath[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [connectionNotice, setConnectionNotice] = useState<{
-    message: string;
-    tone: ConnectionNoticeTone;
-  } | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [compactingRunId, setCompactingRunId] = useState<string | null>(null);
   const [reconnectStatus, setReconnectStatus] = useState<ReconnectStatus | null>(null);
@@ -806,6 +832,8 @@ export default function ChatPage() {
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [subscriptionExpired, setSubscriptionExpired] = useState(false);
   const [subscriptionActionText, setSubscriptionActionText] = useState("Upgrade");
+  const [canManageSubscription, setCanManageSubscription] = useState(false);
+  const [workspaceStateLoading, setWorkspaceStateLoading] = useState(true);
   const [modelLevel, setModelLevel] = useState<ChatModelLevelId>(() => {
     const stored = window.localStorage.getItem(CHAT_MODEL_LEVEL_STORAGE_KEY);
     if (stored === "standard" || stored === "advanced" || stored === "ultra") {
@@ -828,6 +856,7 @@ export default function ChatPage() {
   const gatewayInstanceIdRef = useRef(createGatewayInstanceId("chat"));
   const sessionRuntimesRef = useRef<Map<string, SessionRuntimeState>>(new Map());
   const currentSessionKeyRef = useRef("");
+  const lastHistoryHydratedSessionKeyRef = useRef("");
   const previewViewportRef = useRef<HTMLDivElement | null>(null);
   const previewImageRef = useRef<HTMLImageElement | null>(null);
   const previewWheelDeltaRef = useRef(0);
@@ -836,26 +865,54 @@ export default function ChatPage() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const composerAreaRef = useRef<HTMLDivElement | null>(null);
   const composerIsComposingRef = useRef(false);
+  const sendInFlightRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
   const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
   const lastAppliedPromptRef = useRef<string | null>(null);
   const lastAppliedContextRef = useRef<string | null>(null);
+  const defaultAgentId = useMemo(
+    () => buildBustlyWorkspaceAgentId(activeWorkspaceId),
+    [activeWorkspaceId],
+  );
   const currentSessionKey = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
-    return searchParams.get("session") ?? buildBustlyWorkspaceMainSessionKey(activeWorkspaceId);
-  }, [activeWorkspaceId, location.search]);
+    return searchParams.get("session")?.trim() || "";
+  }, [location.search]);
+  const currentAgentId = useMemo(() => {
+    const searchParams = new URLSearchParams(location.search);
+    return (
+      searchParams.get("agent")?.trim() ||
+      resolveAgentIdFromSessionKey(currentSessionKey) ||
+      defaultAgentId
+    );
+  }, [currentSessionKey, defaultAgentId, location.search]);
+  const currentViewKey = useMemo(
+    () => currentSessionKey || buildBustlyAgentDraftViewKey(currentAgentId),
+    [currentAgentId, currentSessionKey],
+  );
   const currentScenarioLabel = useMemo(() => {
     const searchParams = new URLSearchParams(location.search);
     return deriveScenarioLabel(currentSessionKey, searchParams.get("label"));
   }, [currentSessionKey, location.search]);
   const currentUseCases = useMemo(
-    () => resolveBustlyPresetUseCases({ sessionKey: currentSessionKey, workspaceId: activeWorkspaceId }),
-    [activeWorkspaceId, currentSessionKey],
+    () => resolveBustlyPresetUseCases({ agentId: currentAgentId, sessionKey: currentSessionKey, workspaceId: activeWorkspaceId }),
+    [activeWorkspaceId, currentAgentId, currentSessionKey],
   );
+  const pageResolving = workspaceStateLoading || (Boolean(currentSessionKey) && loading);
+  const isSessionRunning = Boolean(sending || activeRunId || compactingRunId || reconnectStatus);
   const canSendMessage =
-    connected && !subscriptionExpired && !sending && (draft.trim() || attachments.length > 0 || contextPaths.length > 0);
+    !pageResolving &&
+    connected &&
+    !subscriptionExpired &&
+    !isSessionRunning &&
+    (draft.trim() || attachments.length > 0 || contextPaths.length > 0);
   const showPlaceholderTicker =
-    connected && !subscriptionExpired && !draft && attachments.length === 0 && contextPaths.length === 0;
+    !pageResolving &&
+    connected &&
+    !subscriptionExpired &&
+    !draft &&
+    attachments.length === 0 &&
+    contextPaths.length === 0;
   const updateScrollBottomState = useCallback(() => {
     const element = scrollRef.current;
     if (!element) {
@@ -972,8 +1029,8 @@ export default function ChatPage() {
     runtime.runSeqBase.clear();
   }, [getSessionRuntime]);
   useEffect(() => {
-    currentSessionKeyRef.current = currentSessionKey;
-    const runtime = getSessionRuntime(currentSessionKey);
+    currentSessionKeyRef.current = currentViewKey;
+    const runtime = getSessionRuntime(currentViewKey);
     setCurrentScenarioIconId(null);
     applyVisibleSessionView(runtime.view);
     shouldStickToBottomRef.current = true;
@@ -988,7 +1045,7 @@ export default function ChatPage() {
         updateScrollBottomState();
       });
     });
-  }, [applyVisibleSessionView, currentSessionKey, getSessionRuntime, updateScrollBottomState]);
+  }, [applyVisibleSessionView, currentViewKey, getSessionRuntime, updateScrollBottomState]);
 
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search);
@@ -1030,15 +1087,25 @@ export default function ChatPage() {
       resolveSessionIconComponent({
         icon: currentScenarioIconId,
         label: currentScenarioLabel,
-        sessionKey: currentSessionKey,
+        sessionKey: currentSessionKey || currentAgentId,
       }),
-    [currentScenarioIconId, currentScenarioLabel, currentSessionKey],
+    [currentAgentId, currentScenarioIconId, currentScenarioLabel, currentSessionKey],
   );
 
   const loadGatewayStatus = useCallback(async () => {
     const status = await window.electronAPI.gatewayStatus();
     return status;
   }, []);
+
+  useEffect(() => {
+    if (error) {
+      showLoader(error, 0, "error");
+      return;
+    }
+    if (connected) {
+      hideLoader();
+    }
+  }, [connected, error, hideLoader, showLoader]);
 
   const loadSessionUsage = useCallback(async (client: GatewayBrowserClient, sessionKey: string) => {
     const res = await client.request<{
@@ -1520,6 +1587,7 @@ export default function ChatPage() {
         (typeof nested?.stopReason === "string" ? nested.stopReason : undefined) ??
         "";
       const stopReason = stopReasonRaw.toLowerCase();
+      const runId = readHistoryRunId(message);
       const timestamp =
         typeof rec.timestamp === "number"
           ? rec.timestamp
@@ -1537,6 +1605,7 @@ export default function ChatPage() {
           timestamp,
           role: "thinking",
           text: thinking,
+          runId,
           streaming: false,
         });
       }
@@ -1564,6 +1633,7 @@ export default function ChatPage() {
           timestamp,
           role: textRole,
           text,
+          runId,
           streaming: false,
           final: textRole === "assistant" && stopReason === "stop",
         });
@@ -1582,7 +1652,7 @@ export default function ChatPage() {
             kind: "tool",
             id: `tool:${tool.toolCallId}`,
             toolCallId: tool.toolCallId,
-            runId: undefined,
+            runId,
             sortSeq: baseSeq + 0.02,
             timestamp,
             name: tool.name,
@@ -1594,6 +1664,7 @@ export default function ChatPage() {
         }
         toolsByCallId.set(tool.toolCallId, {
           ...existing,
+          runId: existing.runId ?? runId,
           sortSeq: Math.min(existing.sortSeq, baseSeq + 0.02),
           timestamp: Math.min(existing.timestamp, timestamp),
           name: tool.name || existing.name,
@@ -1646,11 +1717,30 @@ export default function ChatPage() {
     const mergedTimeline = merged.toSorted(compareTimeline);
 
     if (options?.recoverTransientState) {
-      const recovered = recoverSessionViewState({
+      let recovered = recoverSessionViewState({
         view: runtime.view,
         timeline: mergedTimeline,
         pendingClientRunIds: runtime.pendingClientRunIds,
       });
+      if (
+        shouldDiscardRecoveredPendingRuns({
+          historyItems: items,
+          mergedTimeline,
+          pendingClientRunIds: recovered.pendingClientRunIds,
+        })
+      ) {
+        recovered = {
+          ...recovered,
+          view: {
+            ...recovered.view,
+            activeRunId: null,
+            compactingRunId: null,
+            reconnectStatus: null,
+          },
+          liveRunIds: new Set(),
+          pendingClientRunIds: new Set(),
+        };
+      }
       runtime.pendingClientRunIds = recovered.pendingClientRunIds;
       runtime.settledRunIds = recovered.terminalRunIds;
       runtime.discardedRunIds = new Set(
@@ -1686,13 +1776,10 @@ export default function ChatPage() {
     async (status: GatewayStatus) => {
       if (!status.running) {
         setConnected(false);
-        setConnectionNotice({
-          message: "Gateway unavailable. Reconnecting...",
-          tone: "warning",
-        });
+        showLoader("Gateway unavailable. Reconnecting...", 0);
         return;
       }
-      setConnectionNotice(null);
+      hideLoader();
       let connectConfig: GatewayConnectConfig;
       try {
         connectConfig = await window.electronAPI.gatewayConnectConfig();
@@ -1710,13 +1797,20 @@ export default function ChatPage() {
       const client = new GatewayBrowserClient({
         url: connectConfig.wsUrl,
         token: connectConfig.token ?? undefined,
+        resolveConnection: async () => {
+          const next = await window.electronAPI.gatewayConnectConfig();
+          return {
+            url: next.wsUrl,
+            token: next.token ?? undefined,
+          };
+        },
         clientName: "openclaw-control-ui",
         mode: "webchat",
         instanceId: gatewayInstanceIdRef.current,
         onHello: () => {
           setConnected(true);
           setError(null);
-          setConnectionNotice(null);
+          hideLoader();
           const sessionKey = currentSessionKeyRef.current;
           reloadSessionHistory(client, sessionKey, { recoverTransientState: true });
           void loadSessionUsage(client, sessionKey).catch((err) => {
@@ -1730,19 +1824,16 @@ export default function ChatPage() {
           if (!currentClient) {
             return;
           }
-          reloadSessionHistory(currentClient, sessionKey);
+          reloadSessionHistory(currentClient, sessionKey, { recoverTransientState: true });
         },
         onClose: ({ code, reason, error: closeError }) => {
           setConnected(false);
           if (closeError) {
-            setConnectionNotice(null);
+            hideLoader();
             setError(closeError.message);
           } else {
             setError(null);
-            setConnectionNotice({
-              message: "Gateway disconnected. Reconnecting...",
-              tone: "warning",
-            });
+            showLoader("Gateway disconnected. Reconnecting...", 0);
           }
           console.warn("[electron-chat] gateway disconnected", {
             code,
@@ -1924,6 +2015,12 @@ export default function ChatPage() {
 
             if (stream === "assistant") {
               const isFinalChunk = data.final === true;
+              const segmentBreak = data.segmentBreak === true;
+              if (segmentBreak) {
+                segmentState.assistantClosed = true;
+                runtime.streamSegments.set(runKey, segmentState);
+                return;
+              }
               if (segmentState.assistant === 0 || segmentState.assistantClosed) {
                 segmentState.assistant += 1;
                 segmentState.assistantClosed = false;
@@ -2080,9 +2177,13 @@ export default function ChatPage() {
   useEffect(() => {
     let disposed = false;
 
-    const loadWorkspaceState = async () => {
+    const loadWorkspaceState = async (options?: { force?: boolean }) => {
+      const shouldShowGlobalLoading = options?.force === true;
+      if (!disposed) {
+        setWorkspaceStateLoading(true);
+      }
       try {
-        const summary = await listWorkspaceSummaries();
+        const summary = await listWorkspaceSummaries(options);
         if (disposed) {
           return;
         }
@@ -2091,31 +2192,39 @@ export default function ChatPage() {
         setActiveWorkspaceId(workspaceId);
         setSubscriptionExpired(activeWorkspace?.expired === true);
         setSubscriptionActionText(activeWorkspace?.buttonText?.trim() || "Upgrade");
+        setCanManageSubscription(activeWorkspace?.role?.toUpperCase() === "OWNER");
       } catch {
         if (!disposed) {
           setActiveWorkspaceId("");
           setSubscriptionExpired(false);
           setSubscriptionActionText("Upgrade");
+          setCanManageSubscription(false);
+        }
+      } finally {
+        if (shouldShowGlobalLoading) {
+          hideGlobalLoading("workspace-switch");
+        }
+        if (!disposed) {
+          setWorkspaceStateLoading(false);
         }
       }
     };
 
     void loadWorkspaceState();
     const unsubscribe = window.electronAPI.onBustlyLoginRefresh(() => {
-      void loadWorkspaceState();
+      void loadWorkspaceState({ force: true });
     });
 
     return () => {
       disposed = true;
       unsubscribe();
     };
-  }, []);
+  }, [hideGlobalLoading]);
 
   useEffect(() => {
     if (!gatewayReady) {
       setConnected(false);
       setSessionLoading(currentSessionKeyRef.current, true);
-      setConnectionNotice(null);
       return;
     }
 
@@ -2143,10 +2252,7 @@ export default function ChatPage() {
         .then((status) => {
           if (!status.running) {
             setConnected(false);
-            setConnectionNotice({
-              message: "Gateway unavailable. Reconnecting...",
-              tone: "warning",
-            });
+            showLoader("Gateway unavailable. Reconnecting...", 0);
           }
         })
         .catch(() => {});
@@ -2156,6 +2262,7 @@ export default function ChatPage() {
       cancelled = true;
       window.clearInterval(interval);
       clientRef.current?.stop();
+      hideLoader();
       clientRef.current = null;
       for (const runtime of sessionRuntimesRef.current.values()) {
         for (const timer of runtime.toolTimers.values()) {
@@ -2164,16 +2271,24 @@ export default function ChatPage() {
         runtime.toolTimers.clear();
       }
     };
-  }, [connectGateway, ensureGatewayReady, gatewayReady, loadGatewayStatus, setSessionLoading]);
+  }, [connectGateway, ensureGatewayReady, gatewayReady, hideLoader, loadGatewayStatus, setSessionLoading, showLoader]);
 
   useEffect(() => {
     const client = clientRef.current;
+    if (!currentSessionKey) {
+      setSessionLoading(currentViewKey, false);
+      setSessionUsageState(currentViewKey, { ...INITIAL_SESSION_USAGE });
+      return;
+    }
     const runtime = getSessionRuntime(currentSessionKey);
+    const shouldRefreshHistory =
+      !runtime.historyLoaded || lastHistoryHydratedSessionKeyRef.current !== currentSessionKey;
     if (!connected || !client) {
       setSessionLoading(currentSessionKey, false);
       return;
     }
-    if (!runtime.historyLoaded) {
+    if (shouldRefreshHistory) {
+      lastHistoryHydratedSessionKeyRef.current = currentSessionKey;
       setSessionLoading(currentSessionKey, true);
       void loadHistory(client, currentSessionKey).catch((err) => {
         setError(err instanceof Error ? err.message : String(err));
@@ -2182,13 +2297,23 @@ export default function ChatPage() {
     void loadSessionUsage(client, currentSessionKey).catch((err) => {
       setError(err instanceof Error ? err.message : String(err));
     });
-  }, [connected, currentSessionKey, getSessionRuntime, loadHistory, loadSessionUsage, location.search, setSessionLoading]);
+  }, [
+    connected,
+    currentSessionKey,
+    currentViewKey,
+    getSessionRuntime,
+    loadHistory,
+    loadSessionUsage,
+    location.search,
+    setSessionLoading,
+    setSessionUsageState,
+  ]);
 
   const appendContextSelections = useCallback((selected: ChatContextPathSelection[]) => {
     if (selected.length > 0) {
       console.log("[electron-chat] context paths added", selected);
     }
-    setSessionContextPaths(currentSessionKey, (prev) => {
+    setSessionContextPaths(currentViewKey, (prev) => {
       const seen = new Set(prev.map((entry) => entry.path));
       const nextEntries = selected
         .filter((entry): entry is ChatContextPathSelection => Boolean(entry?.path && entry?.name))
@@ -2208,11 +2333,11 @@ export default function ChatPage() {
         }));
       return nextEntries.length > 0 ? [...prev, ...nextEntries] : prev;
     });
-  }, [currentSessionKey, setSessionContextPaths]);
+  }, [currentViewKey, setSessionContextPaths]);
 
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search);
-    const explicitSessionKey = searchParams.get("session")?.trim();
+    const explicitSessionKey = searchParams.get("session")?.trim() || currentViewKey;
     const prompt = searchParams.get("prompt")?.trim();
     const contextPath = searchParams.get("contextPath")?.trim();
     const contextName = searchParams.get("contextName")?.trim();
@@ -2266,7 +2391,7 @@ export default function ChatPage() {
       },
       { replace: true },
     );
-  }, [appendContextSelections, location.pathname, location.search, navigate, setSessionDraft]);
+  }, [appendContextSelections, currentViewKey, location.pathname, location.search, navigate, setSessionDraft]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -2281,7 +2406,7 @@ export default function ChatPage() {
     return () => {
       element.removeEventListener("scroll", handleScroll);
     };
-  }, [currentSessionKey, updateScrollBottomState]);
+  }, [currentViewKey, updateScrollBottomState]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const element = scrollRef.current;
@@ -2482,14 +2607,94 @@ export default function ChatPage() {
   ]);
 
   const sendChatMessage = useCallback(async () => {
-    await sendPreparedChatMessage({
-      sessionKey: currentSessionKey,
-      draftText: draft,
-      attachments,
-      contextPaths,
-      clearComposer: true,
-    });
-  }, [attachments, contextPaths, currentSessionKey, draft, sendPreparedChatMessage]);
+    if (
+      sendInFlightRef.current ||
+      pageResolving ||
+      !connected ||
+      subscriptionExpired ||
+      sending ||
+      (!draft.trim() && attachments.length === 0 && contextPaths.length === 0)
+    ) {
+      return;
+    }
+
+    // Guard against duplicate Enter/click sends before React state has re-rendered.
+    sendInFlightRef.current = true;
+
+    try {
+      let targetSessionKey = currentSessionKey;
+      const sourceViewKey = currentViewKey;
+      const startedFromAgentDraft = !currentSessionKey;
+      if (!targetSessionKey) {
+        const nextLabel = draft.trim().slice(0, 60) || "New conversation";
+        const createSessionResult = await window.electronAPI.bustlyCreateAgentSession({
+          workspaceId: activeWorkspaceId,
+          agentId: currentAgentId,
+          label: nextLabel,
+        });
+        if (!createSessionResult.success || !createSessionResult.sessionKey) {
+          setError(createSessionResult.error ?? "Failed to create conversation.");
+          return;
+        }
+        targetSessionKey = createSessionResult.sessionKey;
+        void navigate(
+          {
+            pathname: location.pathname,
+            search: new URLSearchParams({
+              agent: currentAgentId,
+              session: targetSessionKey,
+              label: currentScenarioLabel,
+              ...(currentScenarioIconId ? { icon: currentScenarioIconId } : {}),
+            }).toString()
+              ? `?${new URLSearchParams({
+                agent: currentAgentId,
+                session: targetSessionKey,
+                label: currentScenarioLabel,
+                ...(currentScenarioIconId ? { icon: currentScenarioIconId } : {}),
+              }).toString()}`
+              : "",
+          },
+          { replace: true },
+        );
+        window.dispatchEvent(new Event("openclaw:sidebar-refresh-tasks"));
+      }
+      const didSend = await sendPreparedChatMessage({
+        sessionKey: targetSessionKey,
+        draftText: draft,
+        attachments,
+        contextPaths,
+        clearComposer: true,
+      });
+      if (didSend && startedFromAgentDraft) {
+        setSessionDraft(sourceViewKey, "");
+        setSessionAttachments(sourceViewKey, []);
+        setSessionContextPaths(sourceViewKey, []);
+      }
+    } finally {
+      sendInFlightRef.current = false;
+    }
+  }, [
+    activeWorkspaceId,
+    attachments,
+    connected,
+    contextPaths,
+    currentAgentId,
+    currentScenarioIconId,
+    currentScenarioLabel,
+    currentSessionKey,
+    currentViewKey,
+    draft,
+    location.pathname,
+    navigate,
+    pageResolving,
+    sendPreparedChatMessage,
+    sending,
+    setError,
+    setSessionAttachments,
+    setSessionContextPaths,
+    setSessionDraft,
+    subscriptionExpired,
+  ]);
 
   const handleSend = useCallback(async () => {
     await sendChatMessage();
@@ -2889,9 +3094,9 @@ export default function ChatPage() {
         "[electron-chat] image attachments added",
         next.map((entry) => ({ name: entry.name, mimeType: entry.mimeType })),
       );
-      setSessionAttachments(currentSessionKey, (prev) => [...prev, ...next]);
+      setSessionAttachments(currentViewKey, (prev) => [...prev, ...next]);
     }
-  }, [appendContextSelections, currentSessionKey, setSessionAttachments, subscriptionExpired]);
+  }, [appendContextSelections, currentViewKey, setSessionAttachments, subscriptionExpired]);
 
   const handleSelectContextPaths = useCallback(async () => {
     if (subscriptionExpired) {
@@ -3015,7 +3220,7 @@ export default function ChatPage() {
     return `Context left: ${formatTokenCount(sessionUsage.remainingTokens)} / ${formatTokenCount(sessionUsage.contextTokens)}`;
   }, [sessionUsage.contextTokens, sessionUsage.remainingTokens]);
   const handleUseCaseClick = useCallback((useCase: BustlyPresetUseCase) => {
-    setSessionDraft(currentSessionKey, useCase.prompt);
+    setSessionDraft(currentViewKey, useCase.prompt);
     requestAnimationFrame(() => {
       const textarea = composerRef.current;
       if (!textarea) {
@@ -3025,7 +3230,7 @@ export default function ChatPage() {
       const cursor = useCase.prompt.length;
       textarea.setSelectionRange(cursor, cursor);
     });
-  }, [currentSessionKey, setSessionDraft]);
+  }, [currentViewKey, setSessionDraft]);
   useEffect(() => {
     window.localStorage.setItem(CHAT_MODEL_LEVEL_STORAGE_KEY, modelLevel);
   }, [modelLevel]);
@@ -3034,22 +3239,10 @@ export default function ChatPage() {
     <div className="flex h-full min-h-0 flex-col bg-white text-gray-900">
       <div className="sticky top-0 z-20 h-8 flex-none bg-white [-webkit-app-region:drag]" />
 
-      {error || connectionNotice ? (
-        <div
-          className={`mx-auto mt-4 w-full max-w-3xl rounded-2xl px-4 py-3 text-sm ${
-            error != null || connectionNotice?.tone === "error"
-              ? "border border-red-100 bg-red-50 text-red-600"
-              : "border border-amber-100 bg-amber-50 text-amber-700"
-          }`}
-        >
-          {error ?? connectionNotice?.message}
-        </div>
-      ) : null}
-
       <div className="relative flex-1 overflow-hidden">
         <div ref={scrollRef} className="chat-page-timeline h-full">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 pt-8" style={{ paddingBottom: composerAreaHeight + 16 }}>
-            {!loading && timeline.length === 0 ? (
+            {timeline.length === 0 ? (
               <div className="flex min-h-[52vh] flex-col items-center justify-center py-8 text-center">
                 <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-[#1A162F] shadow-lg shadow-[#1A162F]/5">
                   <CurrentScenarioIcon size={28} weight="bold" />
@@ -3058,9 +3251,7 @@ export default function ChatPage() {
                   {currentScenarioLabel}
                 </h1>
                 <p className="max-w-[720px] text-base text-[#666F8D]">
-                  {subscriptionExpired
-                    ? "Renew your workspace plan to continue this workflow."
-                    : "How can I help you today?"}
+                  How can I help you today?
                 </p>
               </div>
             ) : null}
@@ -3091,7 +3282,7 @@ export default function ChatPage() {
           <div className="h-8 bg-gradient-to-t from-white via-white/80 to-transparent" />
           <div className="border-t border-white/40 bg-white px-6 pb-8 pointer-events-auto">
             <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4 pt-4">
-              {subscriptionExpired ? (
+              {!pageResolving && subscriptionExpired ? (
                 <div className="mb-3 rounded-2xl border border-[#ECECEC] bg-white p-4 shadow-[0_10px_24px_rgba(26,22,47,0.05)]">
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-start gap-3">
@@ -3105,24 +3296,26 @@ export default function ChatPage() {
                         </p>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void handleOpenPricing();
-                      }}
-                      className="shrink-0 rounded-xl bg-[#1A162F] px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-[#27223F]"
-                    >
-                      {subscriptionActionText}
-                    </button>
+                    {canManageSubscription ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleOpenPricing();
+                        }}
+                        className="shrink-0 rounded-xl bg-[#1A162F] px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-[#27223F]"
+                      >
+                        {subscriptionActionText}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               ) : null}
 
-              {timeline.length === 0 && currentUseCases.length > 0 ? (
+              {!pageResolving && !subscriptionExpired && timeline.length === 0 && currentUseCases.length > 0 ? (
                 <div className="grid grid-cols-3 gap-3">
                     {currentUseCases.map((useCase) => (
                       <button
-                        key={`${currentSessionKey}-${useCase.label}`}
+                        key={`${currentViewKey}-${useCase.label}`}
                         type="button"
                         className={`group flex items-center justify-between gap-2 rounded-xl border border-[#EAEAEA] bg-white px-4 py-2.5 transition-all duration-200 hover:border-[#CFCFCF] hover:bg-[#FCFCFC] ${
                           subscriptionExpired ? "pointer-events-none opacity-50" : ""
@@ -3141,19 +3334,21 @@ export default function ChatPage() {
                         />
                       </button>
                     ))}
-                </div>
+                  </div>
               ) : null}
 
               <div
                 className={`group relative rounded-[28px] border bg-white p-4 shadow-sm transition-all duration-300 ${
-                  subscriptionExpired
+                  pageResolving
+                    ? "border-gray-200"
+                    : subscriptionExpired
                     ? "cursor-not-allowed border-[#ECECEC] bg-[#FAFAFA]"
                     : isDraggingFiles
                       ? "border-[#1A162F] bg-[#1A162F]/5 shadow-[0_18px_44px_rgba(26,22,47,0.08)] ring-1 ring-[#1A162F]"
                     : "border-gray-200 hover:border-gray-300 focus-within:border-gray-400 focus-within:shadow-md"
                 }`}
                 onDragOver={(event) => {
-                  if (subscriptionExpired) {
+                  if (pageResolving || subscriptionExpired) {
                     return;
                   }
                   event.preventDefault();
@@ -3167,7 +3362,7 @@ export default function ChatPage() {
                   setIsDraggingFiles(false);
                 }}
                 onDrop={(event) => {
-                  if (subscriptionExpired) {
+                  if (pageResolving || subscriptionExpired) {
                     return;
                   }
                   event.preventDefault();
@@ -3184,7 +3379,7 @@ export default function ChatPage() {
                   });
                 }}
               >
-                {isDraggingFiles && !subscriptionExpired ? (
+                {isDraggingFiles && !pageResolving && !subscriptionExpired ? (
                   <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
                     <div className="animate-in zoom-in-95 fade-in flex items-center gap-2 text-[#1A162F] duration-200">
                       <Paperclip size={20} weight="bold" />
@@ -3193,7 +3388,7 @@ export default function ChatPage() {
                   </div>
                 ) : null}
 
-                {attachments.length > 0 || contextPaths.length > 0 ? (
+                {!pageResolving && (attachments.length > 0 || contextPaths.length > 0) ? (
                   <div className={`relative z-10 mb-3 flex flex-wrap gap-2 transition-opacity duration-200 ${isDraggingFiles ? "opacity-20" : ""}`}>
                     {attachments.map((att) => (
                       <InputArtifactCard
@@ -3207,7 +3402,7 @@ export default function ChatPage() {
                         }}
                         onRemove={() => {
                           setPreviewImage(null);
-                          setSessionAttachments(currentSessionKey, (prev) => prev.filter((p) => p.id !== att.id));
+                          setSessionAttachments(currentViewKey, (prev) => prev.filter((p) => p.id !== att.id));
                         }}
                       />
                     ))}
@@ -3226,7 +3421,7 @@ export default function ChatPage() {
                             : undefined
                         }
                         onRemove={() => {
-                          setSessionContextPaths(currentSessionKey, (prev) => prev.filter((p) => p.id !== entry.id));
+                          setSessionContextPaths(currentViewKey, (prev) => prev.filter((p) => p.id !== entry.id));
                         }}
                       />
                     ))}
@@ -3238,9 +3433,11 @@ export default function ChatPage() {
                     ref={composerRef}
                     rows={1}
                     value={draft}
-                    disabled={!connected || sending || subscriptionExpired}
+                    disabled={pageResolving || !connected || sending || subscriptionExpired}
                     placeholder={
-                      subscriptionExpired
+                      pageResolving
+                        ? ""
+                        : subscriptionExpired
                         ? "Renew your plan to continue..."
                         : connected
                           ? showPlaceholderTicker
@@ -3249,7 +3446,7 @@ export default function ChatPage() {
                           : "Connect to gateway to chat..."
                     }
                     className="min-h-[44px] max-h-[200px] w-full resize-none border-none bg-transparent px-1 py-1 pr-14 text-base font-normal leading-6 text-text-main outline-none placeholder:text-text-sub/70 disabled:cursor-not-allowed disabled:text-[#8B93AA]"
-                    onChange={(e) => setSessionDraft(currentSessionKey, e.target.value)}
+                    onChange={(e) => setSessionDraft(currentViewKey, e.target.value)}
                     onCompositionStart={() => {
                       composerIsComposingRef.current = true;
                     }}
@@ -3265,6 +3462,10 @@ export default function ChatPage() {
                       if (isComposing) {
                         return;
                       }
+                      if (e.key === "Enter" && !e.shiftKey && isSessionRunning) {
+                        e.preventDefault();
+                        return;
+                      }
                       if (!canSendMessage) {
                         return;
                       }
@@ -3274,6 +3475,9 @@ export default function ChatPage() {
                       }
                     }}
                     onPaste={(e) => {
+                      if (pageResolving || subscriptionExpired) {
+                        return;
+                      }
                       const files = e.clipboardData.files;
                       const items = e.clipboardData.items;
                       const source = files && files.length > 0 ? files : items;
@@ -3286,10 +3490,10 @@ export default function ChatPage() {
                     }}
                   />
 
-                  {showPlaceholderTicker ? <PlaceholderTicker items={COMPOSER_PLACEHOLDERS} /> : null}
+                  {!pageResolving && showPlaceholderTicker ? <PlaceholderTicker items={COMPOSER_PLACEHOLDERS} /> : null}
                 </div>
 
-                {activeRunId ? (
+                {!pageResolving && activeRunId ? (
                   <div className="absolute right-3 bottom-3 z-20">
                     <PortalTooltip content="Stop">
                       <button
@@ -3305,7 +3509,7 @@ export default function ChatPage() {
                 ) : null}
 
                 <div className="mt-1 flex items-center justify-between pt-2">
-                  <div className={`flex items-center gap-2 ${subscriptionExpired ? "pointer-events-none opacity-50" : ""}`}>
+                  <div className={`flex items-center gap-2 ${pageResolving || subscriptionExpired ? "pointer-events-none opacity-50" : ""}`}>
                     <PortalTooltip content="Add photos & files">
                       <button
                         type="button"
@@ -3321,7 +3525,7 @@ export default function ChatPage() {
                       value={modelLevel}
                       options={CHAT_MODEL_LEVELS}
                       onChange={setModelLevel}
-                      disabled={subscriptionExpired}
+                      disabled={pageResolving || subscriptionExpired}
                     />
                   </div>
 

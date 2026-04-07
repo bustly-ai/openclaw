@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { mergeBustlyRuntimeHeaders } from "../../bustly-runtime-headers.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   injectHistoryImagesIntoMessages,
@@ -160,5 +161,35 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
         sessionAgentId: "main",
       }),
     ).toBe(false);
+  });
+});
+
+describe("mergeBustlyRuntimeHeaders", () => {
+  it("adds run id and workspace headers while preserving other headers", () => {
+    expect(
+      mergeBustlyRuntimeHeaders({
+        modelHeaders: { Authorization: "Bearer test", "X-Workspace-Id": "stale-model" },
+        optionHeaders: { "X-Trace-Id": "trace-1" },
+        workspaceId: "workspace-123",
+        runId: "run-123",
+      }),
+    ).toEqual({
+      Authorization: "Bearer test",
+      "X-Trace-Id": "trace-1",
+      "X-Workspace-Id": "workspace-123",
+      "X-Run-Id": "run-123",
+    });
+  });
+
+  it("keeps run id and removes workspace header when workspace id is missing", () => {
+    expect(
+      mergeBustlyRuntimeHeaders({
+        modelHeaders: { "X-Workspace-Id": "stale-model", "x-workspace-id": "stale-lower" },
+        workspaceId: "   ",
+        runId: "run-456",
+      }),
+    ).toEqual({
+      "X-Run-Id": "run-456",
+    });
   });
 });

@@ -83,16 +83,15 @@ Parameters:
 
 - `sessionKey` (required; accepts session key or `sessionId` from `sessions_list`)
 - `message` (required)
-- `timeoutSeconds?: number` (default >0; 0 = fire-and-forget)
+- `timeoutSeconds?: number` (optional follow-up budget in seconds; send returns immediately after acceptance)
 
 Behavior:
 
-- `timeoutSeconds = 0`: enqueue and return `{ runId, status: "accepted" }`.
-- `timeoutSeconds > 0`: wait up to N seconds for completion, then return `{ runId, status: "ok", reply }`.
-- If wait times out: `{ runId, status: "timeout", error }`. Run continues; call `sessions_history` later.
+- Once the target session accepts the run, OpenClaw returns `{ runId, status: "ok" }`.
+- Successful responses include `acceptance: { status: "received", replyStatus: "pending" }` so callers can distinguish "accepted, reply may arrive later" from an actual error.
+- `timeoutSeconds` only caps the background agent-to-agent follow-up flow; it no longer changes the immediate send result.
 - If the run fails: `{ runId, status: "error", error }`.
 - Announce delivery runs after the primary run completes and is best-effort; `status: "ok"` does not guarantee the announce was delivered.
-- Waits via gateway `agent.wait` (server-side) so reconnects don't drop the wait.
 - Agent-to-agent message context is injected for the primary run.
 - Inter-session messages are persisted with `message.provenance.kind = "inter_session"` so transcript readers can distinguish routed agent instructions from external user input.
 - After the primary run completes, OpenClaw runs a **reply-back loop**:

@@ -43,7 +43,11 @@ export async function loadRemoteWorkspaceTemplate(
 
   const fetchImpl =
     opts?.fetchImpl ?? (typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : undefined);
-  const targetUrl = `${baseUrl}/${encodeURIComponent(name)}`;
+  const encodedName = name
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+  const targetUrl = `${baseUrl}/${encodedName}`;
 
   if (!fetchImpl) {
     logRemoteTemplate(`fetch unavailable for remote template ${name}; falling back to local template`);

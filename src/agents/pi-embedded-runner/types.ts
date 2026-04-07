@@ -1,4 +1,5 @@
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { AssistantRequestMetric } from "../../infra/assistant-request-metrics.js";
 import type { MessagingToolSend } from "../pi-embedded-messaging.js";
 
 export type EmbeddedPiAgentMeta = {
@@ -54,6 +55,7 @@ export type EmbeddedPiRunMeta = {
     name: string;
     arguments: string;
   }>;
+  assistantRequestMetrics?: AssistantRequestMetric[];
 };
 
 export type EmbeddedPiRunResult = {
