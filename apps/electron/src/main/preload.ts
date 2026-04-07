@@ -11,7 +11,24 @@ type OpenClawInitOptions = {
 type GatewayLogPayload = { stream: "stdout" | "stderr"; message: string };
 type GatewayExitPayload = { code: number | null; signal: string | null };
 type MainLogPayload = { message: string };
-type UpdateStatusPayload = { event: string };
+type UpdateStatusPayload = {
+  event: string;
+  state?: {
+    sessionId?: string | null;
+    stage?: string;
+    currentVersion?: string;
+    targetVersion?: string | null;
+    ready?: boolean;
+    helperActive?: boolean;
+    progressPercent?: number | null;
+    transferred?: number | null;
+    total?: number | null;
+    bytesPerSecond?: number | null;
+    message?: string | null;
+    error?: string | null;
+    updatedAt?: number;
+  };
+};
 type GatewayLifecyclePayload = {
   phase: "starting" | "stopping" | "ready" | "error";
   message: string | null;
@@ -63,6 +80,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getAppInfo: () => ipcRenderer.invoke("get-app-info"),
   getNativeFullscreenStatus: () => ipcRenderer.invoke("window-native-fullscreen-status"),
   updaterCheck: () => ipcRenderer.invoke("updater-check"),
+  updaterStartInstall: () => ipcRenderer.invoke("updater-start-install"),
   updaterInstall: () => ipcRenderer.invoke("updater-install"),
   updaterStatus: () => ipcRenderer.invoke("updater-status"),
 

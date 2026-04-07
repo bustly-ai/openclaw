@@ -78,6 +78,33 @@ interface DeepLinkData {
   workspaceId: string | null;
 }
 
+interface DesktopUpdateState {
+  sessionId: string | null;
+  stage:
+    | "idle"
+    | "checking"
+    | "available"
+    | "not-available"
+    | "launching-helper"
+    | "downloading"
+    | "preparing"
+    | "downloaded"
+    | "installing"
+    | "restarted"
+    | "error";
+  currentVersion: string;
+  targetVersion: string | null;
+  ready: boolean;
+  helperActive: boolean;
+  progressPercent: number | null;
+  transferred: number | null;
+  total: number | null;
+  bytesPerSecond: number | null;
+  message: string | null;
+  error: string | null;
+  updatedAt: number;
+}
+
 interface BustlyUserInfo {
   userId: string;
   userName: string;
@@ -192,7 +219,10 @@ interface ElectronAPI {
   bustlyOpenWorkspaceManage: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
   bustlyOpenWorkspacePricing: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
   bustlyOpenWorkspaceCreate: (workspaceId?: string) => Promise<{ success: boolean; error?: string }>;
-  updaterStatus: () => Promise<{ ready: boolean; version?: string | null }>;
+  updaterCheck: () => Promise<{ success: boolean; error?: string }>;
+  updaterStartInstall: () => Promise<{ success: boolean; error?: string }>;
+  updaterInstall: () => Promise<{ success: boolean; error?: string }>;
+  updaterStatus: () => Promise<{ ready: boolean; version?: string | null; state: DesktopUpdateState }>;
   consumePendingDeepLink: () => Promise<DeepLinkData | null>;
 
   // Event listeners
@@ -201,7 +231,7 @@ interface ElectronAPI {
   onGatewayLifecycle: (callback: (data: GatewayLifecycleData) => void) => () => void;
   onMainLog: (callback: (data: MainLogData) => void) => () => void;
   onBustlyLoginRefresh: (callback: () => void) => () => void;
-  onUpdateStatus: (callback: (data: { event: string }) => void) => () => void;
+  onUpdateStatus: (callback: (data: { event: string; state?: DesktopUpdateState }) => void) => () => void;
   onNativeFullscreenChange: (callback: (data: { isNativeFullscreen: boolean }) => void) => () => void;
   onDeepLink: (callback: (data: DeepLinkData) => void) => () => void;
 }

@@ -36,6 +36,7 @@ import {
   buildBustlyWorkspaceAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../../shared/bustly-agent";
+import UpdatePrompt from "../Updater/UpdatePrompt";
 import Skeleton from "../ui/Skeleton";
 import PortalTooltip from "../ui/PortalTooltip";
 
@@ -1930,6 +1931,12 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
           </div>
         )}
       </div>
+
+      {!isSettingsPage ? (
+        <div className={`[-webkit-app-region:no-drag] shrink-0 ${props.collapsed ? "px-2 pb-2" : "px-4 pb-2"}`}>
+          <UpdatePrompt />
+        </div>
+      ) : null}
 
       <div
         ref={userMenuRef}

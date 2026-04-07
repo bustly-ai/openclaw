@@ -29,16 +29,6 @@ function AppShell() {
   const hasCompletedInitialGatewayBootRef = useRef(false);
 
   useEffect(() => {
-    if (!window.electronAPI?.onUpdateStatus) {
-      return;
-    }
-    const unsubscribe = window.electronAPI.onUpdateStatus(() => {});
-    return () => {
-      unsubscribe();
-    };
-  }, []);
-
-  useEffect(() => {
     if (!loggedIn || hasCompletedInitialGatewayBootRef.current) {
       return;
     }

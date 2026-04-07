@@ -12,7 +12,7 @@ import * as Sentry from "@sentry/electron/main";
 import JSZip from "jszip";
 import { randomUUID } from "node:crypto";
 import { resolve, dirname, basename, join, relative } from "node:path";
-import { fork, spawnSync, ChildProcess } from "node:child_process";
+import { fork, spawn, spawnSync, ChildProcess } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -121,6 +121,48 @@ type BustlyAgentMetadata = {
 };
 
 type OpenClawAgentListEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+
+type DesktopUpdateStage =
+  | "idle"
+  | "checking"
+  | "available"
+  | "not-available"
+  | "launching-helper"
+  | "downloading"
+  | "preparing"
+  | "downloaded"
+  | "installing"
+  | "restarted"
+  | "error";
+
+type DesktopUpdateState = {
+  sessionId: string | null;
+  stage: DesktopUpdateStage;
+  currentVersion: string;
+  targetVersion: string | null;
+  ready: boolean;
+  helperActive: boolean;
+  progressPercent: number | null;
+  transferred: number | null;
+  total: number | null;
+  bytesPerSecond: number | null;
+  message: string | null;
+  error: string | null;
+  updatedAt: number;
+};
+
+type UpdateFileInfo = {
+  url?: string;
+  info?: {
+    url?: string;
+  };
+};
+
+type UpdateInfoSnapshot = {
+  version?: string | null;
+  path?: string | null;
+  files?: UpdateFileInfo[];
+};
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 const SENTRY_DSN =
@@ -334,8 +376,24 @@ const autoUpdater = updater.autoUpdater;
 const APP_DISPLAY_NAME = "Bustly";
 const APP_PROTOCOL = "bustly";
 const DEEP_LINK_CHANNEL = "deep-link";
+const UPDATE_HELPER_ARG = "--updater-helper";
+const UPDATE_STATE_FILE_ARG_PREFIX = "--update-state-file=";
+const UPDATE_STATE_STALE_MS = 15 * 60 * 1000;
+const supportsDetachedUpdaterHelper = false;
 
 app.setName(APP_DISPLAY_NAME);
+
+const isUpdaterHelperMode = process.argv.includes(UPDATE_HELPER_ARG);
+const updaterHelperStateArg = process.argv.find((value) => value.startsWith(UPDATE_STATE_FILE_ARG_PREFIX));
+const updaterHelperStateFilePath = updaterHelperStateArg
+  ? updaterHelperStateArg.slice(UPDATE_STATE_FILE_ARG_PREFIX.length)
+  : null;
+
+if (isUpdaterHelperMode) {
+  try {
+    app.setPath("userData", join(app.getPath("temp"), "bustly-updater-helper"));
+  } catch {}
+}
 
 let gatewayProcess: ChildProcess | null = null;
 let gatewayStartPromise: Promise<boolean> | null = null;
@@ -354,6 +412,26 @@ let gatewayLastWorkerFailure: {
 } | null = null;
 let bustlyLoginCancelled = false;
 let bustlyLoginAttemptId = 0;
+let latestAvailableVersion: string | null = null;
+let latestUpdateInfo: UpdateInfoSnapshot | null = null;
+let updateStateFilePath: string | null = updaterHelperStateFilePath;
+let updaterHelperLaunchPromise: Promise<void> | null = null;
+let updaterHelperPollTimer: NodeJS.Timeout | null = null;
+let updateState: DesktopUpdateState = {
+  sessionId: null,
+  stage: "idle",
+  currentVersion: app.getVersion(),
+  targetVersion: null,
+  ready: false,
+  helperActive: false,
+  progressPercent: null,
+  transferred: null,
+  total: null,
+  bytesPerSecond: null,
+  message: null,
+  error: null,
+  updatedAt: Date.now(),
+};
 
 setMainLogSink((entry) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -503,6 +581,19 @@ function resolveImagePreviewMimeType(filePath: string): string | null {
 let updateReady = false;
 let updateVersion: string | null = null;
 let updateInstalling = false;
+let nativeInstallPrepared = false;
+let nativeInstallPreparationPromise: Promise<void> | null = null;
+
+type NativeAutoUpdaterBridge = {
+  checkForUpdates: () => void;
+  on: (event: string, listener: (...args: unknown[]) => void) => void;
+  removeListener: (event: string, listener: (...args: unknown[]) => void) => void;
+};
+
+type MacUpdaterBridge = {
+  nativeUpdater?: NativeAutoUpdaterBridge;
+  squirrelDownloadedUpdate?: boolean;
+};
 type DeepLinkPayload = {
   url: string;
   route: string | null;
@@ -1801,8 +1892,379 @@ function resolveGatewayWorkerPath(): string {
 
 function sendUpdateStatus(event: string, payload?: Record<string, unknown>) {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(UPDATE_STATUS_CHANNEL, { event, ...payload });
+    mainWindow.webContents.send(UPDATE_STATUS_CHANNEL, { event, state: updateState, ...payload });
   }
+}
+
+function getUpdateStateFilePath() {
+  if (!updateStateFilePath) {
+    updateStateFilePath = join(app.getPath("userData"), "updater-state.json");
+  }
+  return updateStateFilePath;
+}
+
+function readPersistedUpdateState(filePath = getUpdateStateFilePath()): DesktopUpdateState | null {
+  try {
+    if (!existsSync(filePath)) {
+      return null;
+    }
+    const raw = JSON.parse(readFileSync(filePath, "utf-8")) as Partial<DesktopUpdateState>;
+    return {
+      sessionId: typeof raw.sessionId === "string" ? raw.sessionId : null,
+      stage: typeof raw.stage === "string" ? raw.stage as DesktopUpdateStage : "idle",
+      currentVersion: typeof raw.currentVersion === "string" ? raw.currentVersion : app.getVersion(),
+      targetVersion: typeof raw.targetVersion === "string" ? raw.targetVersion : null,
+      ready: raw.ready === true,
+      helperActive: raw.helperActive === true,
+      progressPercent: typeof raw.progressPercent === "number" ? raw.progressPercent : null,
+      transferred: typeof raw.transferred === "number" ? raw.transferred : null,
+      total: typeof raw.total === "number" ? raw.total : null,
+      bytesPerSecond: typeof raw.bytesPerSecond === "number" ? raw.bytesPerSecond : null,
+      message: typeof raw.message === "string" ? raw.message : null,
+      error: typeof raw.error === "string" ? raw.error : null,
+      updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : Date.now(),
+    };
+  } catch (error) {
+    writeMainLog(`[Updater] Failed to read update state: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+function persistUpdateState() {
+  if (isUpdaterHelperMode) {
+    return;
+  }
+  const filePath = getUpdateStateFilePath();
+  try {
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, JSON.stringify(updateState, null, 2));
+  } catch (error) {
+    writeMainLog(`[Updater] Failed to persist update state: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function clearPersistedUpdateState() {
+  if (isUpdaterHelperMode) {
+    return;
+  }
+  const filePath = getUpdateStateFilePath();
+  try {
+    rmSync(filePath, { force: true });
+  } catch {}
+}
+
+function publishUpdateState(event: DesktopUpdateStage, next: Partial<DesktopUpdateState> = {}) {
+  updateState = {
+    ...updateState,
+    ...next,
+    stage: event,
+    currentVersion: next.currentVersion ?? app.getVersion(),
+    updatedAt: Date.now(),
+  };
+  persistUpdateState();
+  sendUpdateStatus(event);
+}
+
+function buildUpdaterHelperArgs(filePath: string) {
+  const args: string[] = [];
+  if (process.defaultApp && process.argv[1]) {
+    args.push(resolve(process.argv[1]));
+  }
+  args.push(UPDATE_HELPER_ARG, `${UPDATE_STATE_FILE_ARG_PREFIX}${filePath}`);
+  return args;
+}
+
+function hasMacZipArtifact(info: UpdateInfoSnapshot | null) {
+  if (!info) {
+    return false;
+  }
+  const pathValue = typeof info.path === "string" ? info.path.toLowerCase() : "";
+  if (pathValue.endsWith(".zip")) {
+    return true;
+  }
+  return (info.files ?? []).some((file) => {
+    const url = typeof file.url === "string" ? file.url.toLowerCase() : "";
+    const nestedUrl = typeof file.info?.url === "string" ? file.info.url.toLowerCase() : "";
+    return url.endsWith(".zip") || nestedUrl.endsWith(".zip");
+  });
+}
+
+function resolveShipItStatePath() {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  const bundleId = app.getName().trim().toLowerCase();
+  if (!bundleId) {
+    return null;
+  }
+  return join(app.getPath("home"), "Library", "Caches", `${bundleId}.ShipIt`, "ShipItState.plist");
+}
+
+function logShipItStateStatus(phase: string) {
+  const path = resolveShipItStatePath();
+  if (!path) {
+    writeMainLog(`[Updater] ${phase} ShipItState: unsupported platform or bundle id`);
+    return;
+  }
+  writeMainLog(`[Updater] ${phase} ShipItState: ${path} exists=${existsSync(path)}`);
+}
+
+async function waitForShipItState(timeoutMs = 2_500) {
+  const filePath = resolveShipItStatePath();
+  if (!filePath) {
+    return true;
+  }
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (existsSync(filePath)) {
+      return true;
+    }
+    await delay(120);
+  }
+  return false;
+}
+
+function formatUpdateFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("ZIP file not provided")) {
+    return "This macOS update is missing the required ZIP package. Publish the ZIP in the update feed before installing.";
+  }
+  return message;
+}
+
+function getMacUpdaterBridge(): MacUpdaterBridge | null {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  return autoUpdater as typeof autoUpdater & MacUpdaterBridge;
+}
+
+function markUpdatePrepared(targetVersion: string | null) {
+  nativeInstallPrepared = true;
+  updateReady = true;
+  updateVersion = targetVersion;
+  publishUpdateState("downloaded", {
+    targetVersion,
+    ready: true,
+    helperActive: false,
+    progressPercent: 100,
+    transferred: null,
+    total: null,
+    bytesPerSecond: null,
+    message: targetVersion
+      ? `${targetVersion} is ready. Restart to install.`
+      : "The update is ready. Restart to install.",
+    error: null,
+  });
+}
+
+async function prepareMacUpdateInstall(targetVersion: string | null) {
+  if (process.platform !== "darwin") {
+    markUpdatePrepared(targetVersion);
+    return;
+  }
+  if (nativeInstallPrepared) {
+    markUpdatePrepared(targetVersion);
+    return;
+  }
+  if (nativeInstallPreparationPromise) {
+    return nativeInstallPreparationPromise;
+  }
+  const bridge = getMacUpdaterBridge();
+  const nativeUpdater = bridge?.nativeUpdater;
+  if (!bridge || !nativeUpdater) {
+    throw new Error("The macOS updater bridge is unavailable.");
+  }
+  if (bridge.squirrelDownloadedUpdate === true) {
+    markUpdatePrepared(targetVersion);
+    return;
+  }
+  publishUpdateState("preparing", {
+    targetVersion,
+    ready: false,
+    helperActive: false,
+    progressPercent: 100,
+    transferred: null,
+    total: null,
+    bytesPerSecond: null,
+    message: targetVersion
+      ? `Preparing ${targetVersion} for restart...`
+      : "Preparing the update for restart...",
+    error: null,
+  });
+  nativeInstallPreparationPromise = new Promise<void>((resolve, reject) => {
+    const onDownloaded = () => {
+      cleanup();
+      writeMainLog("[Updater] Native macOS updater prepared the install");
+      markUpdatePrepared(targetVersion);
+      resolve();
+    };
+    const onError = (error: unknown) => {
+      cleanup();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const cleanup = () => {
+      nativeUpdater.removeListener("update-downloaded", onDownloaded);
+      nativeUpdater.removeListener("error", onError);
+    };
+    nativeUpdater.on("update-downloaded", onDownloaded);
+    nativeUpdater.on("error", onError);
+    writeMainLog("[Updater] Triggering native macOS updater preparation");
+    nativeUpdater.checkForUpdates();
+  }).finally(() => {
+    nativeInstallPreparationPromise = null;
+  });
+  return nativeInstallPreparationPromise;
+}
+
+async function launchUpdaterHelper() {
+  if (isUpdaterHelperMode || !supportsDetachedUpdaterHelper) {
+    return;
+  }
+  if (updaterHelperLaunchPromise) {
+    return updaterHelperLaunchPromise;
+  }
+  const filePath = getUpdateStateFilePath();
+  const args = buildUpdaterHelperArgs(filePath);
+  updaterHelperLaunchPromise = (async () => {
+    const child = spawn(process.execPath, args, {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, BUSTLY_UPDATER_HELPER: "1" },
+    });
+    child.unref();
+    await delay(600);
+  })().finally(() => {
+    updaterHelperLaunchPromise = null;
+  });
+  return updaterHelperLaunchPromise;
+}
+
+function startUpdaterHelperPolling() {
+  if (!isUpdaterHelperMode || updaterHelperPollTimer || !updaterHelperStateFilePath) {
+    return;
+  }
+  let lastSerialized = "";
+  const tick = () => {
+    const nextState = readPersistedUpdateState(updaterHelperStateFilePath);
+    if (!nextState) {
+      return;
+    }
+    const serialized = JSON.stringify(nextState);
+    if (serialized === lastSerialized) {
+      return;
+    }
+    lastSerialized = serialized;
+    updateState = nextState;
+    sendUpdateStatus(nextState.stage);
+    if (nextState.stage === "restarted") {
+      setTimeout(() => {
+        app.quit();
+      }, 1_200);
+    }
+  };
+  tick();
+  updaterHelperPollTimer = setInterval(tick, 400);
+}
+
+function stopUpdaterHelperPolling() {
+  if (!updaterHelperPollTimer) {
+    return;
+  }
+  clearInterval(updaterHelperPollTimer);
+  updaterHelperPollTimer = null;
+}
+
+function isMacShipItInstallLikelyActive() {
+  if (process.platform !== "darwin") {
+    return false;
+  }
+  try {
+    const result = spawnSync("/usr/bin/pgrep", ["-fal", "bustly.ShipIt"], {
+      encoding: "utf-8",
+    });
+    const output = (result.stdout ?? "").trim().toLowerCase();
+    return output.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function handlePendingInstallOnLaunch() {
+  const persistedState = readPersistedUpdateState();
+  if (!persistedState) {
+    return false;
+  }
+  updateState = persistedState;
+  latestAvailableVersion = persistedState.targetVersion;
+
+  if (Date.now() - persistedState.updatedAt > UPDATE_STATE_STALE_MS) {
+    clearPersistedUpdateState();
+    updateState = {
+      ...updateState,
+      sessionId: null,
+      stage: "idle",
+      targetVersion: null,
+      ready: false,
+      helperActive: false,
+      progressPercent: null,
+      transferred: null,
+      total: null,
+      bytesPerSecond: null,
+      message: null,
+      error: null,
+      updatedAt: Date.now(),
+    };
+    return false;
+  }
+
+  if (persistedState.stage === "installing" && persistedState.targetVersion && persistedState.targetVersion !== app.getVersion()) {
+    const installAgeMs = Date.now() - persistedState.updatedAt;
+    const installLikelyActive = installAgeMs < 90_000 || isMacShipItInstallLikelyActive();
+    if (!installLikelyActive) {
+      writeMainLog("[Updater] Clearing stale installing state on launch");
+      clearPersistedUpdateState();
+      updateState = {
+        ...updateState,
+        sessionId: null,
+        stage: "idle",
+        targetVersion: null,
+        ready: false,
+        helperActive: false,
+        progressPercent: null,
+        transferred: null,
+        total: null,
+        bytesPerSecond: null,
+        message: null,
+        error: null,
+        updatedAt: Date.now(),
+      };
+      return false;
+    }
+    writeMainLog("[Updater] Install appears active; quitting silently to avoid blocking ShipIt");
+    app.quit();
+    return true;
+  }
+
+  if (persistedState.stage === "installing" && persistedState.targetVersion === app.getVersion()) {
+    publishUpdateState("restarted", {
+      currentVersion: app.getVersion(),
+      targetVersion: app.getVersion(),
+      helperActive: false,
+      ready: false,
+      progressPercent: null,
+      transferred: null,
+      total: null,
+      bytesPerSecond: null,
+      message: `Updated to ${app.getVersion()}. Opening Bustly...`,
+      error: null,
+    });
+    setTimeout(() => {
+      clearPersistedUpdateState();
+    }, 1_500);
+  }
+
+  return false;
 }
 
 function logStartupPaths(): void {
@@ -2120,14 +2582,14 @@ async function startGateway(): Promise<boolean> {
   if (gatewayStartPromise) {
     return gatewayStartPromise;
   }
-  gatewayStartPromise = (async () => {
+  gatewayStartPromise = (async (): Promise<boolean> => {
   const oauthCallbackPort = await startOAuthCallbackServer();
   writeMainInfo(`[Bustly] OAuth callback server started on port ${oauthCallbackPort}`);
 
   const startAt = Date.now();
   if (gatewayProcess) {
     writeMainLog("Gateway already running");
-    emitGatewayLifecycle("ready", null);
+    emitGatewayLifecycle("ready");
     return true;
   }
 
@@ -2180,7 +2642,7 @@ async function startGateway(): Promise<boolean> {
   }
   gatewayPort = selectedGatewayPort;
 
-  return await new Promise((resolvePromise, reject) => {
+  return await new Promise<boolean>((resolvePromise, reject) => {
     writeMainInfo(`Starting gateway on port ${gatewayPort} with bind=${gatewayBind}`);
     writeMainInfo(`Authentication: ${loadedConfig?.token ? "token" : "none (local development mode)"}`);
 
@@ -2378,7 +2840,7 @@ async function startGateway(): Promise<boolean> {
         gatewayAutoRestartAttempt = 0;
         gatewayLastWorkerFailure = null;
         snapshotGatewayLastGoodConfig();
-        emitGatewayLifecycle("ready", null);
+        emitGatewayLifecycle("ready");
         resolvePromise(true);
       })
       .catch((error) => {
@@ -2411,7 +2873,11 @@ async function startGateway(): Promise<boolean> {
       });
   });
   })();
-  return await gatewayStartPromise.finally(() => {
+  const startupPromise = gatewayStartPromise;
+  if (!startupPromise) {
+    return false;
+  }
+  return await startupPromise.finally(() => {
     gatewayStartPromise = null;
   });
 }
@@ -2634,6 +3100,37 @@ function loadRendererWindow(targetWindow: BrowserWindow, options?: { hash?: stri
   }
 }
 
+function createUpdaterHelperWindow(): void {
+  mainWindow = new BrowserWindow({
+    width: 420,
+    height: 168,
+    minWidth: 420,
+    minHeight: 168,
+    maxWidth: 420,
+    maxHeight: 168,
+    useContentSize: true,
+    backgroundColor: "#FBF8F2",
+    titleBarStyle: "hiddenInset",
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    resizable: false,
+    alwaysOnTop: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: PRELOAD_PATH,
+    },
+    title: "Bustly Updater",
+  });
+
+  loadRendererWindow(mainWindow, { hash: "/update-helper" });
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+    app.quit();
+  });
+}
+
 /**
  * Create the main browser window
  */
@@ -2738,8 +3235,8 @@ function setupAutoUpdater(): void {
     writeMainLog("[Updater] allowPrerelease enabled");
   }
 
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
   // macOS + generic provider has shown flaky partial installs in our env;
   // force full package downloads instead of differential/blockmap patches.
   autoUpdater.disableDifferentialDownload = true;
@@ -2758,38 +3255,111 @@ function setupAutoUpdater(): void {
 
   autoUpdater.on("checking-for-update", () => {
     writeMainLog("[Updater] Checking for updates...");
-    sendUpdateStatus("checking");
+    publishUpdateState("checking", {
+      message: "Checking for updates...",
+      error: null,
+    });
   });
 
   autoUpdater.on("update-available", (info) => {
     writeMainLog(`[Updater] Update available: ${info.version}`);
-    sendUpdateStatus("available", { info });
+    nativeInstallPrepared = false;
+    nativeInstallPreparationPromise = null;
+    updateReady = false;
+    updateVersion = null;
+    latestAvailableVersion = info.version ?? null;
+    latestUpdateInfo = info as UpdateInfoSnapshot;
+    publishUpdateState("available", {
+      targetVersion: info.version ?? null,
+      ready: false,
+      helperActive: false,
+      progressPercent: null,
+      transferred: null,
+      total: null,
+      bytesPerSecond: null,
+      message: info.version ? `Version ${info.version} is ready to install.` : "A new update is ready to install.",
+      error: null,
+    });
   });
 
   autoUpdater.on("update-not-available", (info) => {
     writeMainLog(`[Updater] No updates available (current: ${info.version})`);
-    sendUpdateStatus("not-available", { info });
+    if (
+      updateState.stage === "preparing" ||
+      updateState.stage === "downloading" ||
+      updateState.stage === "downloaded" ||
+      updateState.stage === "installing"
+    ) {
+      return;
+    }
+    latestAvailableVersion = null;
+    latestUpdateInfo = null;
+    nativeInstallPrepared = false;
+    nativeInstallPreparationPromise = null;
+    updateReady = false;
+    updateVersion = null;
+    publishUpdateState("not-available", {
+      targetVersion: null,
+      ready: false,
+      helperActive: false,
+      progressPercent: null,
+      transferred: null,
+      total: null,
+      bytesPerSecond: null,
+      message: "Bustly is up to date.",
+      error: null,
+    });
   });
 
   autoUpdater.on("error", (error) => {
-    writeMainLog(`[Updater] Error: ${error instanceof Error ? error.message : String(error)}`);
-    sendUpdateStatus("error", { error: error instanceof Error ? error.message : String(error) });
+    const message = formatUpdateFailure(error);
+    writeMainLog(`[Updater] Error: ${message}`);
+    nativeInstallPreparationPromise = null;
+    nativeInstallPrepared = false;
+    publishUpdateState("error", {
+      ready: false,
+      message: "Update failed.",
+      error: message,
+    });
   });
 
   autoUpdater.on("download-progress", (progress) => {
-    sendUpdateStatus("download-progress", {
-      percent: progress.percent,
+    publishUpdateState("downloading", {
+      ready: false,
+      progressPercent: progress.percent,
       transferred: progress.transferred,
       total: progress.total,
       bytesPerSecond: progress.bytesPerSecond,
+      message: latestAvailableVersion
+        ? `Downloading ${latestAvailableVersion}...`
+        : "Downloading update...",
     });
   });
 
   autoUpdater.on("update-downloaded", (info) => {
     writeMainLog(`[Updater] Update downloaded: ${info.version}`);
-    sendUpdateStatus("downloaded", { info });
-    updateReady = true;
-    updateVersion = info.version ?? null;
+    logShipItStateStatus("after-download");
+    latestAvailableVersion = info.version ?? null;
+    updateReady = false;
+    updateVersion = null;
+    publishUpdateState("preparing", {
+      targetVersion: info.version ?? null,
+      ready: false,
+      helperActive: false,
+      progressPercent: 100,
+      message: info.version ? `Downloaded ${info.version}. Preparing restart...` : "Downloaded update. Preparing restart...",
+      error: null,
+    });
+    void prepareMacUpdateInstall(info.version ?? null).catch((error: unknown) => {
+      const message = formatUpdateFailure(error);
+      writeMainLog(`[Updater] Failed to prepare macOS install: ${message}`);
+      publishUpdateState("error", {
+        ready: false,
+        helperActive: false,
+        message: "Update failed.",
+        error: message,
+      });
+    });
   });
 
   const runStartupUpdateCheck = async () => {
@@ -2802,11 +3372,16 @@ function setupAutoUpdater(): void {
       }
 
       const downloadPromise = result?.downloadPromise;
+      latestUpdateInfo = (result?.updateInfo ?? null) as UpdateInfoSnapshot | null;
       if (downloadPromise && typeof downloadPromise.catch === "function") {
         void downloadPromise.catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = formatUpdateFailure(error);
           writeMainLog(`[Updater] background download failed: ${message}`);
-          sendUpdateStatus("error", { error: message });
+          publishUpdateState("error", {
+            ready: false,
+            message: "Update failed.",
+            error: message,
+          });
         });
       }
     } catch (error) {
@@ -3271,10 +3846,11 @@ function setupIpcHandlers(): void {
   ipcMain.handle("updater-check", async () => {
     try {
       const result = await autoUpdater.checkForUpdates();
+      latestUpdateInfo = (result?.updateInfo ?? null) as UpdateInfoSnapshot | null;
       const downloadPromise = result?.downloadPromise;
       if (downloadPromise && typeof downloadPromise.catch === "function") {
         void downloadPromise.catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = formatUpdateFailure(error);
           writeMainLog(`[Updater] manual download failed: ${message}`);
           sendUpdateStatus("error", { error: message });
         });
@@ -3285,15 +3861,130 @@ function setupIpcHandlers(): void {
     }
   });
 
-  ipcMain.handle("updater-install", () => {
+  ipcMain.handle("updater-start-install", async () => {
+    if (isUpdaterHelperMode) {
+      return { success: false, error: "Updater helper cannot start a new update." };
+    }
     try {
+      if (
+        updateState.stage === "launching-helper" ||
+        updateState.stage === "downloading" ||
+        updateState.stage === "preparing" ||
+        updateState.stage === "downloaded" ||
+        updateState.stage === "installing"
+      ) {
+        return { success: true };
+      }
+
+      let targetVersion = latestAvailableVersion ?? updateState.targetVersion;
+      if (!targetVersion) {
+        const result = await autoUpdater.checkForUpdates();
+        targetVersion = result?.updateInfo?.version ?? null;
+        latestUpdateInfo = (result?.updateInfo ?? null) as UpdateInfoSnapshot | null;
+      }
+
+      if (!targetVersion || targetVersion === app.getVersion()) {
+        return { success: false, error: "No update is available." };
+      }
+
+      if (process.platform === "darwin" && !hasMacZipArtifact(latestUpdateInfo)) {
+        return {
+          success: false,
+          error: "This macOS release is missing the ZIP package required by electron-updater.",
+        };
+      }
+
+      updateReady = false;
+      updateVersion = null;
+      nativeInstallPrepared = false;
+      nativeInstallPreparationPromise = null;
+      latestAvailableVersion = targetVersion;
+      publishUpdateState("downloading", {
+        sessionId: randomUUID(),
+        targetVersion,
+        ready: false,
+        helperActive: false,
+        progressPercent: supportsDetachedUpdaterHelper ? null : 0,
+        transferred: supportsDetachedUpdaterHelper ? null : 0,
+        total: null,
+        bytesPerSecond: null,
+        message: `Downloading ${targetVersion}...`,
+        error: null,
+      });
+      publishUpdateState("downloading", {
+        targetVersion,
+        helperActive: false,
+        progressPercent: 0,
+        transferred: 0,
+        total: null,
+        bytesPerSecond: null,
+        message: `Downloading ${targetVersion}...`,
+        error: null,
+      });
+      void Promise.resolve(autoUpdater.downloadUpdate()).catch((error: unknown) => {
+        const message = formatUpdateFailure(error);
+        writeMainLog(`[Updater] manual download failed: ${message}`);
+        publishUpdateState("error", {
+          ready: false,
+          helperActive: false,
+          message: "Update failed.",
+          error: message,
+        });
+      });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle("updater-install", async () => {
+    try {
+      if (!nativeInstallPrepared || !updateReady) {
+        return { success: false, error: "The update is still being prepared. Wait until restart is available." };
+      }
       writeMainLog("[Updater] updater-install requested");
-      sendUpdateStatus("installing", { version: updateVersion });
+      logShipItStateStatus("before-install");
+      if (latestUpdateInfo?.path) {
+        writeMainLog(`[Updater] updateInfo.path=${latestUpdateInfo.path}`);
+      }
+      if (supportsDetachedUpdaterHelper) {
+        try {
+          await launchUpdaterHelper();
+          writeMainLog("[Updater] Detached helper launched");
+        } catch (error) {
+          writeMainLog(`[Updater] Detached helper launch failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      publishUpdateState("installing", {
+        targetVersion: updateVersion,
+        helperActive: supportsDetachedUpdaterHelper,
+        ready: true,
+        progressPercent: 100,
+        transferred: null,
+        total: null,
+        bytesPerSecond: null,
+        message: "Restarting to install the update.",
+        error: null,
+      });
+      const shipItReady = await waitForShipItState();
+      if (!shipItReady) {
+        const statePath = resolveShipItStatePath() ?? "(unresolved)";
+        const message = `ShipItState.plist not found at ${statePath}. The updater request is missing; please retry the update.`;
+        writeMainLog(`[Updater] ${message}`);
+        logShipItStateStatus("install-failed");
+        publishUpdateState("error", {
+          ready: false,
+          helperActive: false,
+          message: "Update failed.",
+          error: message,
+        });
+        return { success: false, error: message };
+      }
       updateInstalling = true;
       setTimeout(() => {
         writeMainLog("[Updater] Calling quitAndInstall");
         autoUpdater.quitAndInstall(false, true);
-      }, 2000);
+      }, 1_200);
       return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -3304,6 +3995,7 @@ function setupIpcHandlers(): void {
     return {
       ready: updateReady,
       version: updateVersion,
+      state: updateState,
     };
   });
 
@@ -3770,32 +4462,39 @@ function setupIpcHandlers(): void {
   });
 }
 
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
-if (!gotSingleInstanceLock) {
-  app.quit();
-}
-
-app.on("second-instance", (_event, argv) => {
-  const deepLinkArg = argv.find((value) => value.startsWith(`${APP_PROTOCOL}://`));
-  if (deepLinkArg) {
-    writeMainLog(`[DeepLink] second-instance argv matched ${deepLinkArg}`);
-    dispatchDeepLink(deepLinkArg);
-    return;
+if (!isUpdaterHelperMode) {
+  const gotSingleInstanceLock = app.requestSingleInstanceLock();
+  if (!gotSingleInstanceLock) {
+    app.quit();
   }
-  writeMainLog("[DeepLink] second-instance without protocol arg");
-  focusMainWindow();
-});
 
-app.on("open-url", (event, url) => {
-  event.preventDefault();
-  writeMainLog(`[DeepLink] open-url ${url}`);
-  dispatchDeepLink(url);
-});
+  app.on("second-instance", (_event, argv) => {
+    const deepLinkArg = argv.find((value) => value.startsWith(`${APP_PROTOCOL}://`));
+    if (deepLinkArg) {
+      writeMainLog(`[DeepLink] second-instance argv matched ${deepLinkArg}`);
+      dispatchDeepLink(deepLinkArg);
+      return;
+    }
+    writeMainLog("[DeepLink] second-instance without protocol arg");
+    focusMainWindow();
+  });
+
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    writeMainLog(`[DeepLink] open-url ${url}`);
+    dispatchDeepLink(url);
+  });
+}
 
 const initialDeepLinkArg = process.argv.find((value) => value.startsWith(`${APP_PROTOCOL}://`));
 
 // App lifecycle
 void app.whenReady().then(async () => {
+  if (isUpdaterHelperMode) {
+    createUpdaterHelperWindow();
+    startUpdaterHelperPolling();
+    return;
+  }
   registerProtocolClient();
   if (initialDeepLinkArg) {
     dispatchDeepLink(initialDeepLinkArg);
@@ -3839,6 +4538,9 @@ void app.whenReady().then(async () => {
     }
   };
   loadDotEnv();
+  if (await handlePendingInstallOnLaunch()) {
+    return;
+  }
   setupAutoUpdater();
 
   app.on("web-contents-created", (_event, contents) => {
@@ -3950,6 +4652,11 @@ void app.whenReady().then(async () => {
 app.on("window-all-closed", async () => {
   writeMainInfo("[Lifecycle] All windows closed");
 
+  if (isUpdaterHelperMode) {
+    app.quit();
+    return;
+  }
+
   // On non-macOS platforms, quit the app when all windows are closed
   if (process.platform !== "darwin") {
     writeMainInfo("[Lifecycle] Quitting app (non-macOS)");
@@ -3958,6 +4665,9 @@ app.on("window-all-closed", async () => {
 });
 
 app.on("activate", () => {
+  if (isUpdaterHelperMode) {
+    return;
+  }
   if (BrowserWindow.getAllWindows().length === 0) {
     writeMainInfo("[Lifecycle] Reactivating app (create new window)");
     ensureWindow();
@@ -3966,6 +4676,11 @@ app.on("activate", () => {
 
 app.on("before-quit", async () => {
   writeMainLog("App about to quit");
+
+  if (isUpdaterHelperMode) {
+    stopUpdaterHelperPolling();
+    return;
+  }
 
   if (updateInstalling) {
     writeMainLog("[Updater] Update install in progress; skipping graceful gateway shutdown");
