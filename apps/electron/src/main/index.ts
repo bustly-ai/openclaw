@@ -2597,7 +2597,7 @@ async function startGateway(): Promise<boolean> {
   gatewayShutdownExpected = false;
   gatewayStartupInFlight = true;
   gatewayLastWorkerFailure = null;
-  emitGatewayLifecycle("starting", "Starting gateway...");
+  emitGatewayLifecycle("starting", "Starting bustly...");
 
   const cliPath = resolveOpenClawCliPath({
     info: (message) => writeMainInfo(message),

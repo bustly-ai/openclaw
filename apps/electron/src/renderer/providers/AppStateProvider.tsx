@@ -166,7 +166,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
               return false;
             }
             setGatewayPhase("checking");
-            setGatewayMessage("Waiting for gateway...");
+            setGatewayMessage("Waiting for bustly...");
             setGatewayCanRestoreLastGoodConfig(false);
             try {
               const connectConfig = await window.electronAPI.gatewayConnectConfig();
@@ -266,7 +266,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       }
       if (data.phase === "ready") {
         setGatewayPhase("checking");
-        setGatewayMessage("Waiting for gateway...");
+        setGatewayMessage("Waiting for bustly...");
         setGatewayCanRestoreLastGoodConfig(false);
         setError(null);
         void ensureGatewayReady().then(() => {
