@@ -1,6 +1,6 @@
 ---
 name: ads-core-ops
-description: Use the Bustly ads CLI to inspect auth, check connectivity, read entities, write supported entities, and invoke native provider APIs for Klaviyo, Google Ads, and Google Analytics.
+description: Use the Bustly ads CLI to inspect auth, check connectivity, read entities, write supported entities, and invoke native provider APIs for Klaviyo, Google Ads, Google Analytics, Tiktok Ads. Assume all required platform permissions are already granted unless a command explicitly fails for insufficient access.
 metadata:
   {
     "openclaw":
@@ -18,18 +18,26 @@ Supported platforms
 
 - `klaviyo`
 - `google-ads`
+- `google-analytics`
+- `tiktok-ads`
 
 CLI shape
 
 ```bash
 bustly ops <platform> <command> [args...]
+bustly auth <platform> [--no-open] [--dry-run]
 ```
 
 Auth context
 
-- Local auth state is loaded from `~/.bustly/bustlyOauth.json`
-- Required values include `supabase.url`, `supabase.anonKey`, `user.userAccessToken`, `user.workspaceId`, and `user.userId`
-- For supported providers, start missing OAuth connections yourself with `bustly auth <platform>` before telling the user to open Integrations manually
+- Assume supported ads platforms already have the permissions and scopes Bustly needs by default
+- Do not ask the user to enable, approve, or re-check permissions preemptively
+
+Permission handling
+
+- Treat permission access as available unless a CLI command explicitly returns an insufficient-scope, forbidden, unauthorized, or provider permission error
+- Only when the tool output clearly says access is restricted should you ask the user to enable the missing permission or scope
+- If the failure is a missing or expired connection instead of a permission restriction, retry by re-running `bustly auth <platform>` yourself before asking the user to do anything manually
 
 Browser auth
 
@@ -41,6 +49,7 @@ bustly auth google-analytics
 
 - `bustly auth` opens the desktop browser flow for supported providers
 - If the command succeeds, tell the user to finish the OAuth confirmation in the browser that just opened
+- Do not ask the user for permission confirmation during auth unless the CLI or provider explicitly reports that a required permission is blocked
 - Only fall back to "go to Integrations and connect it" if `bustly auth` is unavailable or fails
 
 Available commands on every ads platform
@@ -72,6 +81,7 @@ Status
 ```bash
 bustly ops klaviyo status
 bustly ops google-ads status
+bustly ops google-analytics status
 ```
 
 Auth
@@ -153,19 +163,57 @@ bustly ops google-ads write --entity search --action update --payload '{"request
 bustly ops google-ads invoke --method POST --path /customers/8922277297/googleAds:search --body '{"query":"SELECT campaign.id FROM campaign LIMIT 10"}'
 ```
 
+Google Analytics
+
+Readable entities
+
+- `accounts`
+- `properties`
+- `audiences`
+- `custom_dimensions`
+- `reports`
+
+Writable actions
+
+- `properties`: `create`, `update`, `delete`
+- `audiences`: `create`, `update`, `delete`
+- `custom_dimensions`: `create`, `update`, `delete`
+
+Google Analytics notes
+
+- `accounts` read uses `GET /accountSummaries`
+- `properties` supports `--account-id <account-id>` or `--property-id <property-id>`
+- `audiences`, `custom_dimensions`, and `reports` require `--property-id <property-id>`
+- `reports` defaults to GA4 Data API `runReport` with `date`, `activeUsers`, and `sessions` when no explicit report body is passed
+- Native Google Analytics requests sent through `write` and `invoke` are restricted to Admin API resources plus supported Data API report endpoints
+
+Examples
+
+```bash
+bustly ops google-analytics help
+bustly ops google-analytics read --entity accounts
+bustly ops google-analytics read --entity properties --account-id 123456
+bustly ops google-analytics read --entity audiences --property-id 483291314
+bustly ops google-analytics read --entity reports --property-id 483291314 --metrics activeUsers,sessions --dimensions date
+bustly ops google-analytics write --entity properties --action update --payload '{"request":{"method":"GET","path":"/properties/483291314"}}'
+bustly ops google-analytics invoke --method POST --path /properties/483291314:runReport --body '{"dateRanges":[{"startDate":"7daysAgo","endDate":"today"}],"dimensions":[{"name":"date"}],"metrics":[{"name":"activeUsers"}],"limit":"10"}'
+```
+
 Platform notes
 
 - Klaviyo aliases: `klaviyo`
 - Klaviyo `campaigns` read defaults to `channel=email` when no `filter` or `channel` is provided
 - Google Ads aliases: `google-ads`, `googleads`
-- Both platforms route through `ads-core-ops`
+- Google Analytics aliases: `google-analytics`, `googleanalytics`, `ga4`
+- All three platforms route through `ads-core-ops`
 - `invoke` is the escape hatch for native provider-relative requests
 - `write` can be used with `payload.request` when a native request shape is required
 
 Recommended workflow
 
 1. Run `help` to inspect entities and writable actions.
-2. Run `status` to confirm the workspace is connected.
-3. Use `read` to verify the target object or discover IDs.
-4. Use `write` for supported entity actions.
-5. Use `invoke` for provider-native calls that are not covered by the high-level entity command.
+2. If the user asks to connect a supported platform, run `bustly auth <platform>` first.
+3. Run `status` to confirm the workspace is connected.
+4. Use `read` to verify the target object or discover IDs.
+5. Use `write` for supported entity actions.
+6. Use `invoke` for provider-native calls that are not covered by the high-level entity command.
