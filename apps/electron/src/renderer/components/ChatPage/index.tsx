@@ -2458,11 +2458,7 @@ export default function ChatPage() {
       timelineArtifacts,
       outgoingArtifacts,
     });
-    shouldStickToBottomRef.current = true;
     setSessionTimeline(params.sessionKey, (prev) => [...prev, userItem].sort(compareTimeline));
-    window.requestAnimationFrame(() => {
-      scrollToBottom("auto");
-    });
     if (params.clearComposer) {
       setSessionDraft(params.sessionKey, "");
       setSessionAttachments(params.sessionKey, []);
@@ -2521,7 +2517,6 @@ export default function ChatPage() {
     getSessionRuntime,
     loadSessionUsage,
     modelLevel,
-    scrollToBottom,
     sending,
     setSessionActiveRunId,
     setSessionAttachments,
