@@ -17,6 +17,7 @@ import { listWorkspaceSummaries } from "../../lib/bustly-supabase";
 import { GatewayBrowserClient, type GatewayEventFrame } from "../../lib/gateway-client";
 import { createGatewayInstanceId } from "../../lib/gateway-instance-id";
 import {
+  buildChatRoute,
   deriveScenarioLabel,
   resolveSessionIconComponent,
 } from "../../lib/session-icons";
@@ -203,6 +204,14 @@ const PREVIEW_ZOOM_WHEEL_THRESHOLD = 45;
 const PREVIEW_ZOOM_STEP_THROTTLE_MS = 45;
 
 type ChatModelLevelId = (typeof CHAT_MODEL_LEVELS)[number]["id"];
+
+function resolveChatModelRef(level: ChatModelLevelId): string {
+  return (CHAT_MODEL_LEVELS.find((entry) => entry.id === level) ?? CHAT_MODEL_LEVELS[0]).modelRef;
+}
+
+function resolveBustlySampleRouteKey(level: ChatModelLevelId): string {
+  return resolveChatModelRef(level).replace(/^bustly\//, "");
+}
 
 function nextId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -2482,8 +2491,7 @@ export default function ChatPage() {
     ) {
       return false;
     }
-    const selectedModelRef =
-      (CHAT_MODEL_LEVELS.find((entry) => entry.id === modelLevel) ?? CHAT_MODEL_LEVELS[0]).modelRef;
+    const selectedModelRef = resolveChatModelRef(modelLevel);
     const patchModelResult = await window.electronAPI.gatewayPatchSessionModel(params.sessionKey, selectedModelRef);
     if (!patchModelResult.success) {
       setError(patchModelResult.error ?? "Failed to apply model selection.");
@@ -2631,6 +2639,8 @@ export default function ChatPage() {
           workspaceId: activeWorkspaceId,
           agentId: currentAgentId,
           label: nextLabel,
+          promptExcerpt: draft.trim(),
+          sampleRouteKey: resolveBustlySampleRouteKey(modelLevel),
         });
         if (!createSessionResult.success || !createSessionResult.sessionKey) {
           setError(createSessionResult.error ?? "Failed to create conversation.");
@@ -2638,22 +2648,12 @@ export default function ChatPage() {
         }
         targetSessionKey = createSessionResult.sessionKey;
         void navigate(
-          {
-            pathname: location.pathname,
-            search: new URLSearchParams({
-              agent: currentAgentId,
-              session: targetSessionKey,
-              label: currentScenarioLabel,
-              ...(currentScenarioIconId ? { icon: currentScenarioIconId } : {}),
-            }).toString()
-              ? `?${new URLSearchParams({
-                agent: currentAgentId,
-                session: targetSessionKey,
-                label: currentScenarioLabel,
-                ...(currentScenarioIconId ? { icon: currentScenarioIconId } : {}),
-              }).toString()}`
-              : "",
-          },
+          buildChatRoute({
+            agentId: currentAgentId,
+            sessionKey: targetSessionKey,
+            label: nextLabel,
+            icon: currentScenarioIconId,
+          }),
           { replace: true },
         );
         window.dispatchEvent(new Event("openclaw:sidebar-refresh-tasks"));
@@ -2680,7 +2680,6 @@ export default function ChatPage() {
     contextPaths,
     currentAgentId,
     currentScenarioIconId,
-    currentScenarioLabel,
     currentSessionKey,
     currentViewKey,
     draft,
@@ -2700,6 +2699,27 @@ export default function ChatPage() {
     await sendChatMessage();
   }, [sendChatMessage]);
 
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.onBustlySessionLabelUpdated((payload) => {
+      notifySidebarTasksRefresh();
+      if (payload.sessionKey !== currentSessionKeyRef.current) {
+        return;
+      }
+      void navigate(
+        buildChatRoute({
+          agentId: currentAgentId,
+          sessionKey: payload.sessionKey,
+          label: payload.label,
+          icon: currentScenarioIconId,
+        }),
+        { replace: true },
+      );
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [currentAgentId, currentScenarioIconId, navigate]);
+
   const handleRetryRun = useCallback(async (runId?: string) => {
     const retryPayload =
       (runId ? getSessionRuntime(currentSessionKey).retryPayloads.get(runId) : undefined) ??
@@ -2710,8 +2730,7 @@ export default function ChatPage() {
     if (!retryPayload || !retryRunId || !clientRef.current || !connected || subscriptionExpired || sending) {
       return;
     }
-    const selectedModelRef =
-      (CHAT_MODEL_LEVELS.find((entry) => entry.id === modelLevel) ?? CHAT_MODEL_LEVELS[0]).modelRef;
+    const selectedModelRef = resolveChatModelRef(modelLevel);
     const patchModelResult = await window.electronAPI.gatewayPatchSessionModel(currentSessionKey, selectedModelRef);
     if (!patchModelResult.success) {
       setError(patchModelResult.error ?? "Failed to apply model selection.");

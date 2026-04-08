@@ -49,6 +49,7 @@ import {
 } from "./oauth-handler.js";
 import * as BustlyOAuth from "./bustly-oauth.js";
 import { initializeBustlyWorkspaceBootstrap } from "./bustly-bootstrap.js";
+import { scheduleBustlySessionTitleGeneration } from "./bustly-session-title.js";
 import { resolveOpenClawAgentDir } from "../../../../src/agents/agent-paths";
 import { ensureAgentWorkspace } from "../../../../src/agents/workspace";
 import { loadConfig } from "../../../../src/config/config";
@@ -1402,8 +1403,11 @@ async function createBustlyWorkspaceAgentSession(params: {
   workspaceId: string;
   agentId: string;
   label?: string;
-}): Promise<BustlyWorkspaceAgentSessionSummary> {
-  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(params.workspaceId);
+  promptExcerpt?: string;
+  sampleRouteKey?: string;
+}): Promise<BustlyWorkspaceAgentSessionSummary & { sessionId: string }> {
+  const workspaceId = params.workspaceId.trim();
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(workspaceId);
   const agentId = params.agentId.trim();
   const agentPrefix = buildBustlyWorkspaceAgentPrefix(normalizedWorkspaceId);
   if (!normalizedWorkspaceId || !agentId.startsWith(agentPrefix)) {
@@ -1413,18 +1417,37 @@ async function createBustlyWorkspaceAgentSession(params: {
   const sessionKey = buildBustlyConversationSessionKey(agentId);
   const storePath = resolveDefaultSessionStorePath(agentId);
   const label = params.label?.trim() || "New conversation";
+  const sessionId = randomUUID();
   const updatedAt = Date.now();
   await updateSessionStore(storePath, (store) => {
     store[sessionKey] = {
-      sessionId: randomUUID(),
+      sessionId,
       updatedAt,
       label,
     };
     return store;
   });
+  const cfg = loadConfig();
+  scheduleBustlySessionTitleGeneration({
+    workspaceId,
+    agentId,
+    sessionKey,
+    sessionId,
+    seedLabel: label,
+    promptExcerpt: params.promptExcerpt,
+    sampleRouteKey: params.sampleRouteKey,
+    cfg,
+    onLabelUpdated: (payload) => {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        return;
+      }
+      mainWindow.webContents.send("bustly-session-label-updated", payload);
+    },
+  });
   return {
     agentId,
     sessionKey,
+    sessionId,
     name: label,
     updatedAt,
   };
@@ -3417,7 +3440,13 @@ function setupIpcHandlers(): void {
     "bustly-create-agent-session",
     async (
       _event,
-      params: { workspaceId: string; agentId: string; label?: string },
+      params: {
+        workspaceId: string;
+        agentId: string;
+        label?: string;
+        promptExcerpt?: string;
+        sampleRouteKey?: string;
+      },
     ) => {
       try {
         const result = await createBustlyWorkspaceAgentSession(params);

@@ -1339,6 +1339,48 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   ]);
 
   useEffect(() => {
+    const unsubscribe = window.electronAPI.onBustlySessionLabelUpdated((payload) => {
+      setSessionsByAgent((prev) => {
+        const agentSessions = prev[payload.agentId];
+        if (!agentSessions || agentSessions.length === 0) {
+          return prev;
+        }
+        let changed = false;
+        const nextSessions = agentSessions
+          .map((session) => {
+            if (session.id !== payload.sessionKey) {
+              return session;
+            }
+            changed = true;
+            return {
+              ...session,
+              name: payload.label,
+              updatedAt: payload.updatedAt ?? session.updatedAt,
+            };
+          })
+          .sort((left, right) => {
+            const leftUpdatedAt = left.updatedAt ?? 0;
+            const rightUpdatedAt = right.updatedAt ?? 0;
+            if (leftUpdatedAt !== rightUpdatedAt) {
+              return rightUpdatedAt - leftUpdatedAt;
+            }
+            return left.name.localeCompare(right.name);
+          });
+        if (!changed) {
+          return prev;
+        }
+        return {
+          ...prev,
+          [payload.agentId]: nextSessions,
+        };
+      });
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
     if (location.pathname !== "/chat") {
       return;
     }
@@ -1842,8 +1884,8 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                                   buildChatRoute({
                                     agentId: task.agentId,
                                     sessionKey: session.id,
-                                    label: task.name,
-                                    icon: task.icon,
+                                    label: session.name,
+                                    icon: session.icon ?? task.icon,
                                   }),
                                 );
                               }}
