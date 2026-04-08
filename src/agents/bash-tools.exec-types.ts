@@ -24,6 +24,7 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+  env?: Record<string, string>;
 };
 
 export type ExecElevatedDefaults = {

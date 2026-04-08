@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { stream, type AssistantMessage, type Message } from "@mariozechner/pi-ai";
 import {
   BUSTLY_PROVIDER_ID,
-  BUSTLY_STANDARD_CHAT_MODEL_ID,
 } from "../../../../src/agents/bustly-models";
 import { mergeBustlyRuntimeHeaders } from "../../../../src/agents/bustly-runtime-headers";
 import { getApiKeyForModel, requireApiKey } from "../../../../src/agents/model-auth";
@@ -22,17 +21,20 @@ import { supabaseFetch } from "./api/bustly.js";
 import { readBustlyOAuthState, refreshBustlyAccessToken } from "./bustly-oauth.js";
 import { writeMainInfo, writeMainWarn } from "./logger.js";
 
-const SESSION_TITLE_MAX_TOKENS = 48;
+const SESSION_TITLE_MAX_TOKENS = 24;
 const SESSION_TITLE_TIMEOUT_MS = 20_000;
+const SESSION_TITLE_MODEL_ID = process.env.BUSTLY_SESSION_TITLE_MODEL_ID?.trim() || "chat.advanced";
 const SESSION_TITLE_SYSTEM_PROMPT = [
-  "You write concise session titles from the first user task message.",
+  "Extract a concise task title from the user request text.",
+  "The title must describe the user's intended task, not an assistant response.",
+  "Do not answer, refuse, apologize, or explain capability limits.",
+  "Use the same language and script as the request; if uncertain, use English.",
   "Return only the title text.",
-  "Use the exact same language and script as the user's request.",
-  "Never translate the title into another language or script.",
-  "Be specific to the main task.",
   "Avoid quotes, markdown, emojis, numbering, boilerplate, and trailing punctuation.",
   'Avoid generic titles like "Conversation", "New conversation", "Help", or "Task".',
-  "Prefer 2-6 words for spaced languages.",
+  "Bad title example: I cannot generate or open images",
+  "Good title example: Generate and open a SpongeBob image",
+  "Prefer 2-8 words for spaced languages.",
 ].join("\n");
 
 const pendingSessionTitleJobs = new Map<string, Promise<void>>();
@@ -95,7 +97,7 @@ async function generateSessionTitle(params: {
   sessionId: string;
   sessionKey: string;
 }): Promise<string | null> {
-  const resolved = resolveModel(BUSTLY_PROVIDER_ID, BUSTLY_STANDARD_CHAT_MODEL_ID, undefined, params.cfg);
+  const resolved = resolveModel(BUSTLY_PROVIDER_ID, SESSION_TITLE_MODEL_ID, undefined, params.cfg);
   if (!resolved.model) {
     writeMainWarn("[Bustly Session Title] Skipped title generation: model unresolved");
     return null;
@@ -118,10 +120,20 @@ async function generateSessionTitle(params: {
     runId,
     sessionId: params.sessionId,
   });
+  const titleTaskPrompt = [
+    "Extract a short task title for this request.",
+    "Use the same language as the request text. If uncertain, use English.",
+    "The title must capture the user's intent, not an assistant reply.",
+    "",
+    "Request:",
+    params.promptExcerpt,
+    "",
+    "Only return the task title.",
+  ].join("\n");
   const messages: Message[] = [
     {
       role: "user",
-      content: [{ type: "text", text: params.promptExcerpt }],
+      content: [{ type: "text", text: titleTaskPrompt }],
       timestamp: Date.now(),
     },
   ];
@@ -146,6 +158,7 @@ async function generateSessionTitle(params: {
         options: {
           apiKey,
           maxTokens: SESSION_TITLE_MAX_TOKENS,
+          temperature: 0,
           signal: controller.signal,
           headers: Object.keys(headers).length > 0 ? headers : undefined,
         },

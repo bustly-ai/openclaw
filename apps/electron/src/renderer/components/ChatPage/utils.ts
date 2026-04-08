@@ -68,6 +68,7 @@ const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const markdownCache = new Map<string, string>();
 const WINDOWS_ABSOLUTE_PATH_RE = /^[A-Za-z]:[\\/]/;
 const HOME_RELATIVE_PATH_RE = /^~(?:[\\/]|$)/;
+const MEDIA_PREFIX_RE = /^\s*MEDIA\s*:\s*/i;
 
 export function isAbsoluteLocalMarkdownPath(value: string | null | undefined): boolean {
   const trimmed = value?.trim() ?? "";
@@ -80,6 +81,66 @@ export function isAbsoluteLocalMarkdownPath(value: string | null | undefined): b
     WINDOWS_ABSOLUTE_PATH_RE.test(trimmed) ||
     HOME_RELATIVE_PATH_RE.test(trimmed)
   );
+}
+
+function trimMarkdownPathWrappers(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  let next = trimmed;
+  if (next.startsWith("<") && next.endsWith(">")) {
+    next = next.slice(1, -1).trim();
+  }
+  if (
+    (next.startsWith("\"") && next.endsWith("\"")) ||
+    (next.startsWith("'") && next.endsWith("'")) ||
+    (next.startsWith("`") && next.endsWith("`"))
+  ) {
+    next = next.slice(1, -1).trim();
+  }
+  return next;
+}
+
+function decodeFileUrlPath(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "file:") {
+      return null;
+    }
+    // UNC path: file://server/share/path
+    if (parsed.hostname && parsed.hostname !== "localhost") {
+      const pathname = decodeURIComponent(parsed.pathname || "").replace(/\//g, "\\");
+      return `\\\\${parsed.hostname}${pathname}`;
+    }
+    let pathname = decodeURIComponent(parsed.pathname || "");
+    // Windows drive letter path arrives as /C:/...
+    if (WINDOWS_ABSOLUTE_PATH_RE.test(pathname.slice(1))) {
+      pathname = pathname.slice(1);
+    }
+    return pathname || null;
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeMarkdownLocalPath(value: string | null | undefined): string | null {
+  const raw = value?.trim() ?? "";
+  if (!raw) {
+    return null;
+  }
+  let normalized = trimMarkdownPathWrappers(raw.replace(MEDIA_PREFIX_RE, "").trim());
+  if (!normalized) {
+    return null;
+  }
+  if (/^file:\/\//i.test(normalized)) {
+    const decoded = decodeFileUrlPath(normalized);
+    if (!decoded) {
+      return null;
+    }
+    normalized = decoded;
+  }
+  return isAbsoluteLocalMarkdownPath(normalized) ? normalized : null;
 }
 
 function getCachedMarkdown(key: string): string | null {
@@ -110,21 +171,29 @@ function installHooks() {
   hooksInstalled = true;
 
   DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-    if (!(node instanceof HTMLAnchorElement)) {
+    if (node instanceof HTMLAnchorElement) {
+      const href = node.getAttribute("href");
+      if (!href) {
+        return;
+      }
+      const localPath = normalizeMarkdownLocalPath(href);
+      if (localPath) {
+        node.setAttribute("data-local-path", localPath);
+        node.setAttribute("rel", "noopener");
+        node.setAttribute("target", "_self");
+        return;
+      }
+      node.setAttribute("rel", "noreferrer noopener");
+      node.setAttribute("target", "_blank");
       return;
     }
-    const href = node.getAttribute("href");
-    if (!href) {
-      return;
+    if (node instanceof HTMLImageElement) {
+      const src = node.getAttribute("src");
+      const localPath = normalizeMarkdownLocalPath(src);
+      if (localPath) {
+        node.setAttribute("data-local-path", localPath);
+      }
     }
-    if (isAbsoluteLocalMarkdownPath(href)) {
-      node.setAttribute("data-local-path", href);
-      node.setAttribute("rel", "noopener");
-      node.setAttribute("target", "_self");
-      return;
-    }
-    node.setAttribute("rel", "noreferrer noopener");
-    node.setAttribute("target", "_blank");
   });
 }
 

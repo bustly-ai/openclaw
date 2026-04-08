@@ -216,6 +216,10 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** Logical run id for per-command skill/model-gateway attribution. */
+  runId?: string;
+  /** Logical session id for per-command skill/model-gateway attribution. */
+  sessionId?: string;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -360,6 +364,11 @@ export function createOpenClawCodingTools(options?: {
     return [tool];
   });
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
+  const runtimeExecEnv = {
+    ...(execDefaults.env ?? {}),
+    ...(options?.runId?.trim() ? { OPENCLAW_RUN_ID: options.runId.trim() } : {}),
+    ...(options?.sessionId?.trim() ? { OPENCLAW_SESSION_ID: options.sessionId.trim() } : {}),
+  };
   const execTool = createExecTool({
     ...execDefaults,
     host: options?.exec?.host ?? execConfig.host,
@@ -383,6 +392,7 @@ export function createOpenClawCodingTools(options?: {
     notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
     notifyOnExitEmptySuccess:
       options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
+    env: Object.keys(runtimeExecEnv).length > 0 ? runtimeExecEnv : undefined,
     sandbox: sandbox
       ? {
           containerName: sandbox.containerName,

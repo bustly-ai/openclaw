@@ -178,6 +178,16 @@ def resolve_run_id(args: argparse.Namespace) -> str:
     return run_id or f"skill-seedance-{uuid4()}"
 
 
+def resolve_session_id(args: argparse.Namespace) -> str:
+    # OPENCLAW_SESSION_ID is injected per skill subprocess (exec tool defaults/env),
+    # not as a process-global singleton across concurrent agent runs.
+    return (
+        (getattr(args, "session_id", "") or "").strip()
+        or os.environ.get("OPENCLAW_SESSION_ID", "").strip()
+        or os.environ.get("BUSTLY_SESSION_ID", "").strip()
+    )
+
+
 def create_task_url(base_url: str) -> str:
     base = (base_url or "").strip().rstrip("/")
     if not base:
@@ -675,12 +685,15 @@ def extract_usage(payload: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def build_headers(jwt: str, workspace_id: str, run_id: str) -> dict[str, str]:
-    return {
+def build_headers(jwt: str, workspace_id: str, run_id: str, session_id: str) -> dict[str, str]:
+    headers = {
         "Authorization": f"Bearer {jwt}",
         "X-Workspace-Id": workspace_id,
         "X-Run-Id": run_id,
     }
+    if session_id:
+        headers["X-Session-Id"] = session_id
+    return headers
 
 
 def create_video_task(
@@ -1231,6 +1244,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jwt", help="Bustly user JWT override (defaults to bustlyOauth.json user.userAccessToken)")
     parser.add_argument("--workspace-id", help="Workspace UUID override (defaults to bustlyOauth.json user.workspaceId)")
     parser.add_argument("--run-id", help="Logical task run id for usage aggregation")
+    parser.add_argument("--session-id", help="Logical task session id for usage aggregation")
     parser.add_argument("--print-json", action="store_true", help="Print full summary JSON")
     return parser.parse_args()
 
@@ -1348,8 +1362,9 @@ def main() -> None:
             return
 
         jwt, workspace_id = resolve_auth(args)
+        session_id = resolve_session_id(args)
         gateway_base_url = resolve_gateway_base_url()
-        headers = build_headers(jwt, workspace_id, run_id)
+        headers = build_headers(jwt, workspace_id, run_id, session_id)
 
         summary = {
             "run_id": run_id,

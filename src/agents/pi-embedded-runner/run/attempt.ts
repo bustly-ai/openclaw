@@ -465,12 +465,10 @@ export async function runEmbeddedAttempt(
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
           config: params.config,
-          runtimeEnv: { OPENCLAW_RUN_ID: params.runId },
         })
       : applySkillEnvOverrides({
           skills: skillEntries ?? [],
           config: params.config,
-          runtimeEnv: { OPENCLAW_RUN_ID: params.runId },
         });
 
     const skillsPrompt = resolveSkillsPromptForRun({
@@ -548,6 +546,8 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          runId: params.runId,
+          sessionId: params.sessionId,
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     const allowedToolNames = collectAllowedToolNames({
