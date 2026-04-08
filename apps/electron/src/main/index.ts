@@ -399,6 +399,7 @@ if (isUpdaterHelperMode) {
 let gatewayProcess: ChildProcess | null = null;
 let gatewayStartPromise: Promise<boolean> | null = null;
 let mainWindow: BrowserWindow | null = null;
+let isAppQuitting = false;
 let needsOnboardAtLaunch = false;
 let gatewayPort: number = 17999;
 let gatewayBind: string = "loopback";
@@ -3211,6 +3212,15 @@ function createWindow(): void {
     loadRendererWindow(mainWindow);
   }
 
+  mainWindow.on("close", (event) => {
+    if (isAppQuitting) {
+      return;
+    }
+    event.preventDefault();
+    writeMainInfo("[Lifecycle] Hiding main window instead of closing");
+    mainWindow?.hide();
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -3446,6 +3456,10 @@ function setupAutoUpdater(): void {
 }
 
 function ensureWindow(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    focusMainWindow();
+    return;
+  }
   if (app.isReady()) {
     createWindow();
     return;
@@ -4724,6 +4738,11 @@ app.on("activate", () => {
   if (isUpdaterHelperMode) {
     return;
   }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    writeMainInfo("[Lifecycle] Reactivating app (show existing window)");
+    focusMainWindow();
+    return;
+  }
   if (BrowserWindow.getAllWindows().length === 0) {
     writeMainInfo("[Lifecycle] Reactivating app (create new window)");
     ensureWindow();
@@ -4732,6 +4751,7 @@ app.on("activate", () => {
 
 app.on("before-quit", async () => {
   writeMainLog("App about to quit");
+  isAppQuitting = true;
 
   if (isUpdaterHelperMode) {
     stopUpdaterHelperPolling();
