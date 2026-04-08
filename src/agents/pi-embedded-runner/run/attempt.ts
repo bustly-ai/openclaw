@@ -916,6 +916,7 @@ export async function runEmbeddedAttempt(
             optionHeaders: options?.headers,
             workspaceId,
             runId: params.runId,
+            sessionId: params.sessionId,
           });
           if (workspaceId) {
             warnedMissingWorkspace = false;
