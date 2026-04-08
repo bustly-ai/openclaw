@@ -48,6 +48,11 @@ export type BrowserConfig = {
   noSandbox?: boolean;
   /** If true: never launch; only attach to an existing browser. Default: false */
   attachOnly?: boolean;
+  /**
+   * Public URL where users can download the Bustly Browser Relay extension package.
+   * Used in relay troubleshooting guidance shown to agents/operators.
+   */
+  relayExtensionDownloadUrl?: string;
   /** Default profile to use when profile param is omitted. Default: "chrome" */
   defaultProfile?: string;
   /** Named browser profiles with explicit CDP ports or URLs. */

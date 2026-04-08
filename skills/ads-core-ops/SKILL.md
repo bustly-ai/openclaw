@@ -1,6 +1,6 @@
 ---
 name: ads-core-ops
-description: Use the Bustly ads CLI to inspect auth, check connectivity, read entities, write supported entities, and invoke native provider APIs for Klaviyo and Google Ads.
+description: Use the Bustly ads CLI to inspect auth, check connectivity, read entities, write supported entities, and invoke native provider APIs for Klaviyo, Google Ads, and Google Analytics.
 metadata:
   {
     "openclaw":
@@ -29,6 +29,19 @@ Auth context
 
 - Local auth state is loaded from `~/.bustly/bustlyOauth.json`
 - Required values include `supabase.url`, `supabase.anonKey`, `user.userAccessToken`, `user.workspaceId`, and `user.userId`
+- For supported providers, start missing OAuth connections yourself with `bustly auth <platform>` before telling the user to open Integrations manually
+
+Browser auth
+
+```bash
+bustly auth klaviyo
+bustly auth google-ads
+bustly auth google-analytics
+```
+
+- `bustly auth` opens the desktop browser flow for supported providers
+- If the command succeeds, tell the user to finish the OAuth confirmation in the browser that just opened
+- Only fall back to "go to Integrations and connect it" if `bustly auth` is unavailable or fails
 
 Available commands on every ads platform
 

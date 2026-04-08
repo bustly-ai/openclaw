@@ -15,6 +15,27 @@ type LoopbackBrowserAuthDeps = {
   getBridgeAuthForPort: typeof getBridgeAuthForPort;
 };
 
+type BrowserControlResponseError = Error & {
+  __browserControlResponse: true;
+  status: number;
+};
+
+function createBrowserControlResponseError(status: number, message: string): BrowserControlResponseError {
+  const err = new Error(message) as BrowserControlResponseError;
+  err.__browserControlResponse = true;
+  err.status = status;
+  return err;
+}
+
+function isBrowserControlResponseError(err: unknown): err is BrowserControlResponseError {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "__browserControlResponse" in err &&
+    (err as { __browserControlResponse?: unknown }).__browserControlResponse === true
+  );
+}
+
 function isAbsoluteHttp(url: string): boolean {
   return /^https?:\/\//i.test(url.trim());
 }
@@ -235,10 +256,13 @@ export async function fetchBrowserJson<T>(
         result.body && typeof result.body === "object" && "error" in result.body
           ? String((result.body as { error?: unknown }).error)
           : `HTTP ${result.status}`;
-      throw new Error(message);
+      throw createBrowserControlResponseError(result.status, message);
     }
     return result.body as T;
   } catch (err) {
+    if (isBrowserControlResponseError(err)) {
+      throw err;
+    }
     throw enhanceBrowserFetchError(url, err, timeoutMs);
   }
 }

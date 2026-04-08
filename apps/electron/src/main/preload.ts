@@ -97,7 +97,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("bustly-list-agent-sessions", workspaceId, agentId),
   bustlyCreateAgent: (workspaceId: string, name: string, icon?: string, workspaceName?: string) =>
     ipcRenderer.invoke("bustly-create-agent", workspaceId, name, icon, workspaceName),
-  bustlyCreateAgentSession: (params: { workspaceId: string; agentId: string; label?: string }) =>
+  bustlyCreateAgentSession: (params: {
+    workspaceId: string;
+    agentId: string;
+    label?: string;
+    promptExcerpt?: string;
+    sampleRouteKey?: string;
+  }) =>
     ipcRenderer.invoke("bustly-create-agent-session", params),
   bustlyUpdateAgent: (params: { workspaceId: string; agentId: string; name?: string; icon?: string }) =>
     ipcRenderer.invoke("bustly-update-agent", params),
@@ -160,5 +166,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
       callback(payload);
     ipcRenderer.on("deep-link", listener);
     return () => ipcRenderer.removeListener("deep-link", listener);
+  },
+  onBustlySessionLabelUpdated: (
+    callback: (payload: { agentId: string; sessionKey: string; label: string; updatedAt: number | null }) => void,
+  ) => {
+    const listener = (
+      _event: IpcRendererEvent,
+      payload: { agentId: string; sessionKey: string; label: string; updatedAt: number | null },
+    ) => callback(payload);
+    ipcRenderer.on("bustly-session-label-updated", listener);
+    return () => ipcRenderer.removeListener("bustly-session-label-updated", listener);
   },
 });

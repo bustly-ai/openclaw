@@ -25,6 +25,7 @@ import {
   ensureChromeExtensionRelayServer,
   stopChromeExtensionRelayServer,
 } from "./extension-relay.js";
+import { buildRelayGuidanceMessage } from "./relay-guidance.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
@@ -284,7 +285,11 @@ function createProfileContext(
 
     if (isExtension && remoteCdp) {
       throw new Error(
-        `Profile "${profile.name}" uses driver=extension but cdpUrl is not loopback (${profile.cdpUrl}).`,
+        buildRelayGuidanceMessage({
+          profile,
+          kind: "relay_unreachable",
+          detail: `driver=extension requires a loopback cdpUrl, but got ${profile.cdpUrl}.`,
+        }),
       );
     }
 
@@ -295,7 +300,11 @@ function createProfileContext(
           // continue: we still need the extension to connect for CDP websocket.
         } else {
           throw new Error(
-            `Chrome extension relay for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`,
+            buildRelayGuidanceMessage({
+              profile,
+              kind: "relay_unreachable",
+              detail: "The local relay HTTP endpoint did not respond after startup.",
+            }),
           );
         }
       }
@@ -303,9 +312,24 @@ function createProfileContext(
       if (await isReachable(600)) {
         return;
       }
-      // Relay server is up, but no attached tab yet. Prompt user to attach.
+      const relayStatus = await fetchJson<{ connected?: boolean }>(
+        appendCdpPath(profile.cdpUrl, "/extension/status"),
+        600,
+      ).catch(() => null);
+      if (relayStatus?.connected === false) {
+        throw new Error(
+          buildRelayGuidanceMessage({
+            profile,
+            kind: "extension_not_connected",
+          }),
+        );
+      }
       throw new Error(
-        `Chrome extension relay is running, but no tab is connected. Click the OpenClaw Chrome extension icon on a tab to attach it (profile "${profile.name}").`,
+        buildRelayGuidanceMessage({
+          profile,
+          kind: "relay_unreachable",
+          detail: "Relay HTTP is up but CDP websocket handshake failed.",
+        }),
       );
     }
 
@@ -376,8 +400,10 @@ function createProfileContext(
     if (tabs1.length === 0) {
       if (profile.driver === "extension") {
         throw new Error(
-          `tab not found (no attached Chrome tabs for profile "${profile.name}"). ` +
-            "Click the OpenClaw Browser Relay toolbar icon on the tab you want to control (badge ON).",
+          buildRelayGuidanceMessage({
+            profile,
+            kind: "no_attached_tab",
+          }),
         );
       }
       await openTab("about:blank");
@@ -664,6 +690,9 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     }
     if (msg.includes("tab not found")) {
       return { status: 404, message: msg };
+    }
+    if (msg.includes("Bustly Browser Relay")) {
+      return { status: 503, message: msg };
     }
     if (msg.includes("not found")) {
       return { status: 404, message: msg };

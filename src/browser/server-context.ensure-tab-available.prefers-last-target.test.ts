@@ -118,6 +118,8 @@ describe("browser server-context ensureTabAvailable", () => {
 
     const ctx = createBrowserRouteContext({ getState: () => state });
     const chrome = ctx.forProfile("chrome");
-    await expect(chrome.ensureTabAvailable()).rejects.toThrow(/no attached Chrome tabs/i);
+    await expect(chrome.ensureTabAvailable()).rejects.toThrow(
+      /no browser tab is attached|relay setup checklist/i,
+    );
   });
 });

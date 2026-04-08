@@ -599,6 +599,7 @@ export async function runFastReplyGate(params: {
       modelHeaders: (resolved.model as { headers?: Record<string, string> }).headers,
       workspaceId,
       runId: visibleRunId,
+      sessionId: params.followupRun.run.sessionId,
     });
 
     let message: AssistantMessage;

@@ -20,6 +20,10 @@ import {
   browserStop,
   browserTabs,
 } from "../../browser/client.js";
+import {
+  DEFAULT_RELAY_EXTENSION_DOWNLOAD_URL,
+  resolveRelayExtensionDownloadUrl,
+} from "../../browser/relay-guidance.js";
 import { resolveBrowserConfig } from "../../browser/config.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
@@ -250,6 +254,7 @@ export function createBrowserTool(opts?: {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
+  const relayDownloadUrl = resolveRelayExtensionDownloadUrl() ?? DEFAULT_RELAY_EXTENSION_DOWNLOAD_URL;
   return {
     label: "Browser",
     name: "browser",
@@ -257,8 +262,9 @@ export function createBrowserTool(opts?: {
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
       'Profiles: use profile="chrome" for Chrome extension relay takeover (your existing Chrome tabs). Use profile="openclaw" for the isolated openclaw-managed browser.',
       'If the user mentions the Chrome extension / Browser Relay / toolbar button / “attach tab”, ALWAYS use profile="chrome" (do not ask which profile).',
+      'Name this extension only as "Bustly Browser Relay" in user-facing text (never call it "OpenClaw Browser Relay").',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
-      "Chrome extension relay needs an attached tab: user must click the OpenClaw Browser Relay toolbar icon on the tab (badge ON). If no tab is connected, ask them to attach it.",
+      `Chrome extension relay needs an attached tab: user must click the Bustly Browser Relay toolbar icon on the tab (badge ON). If extension is missing, install it first: ${relayDownloadUrl} (or run openclaw browser extension install).`,
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
@@ -809,7 +815,7 @@ export function createBrowserTool(opts?: {
                 : await browserTabs(baseUrl, { profile }).catch(() => []);
               if (!tabs.length) {
                 throw new Error(
-                  "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.",
+                  `No Chrome tabs are attached via Bustly Browser Relay. Install/download: ${relayDownloadUrl}. Then click the toolbar icon on the tab you want to control (badge ON), and retry.`,
                   { cause: err },
                 );
               }

@@ -51,6 +51,17 @@ function collectSkillBins(entries: SkillEntry[]): string[] {
   return [...bins].toSorted();
 }
 
+function normalizeAllowBundled(input: unknown): string[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  return [...new Set(input.map((entry) => String(entry).trim()).filter(Boolean))];
+}
+
+function normalizeSkillToken(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s_]+/g, "-");
+}
+
 export const skillsHandlers: GatewayRequestHandlers = {
   "skills.status": ({ params, respond }) => {
     if (!validateSkillsStatusParams(params)) {
@@ -151,11 +162,32 @@ export const skillsHandlers: GatewayRequestHandlers = {
       env?: Record<string, string>;
     };
     const cfg = loadConfig();
+    const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    const allEntries = loadWorkspaceSkillEntries(defaultWorkspaceDir, { config: cfg });
+    const matchedEntry = allEntries.find((entry) => {
+      const metadataSkillKey = entry.metadata?.skillKey?.trim();
+      return metadataSkillKey === p.skillKey || entry.skill.name === p.skillKey;
+    });
+    const isBundledSkill = matchedEntry?.skill.source === "openclaw-bundled";
+    const normalizedSkillKey = normalizeSkillToken(p.skillKey);
+    const normalizedSkillName = matchedEntry
+      ? normalizeSkillToken(matchedEntry.skill.name)
+      : normalizedSkillKey;
     const skills = cfg.skills ? { ...cfg.skills } : {};
     const entries = skills.entries ? { ...skills.entries } : {};
     const current = entries[p.skillKey] ? { ...entries[p.skillKey] } : {};
     if (typeof p.enabled === "boolean") {
       current.enabled = p.enabled;
+      if (p.enabled && isBundledSkill) {
+        const nextSet = new Set(normalizeAllowBundled(skills.allowBundled));
+        nextSet.add(p.skillKey);
+        if (matchedEntry?.skill.name) {
+          nextSet.add(matchedEntry.skill.name);
+        }
+        nextSet.add(normalizedSkillKey);
+        nextSet.add(normalizedSkillName);
+        skills.allowBundled = [...nextSet];
+      }
     }
     if (typeof p.apiKey === "string") {
       const trimmed = normalizeSecretInput(p.apiKey);
