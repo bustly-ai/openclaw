@@ -33,6 +33,8 @@ type SkillStatusEntry = {
   homepage?: string;
   primaryEnv?: string;
   disabled: boolean;
+  blockedByAllowlist: boolean;
+  eligible: boolean;
 };
 
 type SkillStatusReport = {
@@ -201,7 +203,7 @@ function toSkillItem(skill: SkillStatusEntry, index: number): SkillItemData {
     name: skill.name,
     description: skill.description,
     icon: INITIAL_SKILLS.find((item) => item.name === skill.name)?.icon ?? LightningIcon,
-    enabled: !skill.disabled,
+    enabled: !skill.disabled && !skill.blockedByAllowlist,
     skillKey: skill.skillKey,
     source: skill.source,
     filePath: skill.filePath,
@@ -650,7 +652,17 @@ export default function SkillPage() {
       clientRef.current = null;
     };
   }, []);
-  const skillRows = useMemo(() => skills, [skills]);
+  const skillRows = useMemo(() => {
+    return [...skills].sort((left, right) => {
+      if (left.enabled !== right.enabled) {
+        return left.enabled ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name, undefined, {
+        sensitivity: "base",
+        numeric: true,
+      });
+    });
+  }, [skills]);
 
   return (
     <div className="custom-scrollbar h-full overflow-y-auto">

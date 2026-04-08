@@ -112,6 +112,12 @@ Swabble/build/
 dist/protocol.schema.json
 .ant-colony/
 
+# Local generated bundled-skill manifest
+skills/.bustly-default-enabled.json
+
+# Local env backups
+apps/electron/.env*.bak-*
+
 # Eclipse
 **/.project
 **/.classpath

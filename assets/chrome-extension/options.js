@@ -1,4 +1,3 @@
-import { deriveRelayToken } from './background-utils.js'
 import { classifyRelayCheckException, classifyRelayCheckResponse } from './options-validation.js'
 
 const DEFAULT_PORT = 18792
@@ -23,21 +22,13 @@ function setStatus(kind, message) {
   status.textContent = message || ''
 }
 
-async function checkRelayReachable(port, token) {
+async function checkRelayReachable(port) {
   const url = `http://127.0.0.1:${port}/json/version`
-  const trimmedToken = String(token || '').trim()
-  if (!trimmedToken) {
-    setStatus('error', 'Gateway token required. Save your gateway token to connect.')
-    return
-  }
   try {
-    const relayToken = await deriveRelayToken(trimmedToken, port)
-    // Delegate the fetch to the background service worker to bypass
-    // CORS preflight on the custom x-openclaw-relay-token header.
+    // Delegate the fetch to the background service worker to bypass CORS preflight.
     const res = await chrome.runtime.sendMessage({
       type: 'relayCheck',
       url,
-      token: relayToken,
     })
     const result = classifyRelayCheckResponse(res, port)
     if (result.action === 'throw') throw new Error(result.error)
@@ -49,25 +40,20 @@ async function checkRelayReachable(port, token) {
 }
 
 async function load() {
-  const stored = await chrome.storage.local.get(['relayPort', 'gatewayToken'])
+  const stored = await chrome.storage.local.get(['relayPort'])
   const port = clampPort(stored.relayPort)
-  const token = String(stored.gatewayToken || '').trim()
   document.getElementById('port').value = String(port)
-  document.getElementById('token').value = token
   updateRelayUrl(port)
-  await checkRelayReachable(port, token)
+  await checkRelayReachable(port)
 }
 
 async function save() {
   const portInput = document.getElementById('port')
-  const tokenInput = document.getElementById('token')
   const port = clampPort(portInput.value)
-  const token = String(tokenInput.value || '').trim()
-  await chrome.storage.local.set({ relayPort: port, gatewayToken: token })
+  await chrome.storage.local.set({ relayPort: port })
   portInput.value = String(port)
-  tokenInput.value = token
   updateRelayUrl(port)
-  await checkRelayReachable(port, token)
+  await checkRelayReachable(port)
 }
 
 document.getElementById('save').addEventListener('click', () => void save())

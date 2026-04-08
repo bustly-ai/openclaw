@@ -30,23 +30,13 @@ const { buildRelayWsUrl, deriveRelayToken, isRetryableReconnectError, reconnectD
   await loadBackgroundUtils();
 
 describe("chrome extension background utils", () => {
-  it("derives relay token as HMAC-SHA256 of gateway token and port", async () => {
-    const relayToken = await deriveRelayToken("test-gateway-token", 18792);
-    expect(relayToken).toMatch(/^[0-9a-f]{64}$/);
-    const relayToken2 = await deriveRelayToken("test-gateway-token", 18792);
-    expect(relayToken).toBe(relayToken2);
-    const differentPort = await deriveRelayToken("test-gateway-token", 9999);
-    expect(relayToken).not.toBe(differentPort);
+  it("keeps deriveRelayToken as a compatibility no-op in relay-only local mode", async () => {
+    expect(await deriveRelayToken("test-gateway-token", 18792)).toBe("");
   });
 
-  it("builds websocket url with derived relay token", async () => {
+  it("builds websocket url without token query params", async () => {
     const url = await buildRelayWsUrl(18792, "test-token");
-    expect(url).toMatch(/^ws:\/\/127\.0\.0\.1:18792\/extension\?token=[0-9a-f]{64}$/);
-  });
-
-  it("throws when gateway token is missing", async () => {
-    await expect(buildRelayWsUrl(18792, "")).rejects.toThrow(/Missing gatewayToken/);
-    await expect(buildRelayWsUrl(18792, "   ")).rejects.toThrow(/Missing gatewayToken/);
+    expect(url).toBe("ws://127.0.0.1:18792/extension");
   });
 
   it("uses exponential backoff from attempt index", () => {
@@ -95,12 +85,8 @@ describe("chrome extension background utils", () => {
     ).toBe(1000);
   });
 
-  it("marks missing token errors as non-retryable", () => {
-    expect(
-      isRetryableReconnectError(
-        new Error("Missing gatewayToken in extension settings (chrome.storage.local.gatewayToken)"),
-      ),
-    ).toBe(false);
+  it("treats missing token errors as retryable in scheme A", () => {
+    expect(isRetryableReconnectError(new Error("Missing gatewayToken"))).toBe(true);
   });
 
   it("keeps transient network errors retryable", () => {
