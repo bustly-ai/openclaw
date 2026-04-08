@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import * as Sentry from "@sentry/electron/renderer";
 
 type WorkspaceMemberCountRow = {
   workspace_id: string;
@@ -239,6 +240,126 @@ let cachedWorkspaceSummaryResult: WorkspaceSummaryResult | null = null;
 let pendingWorkspaceSummaryKey = "";
 let pendingWorkspaceSummaryPromise: Promise<WorkspaceSummaryResult> | null = null;
 const WORKSPACE_SUMMARY_CACHE_TTL_MS = 2_000;
+const SUPABASE_REQUEST_RETRY_DELAYS_MS = [250, 750];
+
+function isErrorWithMessage(value: unknown): value is { message: string } {
+  return typeof value === "object" && value !== null && "message" in value && typeof (value as { message: unknown }).message === "string";
+}
+
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (isErrorWithMessage(error)) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function captureSupabaseRequestError(error: unknown, context: {
+  operation: string;
+  attempt: number;
+  maxAttempts: number;
+  force: boolean;
+  url: string;
+  userId: string;
+  workspaceId: string;
+}): void {
+  try {
+    Sentry.withScope((scope) => {
+      scope.setTag("surface", "supabase_request");
+      scope.setTag("operation", context.operation);
+      scope.setTag("retry_attempt", String(context.attempt));
+      scope.setTag("retry_max", String(context.maxAttempts));
+      scope.setExtra("force", context.force);
+      scope.setExtra("supabase_url", context.url);
+      scope.setExtra("user_id", context.userId);
+      scope.setExtra("workspace_id", context.workspaceId);
+      if (error instanceof Error) {
+        Sentry.captureException(error);
+        return;
+      }
+      Sentry.captureMessage(`Supabase request failed (${context.operation}): ${toErrorMessage(error)}`);
+    });
+  } catch {
+    // Never let reporting failures affect workspace loading.
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export type SupabaseRetryOptions = {
+  operation: string;
+  force: boolean;
+  retryDelaysMs?: number[];
+};
+
+export async function runSupabaseRequestWithRetry<T>(
+  request: (params: {
+    client: SupabaseClient;
+    config: BustlySupabaseConfig;
+    attempt: number;
+    maxAttempts: number;
+  }) => Promise<T>,
+  options: SupabaseRetryOptions,
+): Promise<T> {
+  const retryDelaysMs = options.retryDelaysMs ?? SUPABASE_REQUEST_RETRY_DELAYS_MS;
+  const maxAttempts = retryDelaysMs.length + 1;
+  let lastError: unknown = null;
+  let lastContext = {
+    operation: options.operation,
+    attempt: 1,
+    maxAttempts,
+    force: options.force,
+    url: "",
+    userId: "",
+    workspaceId: "",
+  };
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const { client, config } = await getBustlySupabaseClient();
+      lastContext = {
+        operation: options.operation,
+        attempt,
+        maxAttempts,
+        force: options.force,
+        url: config.url,
+        userId: config.userId,
+        workspaceId: config.workspaceId,
+      };
+      return await request({ client, config, attempt, maxAttempts });
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts) {
+        const delayMs = retryDelaysMs[attempt - 1] ?? retryDelaysMs.at(-1) ?? 500;
+        try {
+          Sentry.addBreadcrumb({
+            category: "supabase_request",
+            level: "warning",
+            message: `Supabase request "${options.operation}" attempt ${attempt} failed; retrying in ${delayMs}ms.`,
+            data: {
+              operation: options.operation,
+              attempt,
+              maxAttempts,
+              force: options.force,
+              error: toErrorMessage(error),
+            },
+          });
+        } catch {
+          // Never let reporting failures affect request flow.
+        }
+        await sleep(delayMs);
+        continue;
+      }
+    }
+  }
+
+  captureSupabaseRequestError(lastError, lastContext);
+  throw lastError;
+}
 
 function buildSupabaseConfigKey(config: BustlySupabaseConfig): string {
   return [
@@ -310,8 +431,7 @@ export async function listWorkspaceSummaries(options?: { force?: boolean }): Pro
     return pendingWorkspaceSummaryPromise;
   }
 
-  const pendingRequest = (async () => {
-    const { client } = await getBustlySupabaseClient();
+  const pendingRequest = runSupabaseRequestWithRetry(async ({ client, config: currentConfig }) => {
     const workspacesRes = await client
       .from("workspaces")
       .select(`
@@ -339,7 +459,7 @@ export async function listWorkspaceSummaries(options?: { force?: boolean }): Pro
         )
       `)
       .eq("status", "ACTIVE")
-      .eq("workspace_members.user_id", config.userId)
+      .eq("workspace_members.user_id", currentConfig.userId)
       .order("created_at", { ascending: false });
 
     if (workspacesRes.error) {
@@ -408,15 +528,18 @@ export async function listWorkspaceSummaries(options?: { force?: boolean }): Pro
       })
       .filter((item): item is WorkspaceSummary => Boolean(item));
 
-    const activeWorkspaceId = workspaces.some((workspace) => workspace.id === config.workspaceId)
-      ? config.workspaceId
+    const activeWorkspaceId = workspaces.some((workspace) => workspace.id === currentConfig.workspaceId)
+      ? currentConfig.workspaceId
       : (workspaces[0]?.id ?? "");
 
     return {
       workspaces,
       activeWorkspaceId,
     };
-  })();
+  }, {
+    operation: "listWorkspaceSummaries",
+    force,
+  });
 
   pendingWorkspaceSummaryKey = configKey;
   pendingWorkspaceSummaryPromise = pendingRequest;

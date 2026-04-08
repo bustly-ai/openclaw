@@ -738,74 +738,6 @@ function InputArtifactCard({
   );
 }
 
-const COMPOSER_PLACEHOLDERS = [
-  "Compare this month's revenue with last year...",
-  "Identify my most loyal customers...",
-  "Which products are low on stock?",
-  "Summarize the latest campaign performance...",
-  "Draft a marketing email for the new collection...",
-];
-
-function PlaceholderTicker({ items }: { items: string[] }) {
-  const list = useMemo(() => {
-    const trimmed = items.map((item) => item.trim()).filter(Boolean);
-    if (trimmed.length === 0) {
-      return [];
-    }
-    return [...trimmed, trimmed[0]];
-  }, [items]);
-  const [index, setIndex] = useState(0);
-  const [transitionEnabled, setTransitionEnabled] = useState(true);
-
-  useEffect(() => {
-    if (list.length <= 1) {
-      return undefined;
-    }
-    const timer = window.setInterval(() => {
-      setIndex((value) => value + 1);
-      setTransitionEnabled(true);
-    }, 2600);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [list.length]);
-
-  useEffect(() => {
-    if (list.length <= 1 || index !== list.length - 1) {
-      return undefined;
-    }
-    const timeout = window.setTimeout(() => {
-      setTransitionEnabled(false);
-      setIndex(0);
-    }, 520);
-    return () => {
-      window.clearTimeout(timeout);
-    };
-  }, [index, list.length]);
-
-  if (list.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className="pointer-events-none absolute top-1 left-1 right-14 h-6 overflow-hidden">
-      <div
-        className="flex flex-col"
-        style={{
-          transform: `translateY(-${index * 24}px)`,
-          transition: transitionEnabled ? "transform 0.5s cubic-bezier(0.4, 0, 0.2, 1)" : "none",
-        }}
-      >
-        {list.map((item, itemIndex) => (
-          <div key={`${itemIndex}-${item}`} className="flex h-6 items-center truncate text-base font-normal leading-6 text-text-sub/40">
-            {item}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export default function ChatPage() {
   const { ensureGatewayReady, gatewayReady } = useAppState();
   const { showGlobalLoading, hideGlobalLoading, showLoader, hideLoader } = useGlobalLoader();
@@ -906,13 +838,6 @@ export default function ChatPage() {
     !subscriptionExpired &&
     !isSessionRunning &&
     (draft.trim() || attachments.length > 0 || contextPaths.length > 0);
-  const showPlaceholderTicker =
-    !pageResolving &&
-    connected &&
-    !subscriptionExpired &&
-    !draft &&
-    attachments.length === 0 &&
-    contextPaths.length === 0;
   const updateScrollBottomState = useCallback(() => {
     const element = scrollRef.current;
     if (!element) {
@@ -3436,17 +3361,7 @@ export default function ChatPage() {
                     rows={1}
                     value={draft}
                     disabled={pageResolving || !connected || sending || subscriptionExpired}
-                    placeholder={
-                      pageResolving
-                        ? ""
-                        : subscriptionExpired
-                        ? "Renew your plan to continue..."
-                        : connected
-                          ? showPlaceholderTicker
-                            ? ""
-                            : "Ask for follow-up changes..."
-                          : "Connect to gateway to chat..."
-                    }
+                    placeholder=""
                     className="min-h-[44px] max-h-[200px] w-full resize-none border-none bg-transparent px-1 py-1 pr-14 text-base font-normal leading-6 text-text-main outline-none placeholder:text-text-sub/70 disabled:cursor-not-allowed disabled:text-[#8B93AA]"
                     onChange={(e) => setSessionDraft(currentViewKey, e.target.value)}
                     onCompositionStart={() => {
@@ -3492,7 +3407,6 @@ export default function ChatPage() {
                     }}
                   />
 
-                  {!pageResolving && showPlaceholderTicker ? <PlaceholderTicker items={COMPOSER_PLACEHOLDERS} /> : null}
                 </div>
 
                 {!pageResolving && activeRunId ? (
