@@ -5,11 +5,6 @@ import { createServer } from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
 import { isLoopbackAddress, isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
-import {
-  probeAuthenticatedOpenClawRelay,
-  resolveRelayAcceptedTokensForPort,
-  resolveRelayAuthTokenForPort,
-} from "./extension-relay-auth.js";
 
 type CdpCommand = {
   id: number;
@@ -81,7 +76,8 @@ type RelayTarget = {
   targetInfo: TargetInfo;
 };
 
-const RELAY_AUTH_HEADER = "x-openclaw-relay-token";
+const OPENCLAW_RELAY_BROWSER = "OpenClaw/extension-relay";
+const RELAY_PROBE_TIMEOUT_MS = 500;
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   if (!value) {
@@ -91,22 +87,6 @@ function headerValue(value: string | string[] | undefined): string | undefined {
     return value[0];
   }
   return value;
-}
-
-function getHeader(req: IncomingMessage, name: string): string | undefined {
-  return headerValue(req.headers[name.toLowerCase()]);
-}
-
-function getRelayAuthTokenFromRequest(req: IncomingMessage, url?: URL): string | undefined {
-  const headerToken = getHeader(req, RELAY_AUTH_HEADER)?.trim();
-  if (headerToken) {
-    return headerToken;
-  }
-  const queryToken = url?.searchParams.get("token")?.trim();
-  if (queryToken) {
-    return queryToken;
-  }
-  return undefined;
 }
 
 export type ChromeExtensionRelayServer = {
@@ -120,7 +100,6 @@ export type ChromeExtensionRelayServer = {
 
 type RelayRuntime = {
   server: ChromeExtensionRelayServer;
-  relayAuthToken: string;
 };
 
 function parseUrlPort(parsed: URL): number | null {
@@ -182,28 +161,27 @@ function isAddrInUseError(err: unknown): boolean {
   );
 }
 
-function relayAuthTokenForUrl(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    if (!isLoopbackHost(parsed.hostname)) {
-      return null;
-    }
-    const port = parseUrlPort(parsed);
-    if (!port) {
-      return null;
-    }
-    return relayRuntimeByPort.get(port)?.relayAuthToken ?? null;
-  } catch {
-    return null;
-  }
+export function getChromeExtensionRelayAuthHeaders(url: string): Record<string, string> {
+  void url;
+  return {};
 }
 
-export function getChromeExtensionRelayAuthHeaders(url: string): Record<string, string> {
-  const token = relayAuthTokenForUrl(url);
-  if (!token) {
-    return {};
+async function probeOpenClawRelay(baseUrl: string): Promise<boolean> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), RELAY_PROBE_TIMEOUT_MS);
+  try {
+    const versionUrl = new URL("/json/version", `${baseUrl}/`).toString();
+    const res = await fetch(versionUrl, { signal: ctrl.signal });
+    if (!res.ok) {
+      return false;
+    }
+    const body = (await res.json()) as { Browser?: unknown };
+    return body?.Browser === OPENCLAW_RELAY_BROWSER;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
   }
-  return { [RELAY_AUTH_HEADER]: token };
 }
 
 export async function ensureChromeExtensionRelayServer(opts: {
@@ -218,9 +196,6 @@ export async function ensureChromeExtensionRelayServer(opts: {
   if (existing) {
     return existing.server;
   }
-
-  const relayAuthToken = resolveRelayAuthTokenForPort(info.port);
-  const relayAuthTokens = new Set(resolveRelayAcceptedTokensForPort(info.port));
 
   let extensionWs: WebSocket | null = null;
   const cdpClients = new Set<WebSocket>();
@@ -368,15 +343,6 @@ export async function ensureChromeExtensionRelayServer(opts: {
     const url = new URL(req.url ?? "/", info.baseUrl);
     const path = url.pathname;
 
-    if (path.startsWith("/json")) {
-      const token = getHeader(req, RELAY_AUTH_HEADER)?.trim();
-      if (!token || !relayAuthTokens.has(token)) {
-        res.writeHead(401);
-        res.end("Unauthorized");
-        return;
-      }
-    }
-
     if (req.method === "HEAD" && path === "/") {
       res.writeHead(200);
       res.end();
@@ -492,11 +458,6 @@ export async function ensureChromeExtensionRelayServer(opts: {
     }
 
     if (pathname === "/extension") {
-      const token = getRelayAuthTokenFromRequest(req, url);
-      if (!token || !relayAuthTokens.has(token)) {
-        rejectUpgrade(socket, 401, "Unauthorized");
-        return;
-      }
       if (extensionConnected()) {
         rejectUpgrade(socket, 409, "Extension already connected");
         return;
@@ -517,11 +478,6 @@ export async function ensureChromeExtensionRelayServer(opts: {
     }
 
     if (pathname === "/cdp") {
-      const token = getRelayAuthTokenFromRequest(req, url);
-      if (!token || !relayAuthTokens.has(token)) {
-        rejectUpgrade(socket, 401, "Unauthorized");
-        return;
-      }
       if (!extensionConnected()) {
         rejectUpgrade(socket, 503, "Extension not connected");
         return;
@@ -807,14 +763,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
       server.once("error", reject);
     });
   } catch (err) {
-    if (
-      isAddrInUseError(err) &&
-      (await probeAuthenticatedOpenClawRelay({
-        baseUrl: info.baseUrl,
-        relayAuthHeader: RELAY_AUTH_HEADER,
-        relayAuthToken,
-      }))
-    ) {
+    if (isAddrInUseError(err) && (await probeOpenClawRelay(info.baseUrl))) {
       const existingRelay: ChromeExtensionRelayServer = {
         host: info.host,
         port: info.port,
@@ -825,7 +774,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
           relayRuntimeByPort.delete(info.port);
         },
       };
-      relayRuntimeByPort.set(info.port, { server: existingRelay, relayAuthToken });
+      relayRuntimeByPort.set(info.port, { server: existingRelay });
       return existingRelay;
     }
     throw err;
@@ -864,7 +813,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     },
   };
 
-  relayRuntimeByPort.set(port, { server: relay, relayAuthToken });
+  relayRuntimeByPort.set(port, { server: relay });
   return relay;
 }
 

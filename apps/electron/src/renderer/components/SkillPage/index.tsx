@@ -652,7 +652,17 @@ export default function SkillPage() {
       clientRef.current = null;
     };
   }, []);
-  const skillRows = useMemo(() => skills, [skills]);
+  const skillRows = useMemo(() => {
+    return [...skills].sort((left, right) => {
+      if (left.enabled !== right.enabled) {
+        return left.enabled ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name, undefined, {
+        sensitivity: "base",
+        numeric: true,
+      });
+    });
+  }, [skills]);
 
   return (
     <div className="custom-scrollbar h-full overflow-y-auto">

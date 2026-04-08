@@ -88,10 +88,11 @@ function buildRelaySetupSteps(profile: ResolvedBrowserProfile): string[] {
       ? `1) Install or update Bustly Browser Relay extension. Download: [Bustly Browser Relay](${downloadUrl})`
       : "1) Install or update Bustly Browser Relay extension.",
     "2) Upload it to Chrome: open chrome://extensions, enable Developer mode, then click Load unpacked (or drag/drop the package) and enable the extension.",
-    `3) In extension settings, set relay port to ${relayPortHint} and gateway token from ${configPath} (gateway.auth.token), then click Save.`,
-    `4) Keep relay enabled (status should be Connected at ${relayEndpoint}).`,
-    "5) Open the target website in your normal browser window and click the Bustly Browser Relay toolbar icon on that tab (badge ON).",
-    "6) Retry the browser action after the tab is attached.",
+    `3) In extension settings, set relay port to ${relayPortHint}, then click Save.`,
+    `4) If relay auto-load is available, it should read port defaults from ${configPath}.`,
+    `5) Keep relay enabled (status should be Connected at ${relayEndpoint}).`,
+    "6) Open the target website in your normal browser window and click the Bustly Browser Relay toolbar icon on that tab (badge ON).",
+    "7) Retry the browser action after the tab is attached.",
     `Debug CLI: ${statusCommand}`,
     `Bundled installer (optional): ${installCommand}`,
   ];

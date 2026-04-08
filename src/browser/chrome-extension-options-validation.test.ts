@@ -41,12 +41,13 @@ async function loadOptionsValidation(): Promise<OptionsValidationModule> {
 const { classifyRelayCheckException, classifyRelayCheckResponse } = await loadOptionsValidation();
 
 describe("chrome extension options validation", () => {
-  it("maps 401 response to token rejected error", () => {
+  it("maps 401 response to legacy relay warning", () => {
     const result = classifyRelayCheckResponse({ status: 401, ok: false }, 18792);
     expect(result).toEqual({
       action: "status",
       kind: "error",
-      message: "Gateway token rejected. Check token and save again.",
+      message:
+        "Relay returned HTTP 401. This usually means an old token-required relay build is running. Restart with the latest Bustly/OpenClaw relay.",
     });
   });
 
@@ -89,7 +90,7 @@ describe("chrome extension options validation", () => {
     expect(result).toEqual({
       action: "status",
       kind: "ok",
-      message: "Relay reachable and authenticated at http://127.0.0.1:19004/",
+      message: "Relay reachable at http://127.0.0.1:19004/",
     });
   });
 
@@ -107,7 +108,7 @@ describe("chrome extension options validation", () => {
     expect(result).toEqual({
       kind: "error",
       message:
-        "Relay not reachable/authenticated at http://127.0.0.1:18792/. Start OpenClaw browser relay and verify token.",
+        "Relay not reachable at http://127.0.0.1:18792/. Start OpenClaw browser relay and verify port.",
     });
   });
 });

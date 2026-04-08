@@ -172,23 +172,15 @@ describe("cdp.helpers", () => {
     expect(headers["x-openclaw-relay-token"]).toBeUndefined();
   });
 
-  it("adds relay header for known relay ports", async () => {
+  it("does not add relay header for known relay ports in relay-only local mode", async () => {
     const port = await getFreePort();
     const cdpUrl = `http://127.0.0.1:${port}`;
-    const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "test-gateway-token";
     try {
       await ensureChromeExtensionRelayServer({ cdpUrl });
       const headers = getHeadersWithAuth(`${cdpUrl}/json/version`);
-      expect(headers["x-openclaw-relay-token"]).toBeTruthy();
-      expect(headers["x-openclaw-relay-token"]).not.toBe("test-gateway-token");
+      expect(headers["x-openclaw-relay-token"]).toBeUndefined();
     } finally {
       await stopChromeExtensionRelayServer({ cdpUrl }).catch(() => {});
-      if (prev === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = prev;
-      }
     }
   });
 });

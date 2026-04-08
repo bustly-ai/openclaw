@@ -1665,12 +1665,15 @@ function loadLoginShellEnvironment(shellPath: string, homeDir: string): Record<s
 
 function loadElectronEnvVars(): Record<string, string> {
   const envVars: Record<string, string> = {};
-  const envPaths = [
+  const envPaths =
     process.env.NODE_ENV === "development"
-      ? resolve(__dirname, "../.env")
-      : resolve(__dirname, "../../.env"),
-    resolve(app.getAppPath(), ".env"),
-  ];
+      ? [
+          resolve(__dirname, "../.env.internal"),
+          resolve(__dirname, "../.env"),
+          resolve(app.getAppPath(), ".env.internal"),
+          resolve(app.getAppPath(), ".env"),
+        ]
+      : [resolve(__dirname, "../../.env"), resolve(app.getAppPath(), ".env")];
 
   for (const envPath of envPaths) {
     try {
@@ -1699,6 +1702,27 @@ function loadElectronEnvVars(): Record<string, string> {
   return envVars;
 }
 
+function resolveBundledSkillsDir(params: {
+  resourcesPath: string;
+  appPath: string;
+}): string | undefined {
+  const candidates = [
+    resolve(params.resourcesPath, "bustly-skills", "skills"),
+    resolve(params.resourcesPath, "skills"),
+    resolve(params.appPath, "resources", "bustly-skills", "skills"),
+    resolve(params.appPath, "resources", "skills"),
+    resolve(params.appPath, "..", "resources", "bustly-skills", "skills"),
+    resolve(params.appPath, "..", "resources", "skills"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      writeMainLog(`Using bundled skills dir: ${candidate}`);
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
 function buildElectronCliEnv(params?: {
   cliPath?: string;
   oauthCallbackPort?: number;
@@ -1725,7 +1749,10 @@ function buildElectronCliEnv(params?: {
   ]);
   const bunInstall = process.env.BUN_INSTALL?.trim() || resolve(homeDir, ".bun");
   const homebrewPrefix = process.env.HOMEBREW_PREFIX?.trim() || "/opt/homebrew";
-  const bundledSkillsDir = resolve(resourcesPath, "skills");
+  const bundledSkillsDir = resolveBundledSkillsDir({
+    resourcesPath,
+    appPath,
+  });
   const bundledPluginsDir = ensureBundledExtensionsDir({
     resourcesPath,
     appPath,
@@ -1753,7 +1780,7 @@ function buildElectronCliEnv(params?: {
     OPENCLAW_PROFILE: ELECTRON_OPENCLAW_PROFILE,
     OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
     OPENCLAW_PREFER_BUNDLED_PLUGINS: "1",
-    ...(existsSync(bundledSkillsDir) ? { OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir } : {}),
+    ...(bundledSkillsDir ? { OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir } : {}),
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: resolveElectronConfigPath(),
     OPENCLAW_LOG_FILE: resolveElectronBackendLogPath(),

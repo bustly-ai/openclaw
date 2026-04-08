@@ -16,6 +16,18 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
 
 export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
 
+function normalizeSkillToken(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function compactSkillToken(value: string): string {
+  return normalizeSkillToken(value).replace(/-/g, "");
+}
+
 export function isConfigPathTruthy(config: OpenClawConfig | undefined, pathStr: string): boolean {
   return isConfigPathTruthyWithDefaults(config, pathStr, DEFAULT_CONFIG_VALUES);
 }
@@ -28,8 +40,25 @@ export function resolveSkillConfig(
   if (!skills || typeof skills !== "object") {
     return undefined;
   }
-  const entry = (skills as Record<string, SkillConfig | undefined>)[skillKey];
+  const typedSkills = skills as Record<string, SkillConfig | undefined>;
+  const entry = typedSkills[skillKey];
   if (!entry || typeof entry !== "object") {
+    const normalizedSkillKey = normalizeSkillToken(skillKey);
+    if (!normalizedSkillKey) {
+      return undefined;
+    }
+    const compactTarget = compactSkillToken(skillKey);
+    for (const [configuredKey, configuredValue] of Object.entries(typedSkills)) {
+      if (!configuredValue || typeof configuredValue !== "object") {
+        continue;
+      }
+      if (
+        normalizeSkillToken(configuredKey) === normalizedSkillKey ||
+        compactSkillToken(configuredKey) === compactTarget
+      ) {
+        return configuredValue;
+      }
+    }
     return undefined;
   }
   return entry;

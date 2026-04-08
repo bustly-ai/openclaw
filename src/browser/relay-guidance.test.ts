@@ -32,7 +32,7 @@ describe("relay guidance", () => {
         expect(message).toContain("downloads.example.com/bustly-relay.zip");
         expect(message).toContain("chrome://extensions");
         expect(message).toContain("Load unpacked");
-        expect(message).toContain("gateway.auth.token");
+        expect(message).toContain("set relay port");
         expect(message).toContain("openclaw browser extension install");
       },
     );

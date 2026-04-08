@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..", "..", "..");
@@ -7,6 +7,7 @@ const bustlySkillsRoot = resolve(repoRoot, "bustly-skills");
 const sourceSkillsDir = resolve(bustlySkillsRoot, "skills");
 const targetSkillsDir = resolve(repoRoot, "skills");
 const electronBustlySkillsTargetDir = resolve(repoRoot, "apps", "electron", "resources", "bustly-skills");
+const DEFAULT_ENABLED_MANIFEST_NAME = ".bustly-default-enabled.json";
 
 function fail(message) {
   console.error(`[prepare-skill] ${message}`);
@@ -23,7 +24,31 @@ function run(command, args, cwd) {
   }
 }
 
+function runCapture(command, args, cwd) {
+  const result = spawnSync(command, args, {
+    cwd,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout ?? "";
+}
+
+function syncBustlySkillsBranch(branch) {
+  const target = String(branch || "").trim();
+  if (!target) {
+    return;
+  }
+  console.log(`[prepare-skill] Syncing bustly-skills to branch ${target}`);
+  run("git", ["fetch", "origin", target], bustlySkillsRoot);
+  run("git", ["checkout", "-B", target, `origin/${target}`], bustlySkillsRoot);
+}
+
 function parseArgs(argv) {
+  const options = {
+    skillsBranch: process.env.BUSTLY_SKILLS_BRANCH?.trim() || "",
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--") {
@@ -33,47 +58,98 @@ function parseArgs(argv) {
       console.log("Usage: pnpm run prepare-skill");
       process.exit(0);
     }
+    if (arg === "--skills-branch") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("-")) {
+        fail("Missing value for --skills-branch");
+      }
+      options.skillsBranch = value.trim();
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--skills-branch=")) {
+      options.skillsBranch = arg.split("=", 2)[1]?.trim() || "";
+      continue;
+    }
     if (arg.startsWith("-")) {
       fail(`Unknown option: ${arg}`);
     }
     fail(`Unexpected argument: ${arg}`);
   }
 
-  if (existsSync(sourceSkillsDir)) {
+  const hasLocalCheckout = existsSync(bustlySkillsRoot) && existsSync(sourceSkillsDir);
+  if (hasLocalCheckout) {
     console.log(
       "[prepare-skill] Using existing local bustly-skills checkout without resetting its branch or commit",
     );
-    return;
+  } else {
+    console.log("[prepare-skill] Initializing bustly-skills submodule");
+    run("git", ["submodule", "update", "--init", "bustly-skills"], repoRoot);
   }
-
-  console.log("[prepare-skill] Initializing bustly-skills submodule");
-  run("git", ["submodule", "update", "--init", "bustly-skills"], repoRoot);
+  if (options.skillsBranch) {
+    syncBustlySkillsBranch(options.skillsBranch);
+  }
+  return options;
 }
 
-function copySkills() {
-  if (!existsSync(sourceSkillsDir)) {
-    fail(`Missing source skills directory: ${sourceSkillsDir}`);
+function listDirectories(dir) {
+  if (!existsSync(dir)) {
+    return [];
   }
-
-  mkdirSync(targetSkillsDir, { recursive: true });
-  const copied = readdirSync(sourceSkillsDir, { withFileTypes: true })
+  return readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
+    .filter((name) => name && !name.startsWith("."))
     .sort((left, right) => left.localeCompare(right));
+}
 
-  if (copied.length === 0) {
-    fail(`No skill directories found in ${sourceSkillsDir}`);
+function resolveBuiltInSkillDirs() {
+  const tracked = runCapture("git", ["ls-tree", "-d", "--name-only", "HEAD:skills"], repoRoot)
+    ?.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("."));
+  if (tracked && tracked.length > 0) {
+    return Array.from(new Set(tracked)).sort((left, right) => left.localeCompare(right));
   }
+  return listDirectories(targetSkillsDir);
+}
 
-  for (const name of copied) {
-    const sourcePath = resolve(sourceSkillsDir, name);
-    const targetPath = resolve(targetSkillsDir, name);
-    rmSync(targetPath, { recursive: true, force: true });
-    cpSync(sourcePath, targetPath, { recursive: true, dereference: true });
+function pruneOpenClawSkillWorkspace(builtInSkillDirs) {
+  mkdirSync(targetSkillsDir, { recursive: true });
+  const keep = new Set(builtInSkillDirs);
+  const current = listDirectories(targetSkillsDir);
+  const removed = [];
+  for (const name of current) {
+    if (keep.has(name)) {
+      continue;
+    }
+    rmSync(resolve(targetSkillsDir, name), { recursive: true, force: true });
+    removed.push(name);
   }
-
   console.log(
-    `[prepare-skill] Copied ${copied.length} skill${copied.length === 1 ? "" : "s"}: ${copied.join(", ")}`,
+    `[prepare-skill] Kept ${builtInSkillDirs.length} built-in skill${builtInSkillDirs.length === 1 ? "" : "s"} in openclaw/skills`
+      + (removed.length > 0 ? `; removed ${removed.length} generated skill dirs` : ""),
+  );
+}
+
+function writeDefaultEnabledManifest(defaultEnabledSkills) {
+  const payload = {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    defaultEnabled: Array.from(new Set(defaultEnabledSkills))
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right)),
+  };
+  const raw = `${JSON.stringify(payload, null, 2)}\n`;
+  const openclawManifestPath = resolve(targetSkillsDir, DEFAULT_ENABLED_MANIFEST_NAME);
+  const bustlyBundleSkillsDir = resolve(electronBustlySkillsTargetDir, "skills");
+  const bundledManifestPath = resolve(bustlyBundleSkillsDir, DEFAULT_ENABLED_MANIFEST_NAME);
+  mkdirSync(targetSkillsDir, { recursive: true });
+  mkdirSync(bustlyBundleSkillsDir, { recursive: true });
+  writeFileSync(openclawManifestPath, raw, "utf8");
+  writeFileSync(bundledManifestPath, raw, "utf8");
+  console.log(
+    `[prepare-skill] Wrote bundled default-enabled manifest (${payload.defaultEnabled.length} skills)`,
   );
 }
 
@@ -105,7 +181,12 @@ function copyBustlySkillsBundle() {
   );
 }
 
-parseArgs(process.argv.slice(2));
+const options = parseArgs(process.argv.slice(2));
 console.log("[prepare-skill] Preparing skills from local bustly-skills checkout");
-copySkills();
+if (options.skillsBranch) {
+  console.log(`[prepare-skill] Using bustly-skills branch: ${options.skillsBranch}`);
+}
+const builtInSkillDirs = resolveBuiltInSkillDirs();
+pruneOpenClawSkillWorkspace(builtInSkillDirs);
 copyBustlySkillsBundle();
+writeDefaultEnabledManifest(builtInSkillDirs);
