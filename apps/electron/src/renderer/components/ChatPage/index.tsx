@@ -1862,20 +1862,21 @@ export default function ChatPage() {
             }
             const runtime = getSessionRuntime(sessionKey);
             const runId = typeof payload.runId === "string" ? payload.runId : null;
-            syncActiveRunId(sessionKey, runtime, runId);
             if (runId && runtime.discardedRunIds.has(runId)) {
               return;
             }
             if (runId && runtime.settledRunIds.has(runId) && payload.state !== "final" && payload.state !== "aborted" && payload.state !== "error") {
               return;
             }
+            syncActiveRunId(sessionKey, runtime, runId);
             const terminalState = resolveChatTerminalState(payload);
+            const resolvedRunId = runId ?? runtime.view.activeRunId ?? runtime.view.compactingRunId ?? null;
             if (payload.state === "delta") {
               return;
             }
             if (terminalState === "final") {
-              finalizeRunState(sessionKey, runId, "completed");
-              clearReconnectStatus(sessionKey, runId);
+              finalizeRunState(sessionKey, resolvedRunId, "completed");
+              clearReconnectStatus(sessionKey, resolvedRunId);
               if (!payload.message) {
                 return;
               }
@@ -1896,7 +1897,7 @@ export default function ChatPage() {
                 role === "assistant" &&
                 finalizeExistingAssistantMessage({
                   sessionKey,
-                  runId,
+                  runId: resolvedRunId,
                   text: messageText,
                   seq: nextSeq,
                   timestamp,
@@ -1918,7 +1919,7 @@ export default function ChatPage() {
                 final: role === "assistant",
               });
               if (role === "assistant") {
-                markLastAssistantAsFinal(sessionKey, runId);
+                markLastAssistantAsFinal(sessionKey, resolvedRunId);
               }
               if (command) {
                 void loadHistory(client, sessionKey).catch((err) => {
@@ -1930,12 +1931,12 @@ export default function ChatPage() {
               return;
             }
             if (terminalState === "aborted" || terminalState === "error") {
-              finalizeRunState(sessionKey, runId, "error");
-              clearReconnectStatus(sessionKey, runId);
+              finalizeRunState(sessionKey, resolvedRunId, "error");
+              clearReconnectStatus(sessionKey, resolvedRunId);
               if (terminalState === "error") {
                 upsertRunError({
                   sessionKey,
-                  runId: runId ?? undefined,
+                  runId: resolvedRunId ?? undefined,
                   seq: runtime.seqCounter++,
                   timestamp: Date.now(),
                   reason: payload.errorMessage ?? "Execution error.",
@@ -1962,13 +1963,13 @@ export default function ChatPage() {
             }
             const runtime = getSessionRuntime(sessionKey);
             const runId = typeof payload.runId === "string" ? payload.runId : null;
-            syncActiveRunId(sessionKey, runtime, runId);
             if (runId && runtime.discardedRunIds.has(runId)) {
               return;
             }
             if (runId && runtime.settledRunIds.has(runId) && payload.stream !== "lifecycle" && payload.stream !== "error") {
               return;
             }
+            syncActiveRunId(sessionKey, runtime, runId);
             let seq = runtime.seqCounter++;
             if (runId) {
               let base = runtime.runSeqBase.get(runId);
@@ -1988,6 +1989,7 @@ export default function ChatPage() {
             const ts = typeof payload.ts === "number" ? payload.ts : Date.now();
             const stream = typeof payload.stream === "string" ? payload.stream : "";
             const data = payload.data ?? {};
+            const resolvedRunId = runId ?? runtime.view.activeRunId ?? runtime.view.compactingRunId ?? null;
             const runKey = runId ?? "__unknown__";
             const segmentState =
               runtime.streamSegments.get(runKey) ??
@@ -2104,11 +2106,11 @@ export default function ChatPage() {
             }
 
             if (stream === "error") {
-              finalizeRunState(sessionKey, runId, "error");
-              clearReconnectStatus(sessionKey, runId);
+              finalizeRunState(sessionKey, resolvedRunId, "error");
+              clearReconnectStatus(sessionKey, resolvedRunId);
               upsertRunError({
                 sessionKey,
-                runId: runId ?? undefined,
+                runId: resolvedRunId ?? undefined,
                 seq: runtime.seqCounter++,
                 timestamp: ts,
                 reason: extractAgentErrorReason({ stream, data }),
@@ -2120,13 +2122,13 @@ export default function ChatPage() {
 
             const terminalState = resolveAgentTerminalState({ stream, data });
             if (terminalState) {
-              clearReconnectStatus(sessionKey, runId);
-              finalizeRunState(sessionKey, runId, terminalState === "final" ? "completed" : "error");
-              if (terminalState === "aborted" && runId) {
-                runtime.discardedRunIds.add(runId);
+              clearReconnectStatus(sessionKey, resolvedRunId);
+              finalizeRunState(sessionKey, resolvedRunId, terminalState === "final" ? "completed" : "error");
+              if (terminalState === "aborted" && resolvedRunId) {
+                runtime.discardedRunIds.add(resolvedRunId);
               }
               if (terminalState === "final") {
-                markLastAssistantAsFinal(sessionKey, runId);
+                markLastAssistantAsFinal(sessionKey, resolvedRunId);
               }
               refreshSessionUsage(client, sessionKey);
               notifySidebarTasksRefresh();
@@ -2134,11 +2136,11 @@ export default function ChatPage() {
             }
 
             if (stream === "lifecycle" && data.phase === "error") {
-              finalizeRunState(sessionKey, runId, "error");
-              clearReconnectStatus(sessionKey, runId);
+              finalizeRunState(sessionKey, resolvedRunId, "error");
+              clearReconnectStatus(sessionKey, resolvedRunId);
               upsertRunError({
                 sessionKey,
-                runId: runId ?? undefined,
+                runId: resolvedRunId ?? undefined,
                 seq: runtime.seqCounter++,
                 timestamp: ts,
                 reason: extractAgentErrorReason({ stream, data }),
