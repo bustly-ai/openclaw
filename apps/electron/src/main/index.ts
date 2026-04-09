@@ -457,6 +457,8 @@ function emitGatewayLifecycle(
 }
 
 const IMAGE_PREVIEW_EXT_RE = /\.(avif|bmp|gif|heic|jpeg|jpg|png|svg|tiff|webp)$/i;
+const CHAT_MEDIA_PREVIEW_EXT_RE = /\.(avif|bmp|gif|heic|jpeg|jpg|png|svg|tiff|webp|mp4|mov|webm|mkv|m4v|mp3|wav|ogg|m4a|aac|flac|opus)$/i;
+const CHAT_MEDIA_PREVIEW_MAX_BYTES = 25 * 1024 * 1024;
 
 function parseClipboardFilePathsFromText(value: string): string[] {
   return value
@@ -567,7 +569,7 @@ function resolvePastedPath(params: {
   }
 }
 
-function resolveImagePreviewMimeType(filePath: string): string | null {
+function resolveChatMediaPreviewMimeType(filePath: string): string | null {
   const lower = filePath.toLowerCase();
   if (lower.endsWith(".png")) {return "image/png";}
   if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {return "image/jpeg";}
@@ -578,7 +580,53 @@ function resolveImagePreviewMimeType(filePath: string): string | null {
   if (lower.endsWith(".avif")) {return "image/avif";}
   if (lower.endsWith(".heic")) {return "image/heic";}
   if (lower.endsWith(".tif") || lower.endsWith(".tiff")) {return "image/tiff";}
+  if (lower.endsWith(".mp4")) {return "video/mp4";}
+  if (lower.endsWith(".mov")) {return "video/quicktime";}
+  if (lower.endsWith(".webm")) {return "video/webm";}
+  if (lower.endsWith(".mkv")) {return "video/x-matroska";}
+  if (lower.endsWith(".m4v")) {return "video/x-m4v";}
+  if (lower.endsWith(".mp3")) {return "audio/mpeg";}
+  if (lower.endsWith(".wav")) {return "audio/wav";}
+  if (lower.endsWith(".ogg")) {return "audio/ogg";}
+  if (lower.endsWith(".m4a")) {return "audio/mp4";}
+  if (lower.endsWith(".aac")) {return "audio/aac";}
+  if (lower.endsWith(".flac")) {return "audio/flac";}
+  if (lower.endsWith(".opus")) {return "audio/ogg";}
   return null;
+}
+
+function resolveChatMediaPreview(filePath: string): {
+  dataUrl: string;
+  mimeType: string;
+  kind: "image" | "video" | "audio";
+} | null {
+  if (!CHAT_MEDIA_PREVIEW_EXT_RE.test(filePath)) {
+    return null;
+  }
+  const mimeType = resolveChatMediaPreviewMimeType(filePath);
+  if (!mimeType) {
+    return null;
+  }
+  const kind = mimeType.startsWith("image/")
+    ? "image"
+    : mimeType.startsWith("video/")
+      ? "video"
+      : mimeType.startsWith("audio/")
+        ? "audio"
+        : null;
+  if (!kind) {
+    return null;
+  }
+  const stats = statSync(filePath);
+  if (!Number.isFinite(stats.size) || stats.size <= 0 || stats.size > CHAT_MEDIA_PREVIEW_MAX_BYTES) {
+    return null;
+  }
+  const base64 = readFileSync(filePath).toString("base64");
+  return {
+    dataUrl: `data:${mimeType};base64,${base64}`,
+    mimeType,
+    kind,
+  };
 }
 let updateReady = false;
 let updateVersion: string | null = null;
@@ -3839,10 +3887,9 @@ function setupIpcHandlers(): void {
       let imageUrl: string | undefined;
       if (!isDirectory && IMAGE_PREVIEW_EXT_RE.test(selectedPath)) {
         try {
-          const mimeType = resolveImagePreviewMimeType(selectedPath);
-          if (mimeType) {
-            const base64 = readFileSync(selectedPath).toString("base64");
-            imageUrl = `data:${mimeType};base64,${base64}`;
+          const preview = resolveChatMediaPreview(selectedPath);
+          if (preview?.kind === "image") {
+            imageUrl = preview.dataUrl;
           }
         } catch {
           imageUrl = undefined;
@@ -3859,16 +3906,24 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle("resolve-chat-image-preview", async (_event, rawPath: string) => {
     const targetPath = typeof rawPath === "string" ? rawPath.trim() : "";
-    if (!targetPath || !IMAGE_PREVIEW_EXT_RE.test(targetPath)) {
+    try {
+      const preview = resolveChatMediaPreview(targetPath);
+      if (!preview || preview.kind !== "image") {
+        return null;
+      }
+      return preview.dataUrl;
+    } catch {
+      return null;
+    }
+  });
+
+  ipcMain.handle("resolve-chat-media-preview", async (_event, rawPath: string) => {
+    const targetPath = typeof rawPath === "string" ? rawPath.trim() : "";
+    if (!targetPath) {
       return null;
     }
     try {
-      const mimeType = resolveImagePreviewMimeType(targetPath);
-      if (!mimeType) {
-        return null;
-      }
-      const base64 = readFileSync(targetPath).toString("base64");
-      return `data:${mimeType};base64,${base64}`;
+      return resolveChatMediaPreview(targetPath);
     } catch {
       return null;
     }

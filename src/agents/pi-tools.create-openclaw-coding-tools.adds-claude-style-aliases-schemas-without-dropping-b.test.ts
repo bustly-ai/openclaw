@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
+import { captureEnv } from "../test-utils/env.js";
 
 const defaultTools = createOpenClawCodingTools({ senderIsOwner: true });
 
@@ -126,5 +127,39 @@ describe("createOpenClawCodingTools", () => {
       .filter((entry) => entry.type !== "object");
 
     expect(offenders).toEqual([]);
+  });
+
+  it("injects run/session ids into exec subprocess env without mutating process env", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const envSnapshot = captureEnv(["OPENCLAW_RUN_ID", "OPENCLAW_SESSION_ID"]);
+    delete process.env.OPENCLAW_RUN_ID;
+    delete process.env.OPENCLAW_SESSION_ID;
+    try {
+      const tools = createOpenClawCodingTools({
+        exec: {
+          host: "gateway",
+          security: "full",
+          ask: "off",
+        },
+        runId: "run-subagent-1",
+        sessionId: "session-subagent-1",
+      });
+      const execTool = tools.find((tool) => tool.name === "exec");
+      expect(execTool).toBeDefined();
+      if (!execTool) {
+        return;
+      }
+      const result = await execTool.execute("call-1", {
+        command: "printf '%s|%s' \"${OPENCLAW_RUN_ID:-}\" \"${OPENCLAW_SESSION_ID:-}\"",
+      });
+      const text = result.content.find((item) => item.type === "text")?.text ?? "";
+      expect(text.trim()).toContain("run-subagent-1|session-subagent-1");
+      expect(process.env.OPENCLAW_RUN_ID).toBeUndefined();
+      expect(process.env.OPENCLAW_SESSION_ID).toBeUndefined();
+    } finally {
+      envSnapshot.restore();
+    }
   });
 });

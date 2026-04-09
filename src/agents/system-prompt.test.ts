@@ -193,6 +193,9 @@ describe("buildAgentSystemPrompt", () => {
       "When your reply includes a local image path, always render it as Markdown image syntax with the absolute path as the target, for example `![image](/absolute/path/to/image.png)`.",
     );
     expect(prompt).toContain(
+      "Do not use Markdown image syntax for local video/audio files. Render local video/audio paths as Markdown links with the absolute path target, for example `[clip.mp4](/absolute/path/to/clip.mp4)`.",
+    );
+    expect(prompt).toContain(
       "When your reply includes a local file path or directory path that the user may open, always render it as a Markdown link with the absolute path as the target, for example `[report.pdf](/absolute/path/to/report.pdf)` or `[open folder](/absolute/path/to/folder/)`.",
     );
     expect(prompt).toContain(

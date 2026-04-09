@@ -40,14 +40,57 @@ function syncBustlySkillsBranch(branch) {
   if (!target) {
     return;
   }
-  console.log(`[prepare-skill] Syncing bustly-skills to branch ${target}`);
+  console.log(`[prepare-skill] Syncing bustly-skills to latest origin/${target}`);
   run("git", ["fetch", "origin", target], bustlySkillsRoot);
   run("git", ["checkout", "-B", target, `origin/${target}`], bustlySkillsRoot);
+}
+
+function hasRemoteBranch(branch) {
+  const target = String(branch || "").trim();
+  if (!target) {
+    return false;
+  }
+  return (
+    runCapture("git", ["ls-remote", "--exit-code", "--heads", "origin", target], bustlySkillsRoot)
+    !== null
+  );
+}
+
+function resolveDefaultSkillsBranch() {
+  const upstream = runCapture(
+    "git",
+    ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    bustlySkillsRoot,
+  )
+    ?.trim();
+  if (upstream?.startsWith("origin/")) {
+    return upstream.slice("origin/".length);
+  }
+
+  const current = runCapture("git", ["branch", "--show-current"], bustlySkillsRoot)?.trim();
+  if (current && current !== "HEAD" && hasRemoteBranch(current)) {
+    return current;
+  }
+
+  const remoteHead = runCapture(
+    "git",
+    ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    bustlySkillsRoot,
+  )
+    ?.trim();
+  if (remoteHead?.startsWith("origin/")) {
+    return remoteHead.slice("origin/".length);
+  }
+
+  return "main";
 }
 
 function parseArgs(argv) {
   const options = {
     skillsBranch: process.env.BUSTLY_SKILLS_BRANCH?.trim() || "",
+    skipSkillsSync:
+      process.env.BUSTLY_SKILLS_SKIP_SYNC === "1"
+      || process.env.BUSTLY_SKILLS_SKIP_SYNC === "true",
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -55,8 +98,16 @@ function parseArgs(argv) {
       continue;
     }
     if (arg === "--help" || arg === "-h") {
-      console.log("Usage: pnpm run prepare-skill");
+      console.log("Usage: pnpm run prepare-skill [--skills-branch <branch>] [--no-skills-sync]");
       process.exit(0);
+    }
+    if (arg === "--no-skills-sync") {
+      options.skipSkillsSync = true;
+      continue;
+    }
+    if (arg === "--skills-sync") {
+      options.skipSkillsSync = false;
+      continue;
     }
     if (arg === "--skills-branch") {
       const value = argv[index + 1];
@@ -79,15 +130,23 @@ function parseArgs(argv) {
 
   const hasLocalCheckout = existsSync(bustlySkillsRoot) && existsSync(sourceSkillsDir);
   if (hasLocalCheckout) {
-    console.log(
-      "[prepare-skill] Using existing local bustly-skills checkout without resetting its branch or commit",
-    );
+    console.log("[prepare-skill] Using existing local bustly-skills checkout");
   } else {
     console.log("[prepare-skill] Initializing bustly-skills submodule");
     run("git", ["submodule", "update", "--init", "bustly-skills"], repoRoot);
   }
-  if (options.skillsBranch) {
-    syncBustlySkillsBranch(options.skillsBranch);
+
+  if (options.skipSkillsSync) {
+    console.log("[prepare-skill] Skipping bustly-skills remote sync (--no-skills-sync)");
+    return options;
+  }
+
+  const targetBranch = options.skillsBranch || resolveDefaultSkillsBranch();
+  if (targetBranch) {
+    options.skillsBranch = targetBranch;
+    syncBustlySkillsBranch(targetBranch);
+  } else {
+    console.log("[prepare-skill] Could not resolve a branch for bustly-skills sync; continuing");
   }
   return options;
 }

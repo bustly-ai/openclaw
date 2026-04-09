@@ -342,12 +342,10 @@ export async function compactEmbeddedPiSessionDirect(
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
           config: params.config,
-          runtimeEnv: { OPENCLAW_RUN_ID: params.runId },
         })
       : applySkillEnvOverrides({
           skills: skillEntries ?? [],
           config: params.config,
-          runtimeEnv: { OPENCLAW_RUN_ID: params.runId },
         });
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
@@ -386,6 +384,8 @@ export async function compactEmbeddedPiSessionDirect(
       modelId,
       modelContextWindowTokens: model.contextWindow,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
+      runId: params.runId,
+      sessionId: params.sessionId,
     });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider });
     const allowedToolNames = collectAllowedToolNames({ tools });

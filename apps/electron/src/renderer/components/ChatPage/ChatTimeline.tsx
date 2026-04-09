@@ -43,7 +43,11 @@ import {
   type ChatInputArtifact,
 } from "./input-artifacts";
 import type { TimelineArtifact, TimelineNode } from "./types";
-import { isAbsoluteLocalMarkdownPath, toSanitizedMarkdownHtml } from "./utils";
+import {
+  isAbsoluteLocalMarkdownPath,
+  normalizeMarkdownLocalPath,
+  toSanitizedMarkdownHtml,
+} from "./utils";
 
 type ChatTimelineProps = {
   timeline: TimelineNode[];
@@ -256,6 +260,8 @@ function markdownClassName(isErrorText: boolean) {
     "[&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-base [&_h3]:font-semibold",
     "[&_hr]:my-4 [&_hr]:border-gray-200",
     "[&_img]:my-3 [&_img]:max-h-[28rem] [&_img]:rounded-2xl [&_img]:border [&_img]:border-gray-200",
+    "[&_video]:my-3 [&_video]:max-h-[28rem] [&_video]:w-full [&_video]:max-w-[360px] [&_video]:rounded-2xl [&_video]:border [&_video]:border-gray-200",
+    "[&_audio]:my-3 [&_audio]:w-full [&_audio]:max-w-[360px]",
     "[&_li]:my-1",
     "[&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6",
     "[&_p]:my-1",
@@ -530,6 +536,68 @@ async function copyText(text: string, onCopyText?: (text: string) => void) {
   }
 }
 
+function localMediaFallbackLabel(localPath: string, altText: string | null): string {
+  const trimmedAlt = altText?.trim() ?? "";
+  if (trimmedAlt) {
+    return trimmedAlt;
+  }
+  const trimmedPath = localPath.trim().replace(/[\\/]+$/, "");
+  const baseName = trimmedPath.split(/[\\/]/).pop() ?? "";
+  return baseName || "Open file";
+}
+
+function replaceImageWithLocalLink(image: HTMLImageElement, localPath: string): void {
+  const anchor = document.createElement("a");
+  anchor.setAttribute("href", localPath);
+  anchor.setAttribute("data-local-path", localPath);
+  anchor.setAttribute("title", localPath);
+  anchor.textContent = localMediaFallbackLabel(localPath, image.getAttribute("alt"));
+  image.replaceWith(anchor);
+}
+
+function replaceImageWithFallbackText(image: HTMLImageElement, sourceHint: string): void {
+  const fallback = document.createElement("span");
+  fallback.textContent = localMediaFallbackLabel(sourceHint, image.getAttribute("alt"));
+  image.replaceWith(fallback);
+}
+
+function replaceImageWithLocalVideo(
+  image: HTMLImageElement,
+  localPath: string,
+  dataUrl: string,
+  mimeType: string,
+): void {
+  const video = document.createElement("video");
+  video.controls = true;
+  video.preload = "metadata";
+  video.setAttribute("title", localPath);
+  video.setAttribute("data-local-path", localPath);
+  const source = document.createElement("source");
+  source.src = dataUrl;
+  source.type = mimeType;
+  video.appendChild(source);
+  video.appendChild(document.createTextNode(localMediaFallbackLabel(localPath, image.getAttribute("alt"))));
+  image.replaceWith(video);
+}
+
+function replaceImageWithLocalAudio(
+  image: HTMLImageElement,
+  localPath: string,
+  dataUrl: string,
+  mimeType: string,
+): void {
+  const audio = document.createElement("audio");
+  audio.controls = true;
+  audio.preload = "metadata";
+  audio.setAttribute("title", localPath);
+  audio.setAttribute("data-local-path", localPath);
+  const source = document.createElement("source");
+  source.src = dataUrl;
+  source.type = mimeType;
+  audio.appendChild(source);
+  image.replaceWith(audio);
+}
+
 const MarkdownContent = memo(function MarkdownContent({
   text,
   className,
@@ -545,6 +613,7 @@ const MarkdownContent = memo(function MarkdownContent({
     if (!root) {
       return;
     }
+    let disposed = false;
 
     root.querySelectorAll<HTMLAnchorElement>("a[data-local-path]").forEach((anchor) => {
       const path = anchor.getAttribute("data-local-path")?.trim() ?? "";
@@ -553,6 +622,77 @@ const MarkdownContent = memo(function MarkdownContent({
       }
       anchor.setAttribute("title", path);
       anchor.classList.add("cursor-pointer");
+    });
+    root.querySelectorAll<HTMLImageElement>("img").forEach((image) => {
+      const source = image.getAttribute("src")?.trim() ?? "";
+      const localPath = normalizeMarkdownLocalPath(
+        image.getAttribute("data-local-path") ?? source,
+      );
+      if (!localPath || !isAbsoluteLocalMarkdownPath(localPath)) {
+        const lowerSource = source.toLowerCase();
+        const isWebOrDataSource = lowerSource.startsWith("http://")
+          || lowerSource.startsWith("https://")
+          || lowerSource.startsWith("data:")
+          || lowerSource.startsWith("blob:");
+        if (source && !isWebOrDataSource) {
+          replaceImageWithFallbackText(image, source);
+        }
+        return;
+      }
+      image.setAttribute("data-local-path", localPath);
+      image.setAttribute("title", localPath);
+
+      if (typeof window.electronAPI?.resolveChatMediaPreview === "function") {
+        void window.electronAPI.resolveChatMediaPreview(localPath)
+          .then((preview) => {
+            if (disposed || !root.contains(image)) {
+              return;
+            }
+            if (!preview) {
+              replaceImageWithLocalLink(image, localPath);
+              return;
+            }
+            if (preview.kind === "image") {
+              image.src = preview.dataUrl;
+              return;
+            }
+            if (preview.kind === "video") {
+              replaceImageWithLocalVideo(image, localPath, preview.dataUrl, preview.mimeType);
+              return;
+            }
+            replaceImageWithLocalAudio(image, localPath, preview.dataUrl, preview.mimeType);
+          })
+          .catch(() => {
+            if (disposed || !root.contains(image)) {
+              return;
+            }
+            replaceImageWithLocalLink(image, localPath);
+          });
+        return;
+      }
+
+      if (typeof window.electronAPI?.resolveChatImagePreview === "function") {
+        void window.electronAPI.resolveChatImagePreview(localPath)
+          .then((resolved) => {
+            if (disposed || !root.contains(image)) {
+              return;
+            }
+            if (resolved) {
+              image.src = resolved;
+              return;
+            }
+            replaceImageWithLocalLink(image, localPath);
+          })
+          .catch(() => {
+            if (disposed || !root.contains(image)) {
+              return;
+            }
+            replaceImageWithLocalLink(image, localPath);
+          });
+        return;
+      }
+
+      replaceImageWithLocalLink(image, localPath);
     });
 
     const handleClick = (event: MouseEvent) => {
@@ -577,6 +717,7 @@ const MarkdownContent = memo(function MarkdownContent({
 
     root.addEventListener("click", handleClick);
     return () => {
+      disposed = true;
       root.removeEventListener("click", handleClick);
     };
   }, [html]);

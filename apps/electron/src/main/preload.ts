@@ -74,6 +74,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     }),
   selectChatContextPaths: () => ipcRenderer.invoke("dialog-select-chat-context-paths"),
   resolveChatImagePreview: (path: string) => ipcRenderer.invoke("resolve-chat-image-preview", path),
+  resolveChatMediaPreview: (path: string) => ipcRenderer.invoke("resolve-chat-media-preview", path),
   openLocalPath: (path: string) => ipcRenderer.invoke("open-local-path", path),
 
   // App info

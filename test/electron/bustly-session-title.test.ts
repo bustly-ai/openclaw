@@ -25,4 +25,9 @@ describe("bustly-session-title helpers", () => {
     expect(normalizeGeneratedSessionTitle("New conversation")).toBeNull();
     expect(normalizeGeneratedSessionTitle("")).toBeNull();
   });
+
+  it("rejects assistant-style refusal text as title output", () => {
+    expect(normalizeGeneratedSessionTitle("我无法生成或打开图片，我是一个纯文本 AI")).toBeNull();
+    expect(normalizeGeneratedSessionTitle("I cannot open files for you")).toBeNull();
+  });
 });

@@ -374,25 +374,30 @@ export function createExecTool(
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const baseEnv = host === "sandbox" ? inheritedBaseEnv : sanitizeHostBaseEnv(inheritedBaseEnv);
+      const requestedEnv = {
+        ...(defaults?.env ?? {}),
+        ...(params.env ?? {}),
+      };
+      const mergedRequestedEnv = Object.keys(requestedEnv).length > 0 ? requestedEnv : undefined;
 
       // Logic: Sandbox gets raw env. Host (gateway/node) must pass validation.
       // We validate BEFORE merging to prevent any dangerous vars from entering the stream.
-      if (host !== "sandbox" && params.env) {
-        validateHostEnv(params.env);
+      if (host !== "sandbox" && mergedRequestedEnv) {
+        validateHostEnv(mergedRequestedEnv);
       }
 
-      const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
+      const mergedEnv = mergedRequestedEnv ? { ...baseEnv, ...mergedRequestedEnv } : baseEnv;
 
       const env = sandbox
         ? buildSandboxEnv({
             defaultPath: DEFAULT_PATH,
-            paramsEnv: params.env,
+            paramsEnv: mergedRequestedEnv,
             sandboxEnv: sandbox.env,
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
           })
         : mergedEnv;
 
-      if (!sandbox && host === "gateway" && !params.env?.PATH) {
+      if (!sandbox && host === "gateway" && !mergedRequestedEnv?.PATH) {
         const shellPath = getShellPathFromLoginShell({
           env: process.env,
           timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
@@ -419,7 +424,7 @@ export function createExecTool(
           command: params.command,
           workdir,
           env,
-          requestedEnv: params.env,
+          requestedEnv: mergedRequestedEnv,
           requestedNode: params.node?.trim(),
           boundNode: defaults?.node?.trim(),
           sessionKey: defaults?.sessionKey,

@@ -1301,9 +1301,9 @@
   border-bottom-right-radius: 16px;
 }
 
-.chat-flow-item--text :where(img),
-.chat-flow-item--thinking :where(img),
-.chat-flow-user-bubble :where(img) {
+.chat-flow-item--text :where(img, video),
+.chat-flow-item--thinking :where(img, video),
+.chat-flow-user-bubble :where(img, video) {
   display: block;
   max-width: min(100%, 360px);
   max-height: 280px;
@@ -1311,6 +1311,14 @@
   height: auto;
   object-fit: contain;
   border-radius: 8px;
+}
+
+.chat-flow-item--text :where(audio),
+.chat-flow-item--thinking :where(audio),
+.chat-flow-user-bubble :where(audio) {
+  display: block;
+  width: min(100%, 360px);
+  max-width: 100%;
 }
 
 .chat-flow-item--text :where(a),
