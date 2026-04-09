@@ -2,10 +2,12 @@ import { useState, type ReactNode } from "react";
 import { ClientAppSidebar } from "./Sidebar";
 
 type ClientAppShellProps = {
-  children: ReactNode;
+  activePage: "chat" | "skill";
+  chatPage: ReactNode;
+  skillPage?: ReactNode;
 };
 
-export default function ClientAppShell({ children }: ClientAppShellProps) {
+export default function ClientAppShell({ activePage, chatPage, skillPage }: ClientAppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
@@ -21,7 +23,8 @@ export default function ClientAppShell({ children }: ClientAppShellProps) {
 
       <main className="relative flex-1 overflow-hidden">
         <div className="h-full overflow-hidden bg-white">
-          {children}
+          <div className={activePage === "chat" ? "h-full" : "hidden"}>{chatPage}</div>
+          {skillPage ? <div className={activePage === "skill" ? "h-full" : "hidden"}>{skillPage}</div> : null}
         </div>
       </main>
     </div>

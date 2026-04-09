@@ -116,6 +116,24 @@ function AppShell() {
     return <Navigate to="/chat" replace />;
   };
 
+  const isClientRoute = pathname === "/chat" || pathname === "/skill";
+  const activeClientPage = pathname === "/skill" ? "skill" : "chat";
+
+  if (isClientRoute) {
+    return (
+      <>
+        <DeepLinkBridge />
+        {renderProtectedRoute(
+          <ClientAppShell
+            activePage={activeClientPage}
+            chatPage={<ChatPage />}
+            skillPage={activeClientPage === "skill" ? <SkillPage /> : undefined}
+          />,
+        )}
+      </>
+    );
+  }
+
   return (
     <>
       <DeepLinkBridge />
@@ -131,22 +149,6 @@ function AppShell() {
         <Route
           path="/devpanel"
           element={<Navigate to="/chat" replace />}
-        />
-        <Route
-          path="/chat"
-          element={renderProtectedRoute(
-            <ClientAppShell>
-              <ChatPage />
-            </ClientAppShell>
-          )}
-        />
-        <Route
-          path="/skill"
-          element={renderProtectedRoute(
-            <ClientAppShell>
-              <SkillPage />
-            </ClientAppShell>
-          )}
         />
         <Route path="/" element={renderDefault()} />
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -1915,7 +1915,10 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                 label="Skills"
                 active={isSkillPage}
                 onClick={() => {
-                  void navigate("/skill");
+                  void navigate({
+                    pathname: "/skill",
+                    search: location.search,
+                  });
                 }}
                 collapsed={false}
                 insetClassName="gap-3 px-4 py-2.5"
@@ -1964,7 +1967,10 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                 label="Skills"
                 active={isSkillPage}
                 onClick={() => {
-                  void navigate("/skill");
+                  void navigate({
+                    pathname: "/skill",
+                    search: location.search,
+                  });
                 }}
                 collapsed
                 showTooltip
