@@ -197,19 +197,43 @@ function writeDefaultEnabledManifest(defaultEnabledSkills) {
   };
   const raw = `${JSON.stringify(payload, null, 2)}\n`;
   const openclawManifestPath = resolve(targetSkillsDir, DEFAULT_ENABLED_MANIFEST_NAME);
+  const bustlyBundleSkillsDir = resolve(electronBustlySkillsTargetDir, "skills");
+  const bundledManifestPath = resolve(bustlyBundleSkillsDir, DEFAULT_ENABLED_MANIFEST_NAME);
   mkdirSync(targetSkillsDir, { recursive: true });
+  mkdirSync(bustlyBundleSkillsDir, { recursive: true });
   writeFileSync(openclawManifestPath, raw, "utf8");
+  writeFileSync(bundledManifestPath, raw, "utf8");
   console.log(
-    `[prepare-skill] Wrote default-enabled manifest (${payload.defaultEnabled.length} skills)`,
+    `[prepare-skill] Wrote bundled default-enabled manifest (${payload.defaultEnabled.length} skills)`,
   );
 }
 
-function removeBundledBustlySkillsBundle() {
-  if (!existsSync(electronBustlySkillsTargetDir)) {
-    return;
+function shouldCopyBustlySkillsBundle(source) {
+  const relative = source.slice(bustlySkillsRoot.length).replace(/^[/\\]/, "");
+  if (!relative) {
+    return true;
   }
+  const firstSegment = relative.split(/[/\\]/)[0];
+  return ["README.md", "package.json", "bin", "scripts", "skills", "platforms"].includes(firstSegment);
+}
+
+function copyBustlySkillsBundle() {
+  if (!existsSync(bustlySkillsRoot)) {
+    fail(`Missing bustly-skills submodule: ${bustlySkillsRoot}`);
+  }
+
   rmSync(electronBustlySkillsTargetDir, { recursive: true, force: true });
-  console.log("[prepare-skill] Removed stale bundled bustly-skills resources");
+  mkdirSync(electronBustlySkillsTargetDir, { recursive: true });
+
+  cpSync(bustlySkillsRoot, electronBustlySkillsTargetDir, {
+    recursive: true,
+    dereference: true,
+    filter: shouldCopyBustlySkillsBundle,
+  });
+
+  console.log(
+    `[prepare-skill] Copied bustly-skills bundle to ${electronBustlySkillsTargetDir}`,
+  );
 }
 
 const options = parseArgs(process.argv.slice(2));
@@ -220,5 +244,5 @@ if (options.skillsBranch) {
 const builtInSkillDirs = resolveBuiltInSkillDirs();
 pruneOpenClawSkillWorkspace(builtInSkillDirs);
 syncSkillsWorkspaceFromBustlySkills();
-removeBundledBustlySkillsBundle();
+copyBustlySkillsBundle();
 writeDefaultEnabledManifest(builtInSkillDirs);
