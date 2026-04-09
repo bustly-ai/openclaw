@@ -118,6 +118,14 @@ type RetryPayload = {
   contextPaths: ContextPath[];
 };
 
+function selectionBelongsToTimeline(selection: Selection | null, timelineElement: HTMLDivElement | null): boolean {
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0 || !timelineElement) {
+    return false;
+  }
+  const range = selection.getRangeAt(0);
+  return timelineElement.contains(range.commonAncestorContainer);
+}
+
 const SILENT_REPLY_TOKEN = "NO_REPLY";
 
 function isSilentReplyText(text: string | undefined, token: string = SILENT_REPLY_TOKEN): boolean {
@@ -771,6 +779,7 @@ export default function ChatPage() {
   const [previewMinZoom, setPreviewMinZoom] = useState(0.67);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const [isDraggingTimelineSelection, setIsDraggingTimelineSelection] = useState(false);
   const [subscriptionExpired, setSubscriptionExpired] = useState(false);
   const [subscriptionActionText, setSubscriptionActionText] = useState("Upgrade");
   const [canManageSubscription, setCanManageSubscription] = useState(false);
@@ -808,6 +817,7 @@ export default function ChatPage() {
   const composerIsComposingRef = useRef(false);
   const sendInFlightRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
+  const isDraggingTimelineSelectionRef = useRef(false);
   const [currentScenarioIconId, setCurrentScenarioIconId] = useState<string | null>(null);
   const lastAppliedPromptRef = useRef<string | null>(null);
   const lastAppliedContextRef = useRef<string | null>(null);
@@ -2344,6 +2354,44 @@ export default function ChatPage() {
     };
   }, [currentViewKey, updateScrollBottomState]);
 
+  useEffect(() => {
+    const updateSelectionDragState = (nextValue: boolean) => {
+      isDraggingTimelineSelectionRef.current = nextValue;
+      setIsDraggingTimelineSelection((current) => (current === nextValue ? current : nextValue));
+    };
+    const stopDraggingSelection = () => {
+      updateSelectionDragState(false);
+    };
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if ((event.buttons & 1) !== 1) {
+        updateSelectionDragState(false);
+        return;
+      }
+
+      if (
+        isDraggingTimelineSelectionRef.current ||
+        selectionBelongsToTimeline(window.getSelection(), scrollRef.current)
+      ) {
+        updateSelectionDragState(true);
+        return;
+      }
+
+      updateSelectionDragState(false);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", stopDraggingSelection);
+    window.addEventListener("blur", stopDraggingSelection);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", stopDraggingSelection);
+      window.removeEventListener("blur", stopDraggingSelection);
+      stopDraggingSelection();
+    };
+  }, []);
+
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const element = scrollRef.current;
     if (!element) {
@@ -3181,8 +3229,12 @@ export default function ChatPage() {
       <div className="sticky top-0 z-20 h-8 flex-none bg-white [-webkit-app-region:drag]" />
 
       <div className="relative flex-1 overflow-hidden">
-        <div ref={scrollRef} className="chat-page-timeline h-full">
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 pt-8" style={{ paddingBottom: composerAreaHeight + 16 }}>
+        <div
+          ref={scrollRef}
+          className="chat-page-timeline absolute inset-x-0 top-0"
+          style={{ bottom: composerAreaHeight }}
+        >
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 pt-8 pb-6">
             {timeline.length === 0 ? (
               <div className="flex min-h-[52vh] flex-col items-center justify-center py-8 text-center">
                 <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-[#1A162F] shadow-lg shadow-[#1A162F]/5">
@@ -3221,8 +3273,12 @@ export default function ChatPage() {
 
         <div ref={composerAreaRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
           <div className="h-8 bg-gradient-to-t from-white via-white/80 to-transparent" />
-          <div className="border-t border-white/40 bg-white px-6 pb-8 pointer-events-auto">
-            <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4 pt-4">
+          <div className="border-t border-white/40 bg-white px-6 pb-8">
+            <div
+              className={`mx-auto flex w-full max-w-[720px] flex-col gap-4 pt-4 ${
+                isDraggingTimelineSelection ? "pointer-events-none" : "pointer-events-auto"
+              }`}
+            >
               {!pageResolving && subscriptionExpired ? (
                 <div className="mb-3 rounded-2xl border border-[#ECECEC] bg-white p-4 shadow-[0_10px_24px_rgba(26,22,47,0.05)]">
                   <div className="flex items-center justify-between gap-4">

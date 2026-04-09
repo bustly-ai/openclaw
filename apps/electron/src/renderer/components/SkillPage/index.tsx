@@ -1,6 +1,7 @@
 import { createPortal } from "react-dom";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import { MagnifyingGlass } from "@phosphor-icons/react";
 import { GatewayBrowserClient } from "../../lib/gateway-client";
 import { createGatewayInstanceId } from "../../lib/gateway-instance-id";
 import { buildBustlyWorkspaceAgentId } from "../../../shared/bustly-agent";
@@ -210,6 +211,28 @@ function toSkillItem(skill: SkillStatusEntry, index: number): SkillItemData {
     homepage: skill.homepage,
     primaryEnv: skill.primaryEnv,
   };
+}
+
+function normalizeSkillSearchText(value: string | undefined): string {
+  return value?.trim().toLocaleLowerCase() ?? "";
+}
+
+function skillMatchesQuery(skill: SkillItemData, query: string): boolean {
+  if (!query) {
+    return true;
+  }
+
+  const fields = [
+    skill.name,
+    skill.description,
+    skill.skillKey,
+    skill.source,
+    skill.filePath,
+    skill.homepage,
+    skill.primaryEnv,
+  ];
+
+  return fields.some((field) => normalizeSkillSearchText(field).includes(query));
 }
 
 function ModalShell(props: {
@@ -541,6 +564,8 @@ export default function SkillPage() {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showGithubModal, setShowGithubModal] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const deferredSearchQuery = useDeferredValue(searchQuery);
 
   const navigateToChatWithPrompt = (prompt: string, context?: PendingChatContext) => {
     const searchParams = new URLSearchParams();
@@ -652,8 +677,12 @@ export default function SkillPage() {
       clientRef.current = null;
     };
   }, []);
-  const skillRows = useMemo(() => {
-    return [...skills].sort((left, right) => {
+  const normalizedSearchQuery = normalizeSkillSearchText(deferredSearchQuery);
+  const hasActiveSearch = normalizedSearchQuery.length > 0;
+  const visibleSkillRows = useMemo(() => {
+    return [...skills]
+      .filter((skill) => skillMatchesQuery(skill, normalizedSearchQuery))
+      .sort((left, right) => {
       if (left.enabled !== right.enabled) {
         return left.enabled ? -1 : 1;
       }
@@ -661,13 +690,13 @@ export default function SkillPage() {
         sensitivity: "base",
         numeric: true,
       });
-    });
-  }, [skills]);
+      });
+  }, [normalizedSearchQuery, skills]);
 
   return (
     <div className="custom-scrollbar h-full overflow-y-auto">
       <div className="mx-auto min-h-full max-w-5xl px-6 pt-6 pb-10 font-sans">
-        <div className="mb-8 flex items-center justify-between">
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="mb-1 text-2xl font-bold text-[#1A162F]">Skills</h1>
             <p className="text-sm text-[#6B7280]">Prepackaged and repeatable best practices &amp; tools for your agents.</p>
@@ -740,6 +769,39 @@ export default function SkillPage() {
           </div>
         </div>
 
+        <div className="mb-6 rounded-2xl border border-[#EEF1F6] bg-white/90 p-3 shadow-[0_10px_24px_rgba(26,22,47,0.04)]">
+          <div className="relative">
+            <MagnifyingGlass
+              size={18}
+              weight="bold"
+              className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[#666F8D]"
+            />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search skills by name, description, source, or path"
+              aria-label="Search skills"
+              className="h-11 w-full appearance-none rounded-xl border border-[#E7EAF0] bg-[#FAFBFD] pr-4 pl-10 text-sm text-[#1A162F] outline-none transition-all placeholder:text-[#8B93AA] focus:border-[#D8DDE8] focus:bg-white focus:outline-none focus:ring-0 focus:shadow-[0_0_0_1px_rgba(26,22,47,0.05)]"
+            />
+          </div>
+          <div className="mt-2 flex items-center justify-between px-1 text-xs text-[#666F8D]">
+            <span>
+              {loadingSkills ? "Loading skills..." : `${visibleSkillRows.length} ${visibleSkillRows.length === 1 ? "skill" : "skills"}`}
+              {hasActiveSearch ? " matched" : ""}
+            </span>
+            {hasActiveSearch ? (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="font-semibold text-[#1A162F] transition-colors hover:text-[#0F0C21]"
+              >
+                Clear
+              </button>
+            ) : null}
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {loadingSkills ? (
             <>
@@ -752,8 +814,8 @@ export default function SkillPage() {
             <div className="col-span-full rounded-xl border border-red-100 bg-red-50 py-12 text-center text-sm text-red-600">
               {skillsError}
             </div>
-          ) : skillRows.length > 0 ? (
-            skillRows.map((skill) => (
+          ) : visibleSkillRows.length > 0 ? (
+            visibleSkillRows.map((skill) => (
               <SkillCard
                 key={skill.id}
                 skill={skill}
@@ -786,6 +848,22 @@ export default function SkillPage() {
                 }}
               />
             ))
+          ) : skills.length > 0 ? (
+            <div className="col-span-full rounded-xl border border-dashed border-[#DCE2EC] bg-[#FAFBFD] py-12 text-center">
+              <div className="mx-auto max-w-md px-6">
+                <h3 className="text-base font-bold text-[#1A162F]">No skills found</h3>
+                <p className="mt-2 text-sm text-[#666F8D]">Try another keyword or clear the current search.</p>
+                {hasActiveSearch ? (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery("")}
+                    className="mt-5 rounded-lg bg-[#1A162F] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-[#1A162F]/90"
+                  >
+                    Clear search
+                  </button>
+                ) : null}
+              </div>
+            </div>
           ) : (
             <div className="col-span-full rounded-xl border border-dashed border-gray-200 bg-gray-50 py-12 text-center text-gray-500">
               No skills installed yet.
