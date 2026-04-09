@@ -2,7 +2,6 @@ import type { SessionEntry as PiSessionEntry, SessionHeader } from "@mariozechne
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -13,9 +12,7 @@ import {
 } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
-
-// Export HTML templates are bundled with this module
-const EXPORT_HTML_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "export-html");
+import { resolveExportHtmlDir } from "./export-html/resolve-dir.js";
 
 interface SessionData {
   header: SessionHeader | null;
@@ -26,7 +23,7 @@ interface SessionData {
 }
 
 function loadTemplate(fileName: string): string {
-  return fs.readFileSync(path.join(EXPORT_HTML_DIR, fileName), "utf-8");
+  return fs.readFileSync(path.join(resolveExportHtmlDir(), fileName), "utf-8");
 }
 
 function generateHtml(sessionData: SessionData): string {

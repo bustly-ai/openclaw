@@ -132,6 +132,37 @@ function pruneOpenClawSkillWorkspace(builtInSkillDirs) {
   );
 }
 
+function syncSkillsWorkspaceFromBustlySkills() {
+  if (!existsSync(sourceSkillsDir)) {
+    fail(`Missing bustly-skills skills directory: ${sourceSkillsDir}`);
+  }
+
+  mkdirSync(targetSkillsDir, { recursive: true });
+  const entries = readdirSync(sourceSkillsDir, { withFileTypes: true })
+    .filter((entry) => entry.name && !entry.name.startsWith("."));
+  const copied = [];
+  const replaced = [];
+
+  for (const entry of entries) {
+    const sourcePath = resolve(sourceSkillsDir, entry.name);
+    const targetPath = resolve(targetSkillsDir, entry.name);
+    if (existsSync(targetPath)) {
+      rmSync(targetPath, { recursive: true, force: true });
+      replaced.push(entry.name);
+    }
+    cpSync(sourcePath, targetPath, {
+      recursive: entry.isDirectory(),
+      dereference: true,
+    });
+    copied.push(entry.name);
+  }
+
+  console.log(
+    `[prepare-skill] Synced ${copied.length} skill${copied.length === 1 ? "" : "s"} from bustly-skills/skills to openclaw/skills`
+      + (replaced.length > 0 ? `; replaced ${replaced.length} existing entries` : ""),
+  );
+}
+
 function writeDefaultEnabledManifest(defaultEnabledSkills) {
   const payload = {
     version: 1,
@@ -188,5 +219,6 @@ if (options.skillsBranch) {
 }
 const builtInSkillDirs = resolveBuiltInSkillDirs();
 pruneOpenClawSkillWorkspace(builtInSkillDirs);
+syncSkillsWorkspaceFromBustlySkills();
 copyBustlySkillsBundle();
 writeDefaultEnabledManifest(builtInSkillDirs);
