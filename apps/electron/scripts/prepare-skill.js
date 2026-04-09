@@ -45,44 +45,9 @@ function syncBustlySkillsBranch(branch) {
   run("git", ["checkout", "-B", target, `origin/${target}`], bustlySkillsRoot);
 }
 
-function hasRemoteBranch(branch) {
-  const target = String(branch || "").trim();
-  if (!target) {
-    return false;
-  }
-  return (
-    runCapture("git", ["ls-remote", "--exit-code", "--heads", "origin", target], bustlySkillsRoot)
-    !== null
-  );
-}
-
 function resolveDefaultSkillsBranch() {
-  const upstream = runCapture(
-    "git",
-    ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-    bustlySkillsRoot,
-  )
-    ?.trim();
-  if (upstream?.startsWith("origin/")) {
-    return upstream.slice("origin/".length);
-  }
-
-  const current = runCapture("git", ["branch", "--show-current"], bustlySkillsRoot)?.trim();
-  if (current && current !== "HEAD" && hasRemoteBranch(current)) {
-    return current;
-  }
-
-  const remoteHead = runCapture(
-    "git",
-    ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-    bustlySkillsRoot,
-  )
-    ?.trim();
-  if (remoteHead?.startsWith("origin/")) {
-    return remoteHead.slice("origin/".length);
-  }
-
-  return "main";
+  const configured = process.env.BUSTLY_SKILLS_DEFAULT_BRANCH?.trim();
+  return configured || "main";
 }
 
 function parseArgs(argv) {
