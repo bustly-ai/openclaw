@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..", "..", "..");
@@ -7,7 +7,6 @@ const bustlySkillsRoot = resolve(repoRoot, "bustly-skills");
 const sourceSkillsDir = resolve(bustlySkillsRoot, "skills");
 const targetSkillsDir = resolve(repoRoot, "skills");
 const electronBustlySkillsTargetDir = resolve(repoRoot, "apps", "electron", "resources", "bustly-skills");
-const DEFAULT_ENABLED_MANIFEST_NAME = ".bustly-default-enabled.json";
 
 function fail(message) {
   console.error(`[prepare-skill] ${message}`);
@@ -156,58 +155,6 @@ function pruneOpenClawSkillWorkspace(builtInSkillDirs) {
   );
 }
 
-function syncSkillsWorkspaceFromBustlySkills() {
-  if (!existsSync(sourceSkillsDir)) {
-    fail(`Missing bustly-skills skills directory: ${sourceSkillsDir}`);
-  }
-
-  mkdirSync(targetSkillsDir, { recursive: true });
-  const entries = readdirSync(sourceSkillsDir, { withFileTypes: true })
-    .filter((entry) => entry.name && !entry.name.startsWith("."));
-  const copied = [];
-  const replaced = [];
-
-  for (const entry of entries) {
-    const sourcePath = resolve(sourceSkillsDir, entry.name);
-    const targetPath = resolve(targetSkillsDir, entry.name);
-    if (existsSync(targetPath)) {
-      rmSync(targetPath, { recursive: true, force: true });
-      replaced.push(entry.name);
-    }
-    cpSync(sourcePath, targetPath, {
-      recursive: entry.isDirectory(),
-      dereference: true,
-    });
-    copied.push(entry.name);
-  }
-
-  console.log(
-    `[prepare-skill] Synced ${copied.length} skill${copied.length === 1 ? "" : "s"} from bustly-skills/skills to openclaw/skills`
-      + (replaced.length > 0 ? `; replaced ${replaced.length} existing entries` : ""),
-  );
-}
-
-function writeDefaultEnabledManifest(defaultEnabledSkills) {
-  const payload = {
-    version: 1,
-    generatedAt: new Date().toISOString(),
-    defaultEnabled: Array.from(new Set(defaultEnabledSkills))
-      .filter(Boolean)
-      .sort((left, right) => left.localeCompare(right)),
-  };
-  const raw = `${JSON.stringify(payload, null, 2)}\n`;
-  const openclawManifestPath = resolve(targetSkillsDir, DEFAULT_ENABLED_MANIFEST_NAME);
-  const bustlyBundleSkillsDir = resolve(electronBustlySkillsTargetDir, "skills");
-  const bundledManifestPath = resolve(bustlyBundleSkillsDir, DEFAULT_ENABLED_MANIFEST_NAME);
-  mkdirSync(targetSkillsDir, { recursive: true });
-  mkdirSync(bustlyBundleSkillsDir, { recursive: true });
-  writeFileSync(openclawManifestPath, raw, "utf8");
-  writeFileSync(bundledManifestPath, raw, "utf8");
-  console.log(
-    `[prepare-skill] Wrote bundled default-enabled manifest (${payload.defaultEnabled.length} skills)`,
-  );
-}
-
 function shouldCopyBustlySkillsBundle(source) {
   const relative = source.slice(bustlySkillsRoot.length).replace(/^[/\\]/, "");
   if (!relative) {
@@ -243,6 +190,4 @@ if (options.skillsBranch) {
 }
 const builtInSkillDirs = resolveBuiltInSkillDirs();
 pruneOpenClawSkillWorkspace(builtInSkillDirs);
-syncSkillsWorkspaceFromBustlySkills();
 copyBustlySkillsBundle();
-writeDefaultEnabledManifest(builtInSkillDirs);

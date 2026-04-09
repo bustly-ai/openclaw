@@ -1,8 +1,0 @@
-{
-  "name": "pptx-generator-starter",
-  "private": true,
-  "type": "commonjs",
-  "dependencies": {
-    "pptxgenjs": "^3.12.0"
-  }
-}
