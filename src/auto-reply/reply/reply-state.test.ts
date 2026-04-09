@@ -276,10 +276,10 @@ describe("post-run memory review settings", () => {
     expect(settings?.minToolCalls).toBe(DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS);
     expect(settings?.maxRecentMessages).toBe(DEFAULT_POST_RUN_MEMORY_REVIEW_MAX_RECENT_MESSAGES);
     expect(settings?.allowInGroupChats).toBe(false);
-    expect(settings?.prompt).toContain("skill_manage");
-    expect(settings?.prompt).toContain("session_search");
-    expect(settings?.prompt).toContain("NO_REPLY");
-    expect(settings?.systemPrompt).toContain("NO_REPLY");
+    expect(settings?.prompt).toContain("Return JSON only");
+    expect(settings?.prompt).toContain("layer: none, memory, skill, or retrieval_only");
+    expect(settings?.prompt).toContain("output layer=none");
+    expect(settings?.systemPrompt).toContain("Return one JSON object");
   });
 
   it("respects explicit disable flag", () => {
@@ -302,7 +302,7 @@ describe("post-run memory review settings", () => {
     });
     expect(decision).toEqual({
       shouldRun: true,
-      trigger: "agent_end",
+      trigger: "session_end",
       toolCallCount: 0,
     });
   });
@@ -319,7 +319,7 @@ describe("post-run memory review settings", () => {
     });
     expect(decision).toEqual({
       shouldRun: true,
-      trigger: "agent_end",
+      trigger: "session_end",
       toolCallCount: 2,
     });
   });

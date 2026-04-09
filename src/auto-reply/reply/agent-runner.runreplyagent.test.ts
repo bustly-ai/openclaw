@@ -2525,10 +2525,27 @@ describe("runReplyAgent memory flush", () => {
       const calls: Array<{ prompt?: string; sessionId?: string }> = [];
       state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
         calls.push({ prompt: params.prompt, sessionId: params.sessionId });
-        if (params.prompt?.includes("Post-run memory review.")) {
-          await fs.mkdir(workspaceDir, { recursive: true });
-          await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "durable fact\n", "utf-8");
-          return { payloads: [], meta: {} };
+        if (params.prompt?.includes("Return exactly one JSON object")) {
+          return {
+            payloads: [
+              {
+                text: JSON.stringify({
+                  layer: "memory",
+                  reason: "durable_fact",
+                  confidence: 0.9,
+                  repeatedTask: false,
+                  summary: "Captured durable note",
+                  memory: {
+                    target: "memory_md",
+                    heading: "Durable Fact",
+                    body: "Remember this for later.",
+                  },
+                  skill: null,
+                }),
+              },
+            ],
+            meta: {},
+          };
         }
         return {
           payloads: [{ text: "ok" }],
@@ -2568,17 +2585,22 @@ describe("runReplyAgent memory flush", () => {
       });
       expect(calls[0]?.prompt).toBe("ship it");
       expect(calls[0]?.sessionId).toBe("session");
-      expect(calls[1]?.prompt).toContain("Post-run memory review.");
+      expect(calls[1]?.prompt).toContain("You are the consolidation classifier");
       expect(calls[1]?.sessionId).toContain("session__post-run-review__");
       expect(calls[1]?.sessionId).not.toBe("session");
-      expect(calls[1]?.prompt).toContain("Current time:");
-      expect(calls[1]?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+      expect(calls[1]?.prompt).toContain("Return exactly one JSON object");
+      expect(calls[1]?.prompt).toContain("CurrentTurnTranscript:");
 
       const ledgerPath = path.join(agentDir, "evolution", "reviews.jsonl");
       const ledger = await waitForFileText(ledgerPath);
-      expect(ledger).toContain('"trigger":"agent_end"');
+      expect(ledger).toContain('"trigger":"session_end"');
       expect(ledger).toContain('"toolCallCount":0');
       expect(ledger).toContain('"changedMemory":true');
+      expect(ledger).toContain('"layer":"memory"');
+
+      const memoryFile = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryFile).toContain("## Durable Fact");
+      expect(memoryFile).toContain("Remember this for later.");
 
       const transcriptMessages = await readTranscriptMessages(sessionFile);
       expect(transcriptMessages).toEqual([
