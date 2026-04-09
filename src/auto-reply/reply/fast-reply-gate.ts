@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   stream,
   Type,
@@ -8,22 +9,21 @@ import {
   type Message,
   type Tool,
 } from "@mariozechner/pi-ai";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { BUSTLY_PROVIDER_ID, BUSTLY_STANDARD_CHAT_MODEL_ID } from "../../agents/bustly-models.js";
+import {
+  BUSTLY_PROVIDER_ID,
+  BUSTLY_STANDARD_CHAT_MODEL_ID,
+} from "../../agents/bustly-models.js";
 import { mergeBustlyRuntimeHeaders } from "../../agents/bustly-runtime-headers.js";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
 import { prepareSessionManagerForRun } from "../../agents/pi-embedded-runner/session-manager-init.js";
 import type { EmbeddedPiRunResult } from "../../agents/pi-embedded-runner/types.js";
-import {
-  acquireSessionWriteLock,
-  resolveSessionLockMaxHoldFromTimeout,
-} from "../../agents/session-write-lock.js";
-import { readBustlyOAuthState } from "../../bustly-oauth.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import { acquireSessionWriteLock, resolveSessionLockMaxHoldFromTimeout } from "../../agents/session-write-lock.js";
 import { consumeCompletedAssistantRequestMetrics } from "../../infra/assistant-request-metrics.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { runTrackedModelRequest } from "../../infra/model-request-adapter.js";
 import { defaultRuntime } from "../../runtime.js";
+import { readBustlyOAuthState } from "../../bustly-oauth.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue.js";
@@ -62,6 +62,7 @@ const FAST_REPLY_GATE_PROMPT = [
   "If the message is a real question, default to calling the tool even if it looks answerable from general knowledge.",
   "If you are unsure, call the tool.",
   "Direct replies must stay brief and final. Escalation acknowledgments must stay brief and avoid claiming the task is already completed. Never mention routing or tools.",
+
 ].join("\n");
 
 type FastReplyGateSuccess = {
@@ -81,10 +82,7 @@ type FastReplyGateHandoff = {
   assistantRequestMetrics: ReturnType<typeof consumeCompletedAssistantRequestMetrics>;
 };
 
-export type FastReplyGateResult =
-  | FastReplyGateSuccess
-  | FastReplyGateHandoff
-  | { kind: "continue" };
+export type FastReplyGateResult = FastReplyGateSuccess | FastReplyGateHandoff | { kind: "continue" };
 
 type SessionMessage = Parameters<SessionManager["appendMessage"]>[0];
 type SessionAssistantMessage = Extract<SessionMessage, { role: "assistant" }>;
@@ -141,7 +139,7 @@ function isRenderablePayload(payload: ReplyPayload): boolean {
   if (payload.mediaUrl?.trim()) {
     return true;
   }
-  return payload.mediaUrls?.some((url) => url.trim().length > 0) ?? false;
+  return (payload.mediaUrls?.some((url) => url.trim().length > 0) ?? false) === true;
 }
 
 function buildAssistantTranscriptText(payload: ReplyPayload): string {
@@ -149,7 +147,10 @@ function buildAssistantTranscriptText(payload: ReplyPayload): string {
   if (payload.text?.trim()) {
     parts.push(payload.text.trim());
   }
-  const mediaUrls = [...(payload.mediaUrl ? [payload.mediaUrl] : []), ...(payload.mediaUrls ?? [])]
+  const mediaUrls = [
+    ...(payload.mediaUrl ? [payload.mediaUrl] : []),
+    ...(payload.mediaUrls ?? []),
+  ]
     .map((value) => value.trim())
     .filter(Boolean);
   for (const mediaUrl of mediaUrls) {
@@ -198,10 +199,7 @@ function readMessageText(content: unknown): string {
       if (!block || typeof block !== "object") {
         return "";
       }
-      if (
-        (block as { type?: string }).type === "text" &&
-        typeof (block as { text?: unknown }).text === "string"
-      ) {
+      if ((block as { type?: string }).type === "text" && typeof (block as { text?: unknown }).text === "string") {
         return String((block as { text: string }).text).trim();
       }
       return "";
@@ -211,10 +209,7 @@ function readMessageText(content: unknown): string {
     .trim();
 }
 
-async function readRecentTranscriptMessages(
-  sessionFile: string,
-  maxLines = 300,
-): Promise<TranscriptMessageLike[]> {
+async function readRecentTranscriptMessages(sessionFile: string, maxLines = 300): Promise<TranscriptMessageLike[]> {
   try {
     const raw = await fs.readFile(sessionFile, "utf-8");
     const lines = raw.split(/\r?\n/).filter(Boolean).slice(-maxLines);
@@ -235,16 +230,15 @@ async function readRecentTranscriptMessages(
   }
 }
 
-function extractRecentLoopTurns(
-  messages: TranscriptMessageLike[],
-  maxTurns = 2,
-): FastGateLoopTurn[] {
+function extractRecentLoopTurns(messages: TranscriptMessageLike[], maxTurns = 2): FastGateLoopTurn[] {
   const turns: FastGateLoopTurn[] = [];
-  let current: {
-    userText: string;
-    assistantText: string | null;
-    hadLoopActivity: boolean;
-  } | null = null;
+  let current:
+    | {
+        userText: string;
+        assistantText: string | null;
+        hadLoopActivity: boolean;
+      }
+    | null = null;
 
   const flush = () => {
     if (!current) {
@@ -362,7 +356,9 @@ function extractToolReply(args: unknown): string | undefined {
   return typeof reply === "string" && reply.trim() ? reply.trim() : undefined;
 }
 
-function extractFastGateToolCalls(event: AssistantMessageEvent): FastGateToolCall[] {
+function extractFastGateToolCalls(
+  event: AssistantMessageEvent,
+): FastGateToolCall[] {
   if (event.type !== "toolcall_end" || event.toolCall.name !== FAST_REPLY_GATE_TOOL_NAME) {
     return [];
   }
@@ -390,25 +386,6 @@ function extractAssistantText(message: AssistantMessage): string {
 
 function detectLikelyChinese(text: string): boolean {
   return /[\u3400-\u9fff]/u.test(text);
-}
-
-function normalizeLightweightSocialText(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFKC")
-    .replace(/[\p{P}\p{S}\s]+/gu, " ")
-    .trim();
-}
-
-function isLikelyLightweightSocialMessage(text: string): boolean {
-  const normalized = normalizeLightweightSocialText(text);
-  if (!normalized) {
-    return false;
-  }
-  return [
-    /^(?:hi|hello|hey|thanks|thank you|good morning|good afternoon|good evening)$/u,
-    /^(?:你好|您好|嗨|哈喽|谢谢|多谢|早上好|上午好|中午好|下午好|晚上好)$/u,
-  ].some((pattern) => pattern.test(normalized));
 }
 
 function buildFallbackHandoffPreface(userText: string): string {
@@ -440,15 +417,13 @@ function summarizeFastGatePayloadCompat(payload: unknown): Record<string, unknow
   }
   const payloadObj = payload as Record<string, unknown>;
   const reasoning =
-    payloadObj.reasoning &&
-    typeof payloadObj.reasoning === "object" &&
-    !Array.isArray(payloadObj.reasoning)
+    payloadObj.reasoning && typeof payloadObj.reasoning === "object" && !Array.isArray(payloadObj.reasoning)
       ? (payloadObj.reasoning as Record<string, unknown>)
       : undefined;
   return {
     hasReasoningField: Boolean(reasoning),
     reasoningEnabled: reasoning?.enabled,
-    reasoningKeys: reasoning ? Object.keys(reasoning).toSorted() : [],
+    reasoningKeys: reasoning ? Object.keys(reasoning).sort() : [],
     hasReasoningEffortField: Object.hasOwn(payloadObj, "reasoning_effort"),
   };
 }
@@ -833,33 +808,6 @@ export async function runFastReplyGate(params: {
         messageContentTypes: message.content.map((block) => block.type),
       });
       return { kind: "continue" };
-    }
-
-    if (!isLikelyLightweightSocialMessage(userText)) {
-      if (!assistantText) {
-        assistantText = text;
-        await emitVisibleAssistantDelta(text, text);
-      }
-      await emitVisibleAssistantSegmentBreak();
-      const assistantRequestMetrics = consumeCompletedAssistantRequestMetrics(metricsRunId);
-      logFastGate("escalate", {
-        reason: "non_social_text_preface",
-        runId,
-        visibleRunId,
-        sessionKey: params.followupRun.run.sessionKey,
-        durationMs: Date.now() - startedAt,
-        textLength: text.length,
-        stopReason: message.stopReason,
-        messageContentTypes: message.content.map((block) => block.type),
-      });
-      return {
-        kind: "handoff",
-        runId: visibleRunId,
-        provider: BUSTLY_PROVIDER_ID,
-        model: BUSTLY_STANDARD_CHAT_MODEL_ID,
-        prefaceText: text,
-        assistantRequestMetrics,
-      };
     }
 
     if (!assistantText) {

@@ -1,19 +1,19 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
   type AssistantMessageEvent,
 } from "@mariozechner/pi-ai";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import * as sessions from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { resetAssistantRequestMetricsForTest } from "../../infra/assistant-request-metrics.js";
-import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
+import * as sessions from "../../config/sessions.js";
+import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -89,8 +89,12 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
 });
 
 vi.mock("../../agents/pi-embedded-runner/model.js", () => ({
-  resolveModel: (provider: string, model: string, agentDir: string | undefined, cfg: unknown) =>
-    state.resolveModelMock(provider, model, agentDir, cfg),
+  resolveModel: (
+    provider: string,
+    model: string,
+    agentDir: string | undefined,
+    cfg: unknown,
+  ) => state.resolveModelMock(provider, model, agentDir, cfg),
 }));
 
 vi.mock("../../agents/model-auth.js", async (importOriginal) => {
@@ -152,7 +156,6 @@ beforeEach(() => {
 
 function createMinimalRun(params?: {
   opts?: GetReplyOptions;
-  commandBody?: string;
   resolvedVerboseLevel?: "off" | "on";
   sessionStore?: Record<string, SessionEntry>;
   sessionEntry?: SessionEntry;
@@ -208,9 +211,8 @@ function createMinimalRun(params?: {
     opts,
     run: async () => {
       const runReplyAgent = await getRunReplyAgent();
-      const commandBody = params?.commandBody ?? "hello";
       return runReplyAgent({
-        commandBody,
+        commandBody: "hello",
         followupRun,
         queueKey: "main",
         resolvedQueue,
@@ -237,7 +239,10 @@ function createMinimalRun(params?: {
   };
 }
 
-function createMockAssistantStream(events: AssistantMessageEvent[], result?: AssistantMessage) {
+function createMockAssistantStream(
+  events: AssistantMessageEvent[],
+  result?: AssistantMessage,
+) {
   const stream = createAssistantMessageEventStream();
   queueMicrotask(() => {
     for (const event of events) {
@@ -282,10 +287,7 @@ async function readTranscriptMessages(sessionFile: string) {
   return raw
     .split(/\r?\n/)
     .filter(Boolean)
-    .map(
-      (line) =>
-        JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } },
-    )
+    .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } })
     .filter((entry) => entry.type === "message")
     .map((entry) => entry.message ?? {});
 }
@@ -295,12 +297,7 @@ async function writeTranscriptMessages(
   messages: Array<Record<string, unknown>>,
 ) {
   const lines = [
-    JSON.stringify({
-      type: "session",
-      id: "session",
-      version: 1,
-      timestamp: new Date().toISOString(),
-    }),
+    JSON.stringify({ type: "session", id: "session", version: 1, timestamp: new Date().toISOString() }),
     ...messages.map((message) => JSON.stringify({ type: "message", message })),
   ];
   await fs.mkdir(path.dirname(sessionFile), { recursive: true });
@@ -607,75 +604,6 @@ describe("runReplyAgent fast reply gate", () => {
     expect(readTextContent(messages[1]?.content)).toBe("Quick answer");
   });
 
-  it("continues into the main agent loop when a non-social request gets a text-only fast-gate preface", async () => {
-    const tempDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-fast-gate-preface-"));
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const streamedMessage: AssistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "我明白，我已调用相关信息并开始分析。" }],
-      api: "openai-completions",
-      provider: "bustly",
-      model: "chat.standard",
-      usage: {
-        input: 12,
-        output: 8,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 20,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      },
-      stopReason: "stop",
-      timestamp: Date.now(),
-    };
-    state.streamMock.mockReturnValueOnce(
-      createMockAssistantStream(
-        [
-          {
-            type: "done",
-            reason: "stop",
-            message: streamedMessage,
-          },
-        ],
-        streamedMessage,
-      ),
-    );
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Main loop answer" }],
-      meta: {
-        hasAssistantMessage: true,
-        agentMeta: {
-          provider: "anthropic",
-          model: "claude",
-        },
-      },
-    });
-
-    const { run } = createMinimalRun({
-      commandBody: "基于这个播客，帮我重新设计 Bustly 的 onboarding 方案。",
-      runOverrides: {
-        sessionFile,
-        workspaceDir: tempDir,
-        config: bustlyConfig,
-      },
-    });
-
-    const result = await run();
-
-    expect(result).toMatchObject({ text: "Main loop answer" });
-    expect(state.streamMock).toHaveBeenCalledTimes(1);
-    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      retryWithoutNewUser: true,
-      prompt: "基于这个播客，帮我重新设计 Bustly 的 onboarding 方案。",
-    });
-  });
-
   it("logs the fast gate request payload after reasoning compat has been applied", async () => {
     await withStateDirEnv("openclaw-fast-gate-payload-", async ({ stateDir }) => {
       vi.stubEnv("OPENCLAW_PAYLOAD_LOG", "1");
@@ -875,9 +803,7 @@ describe("runReplyAgent fast reply gate", () => {
       timestamp: Date.now(),
     };
     state.streamMock.mockImplementationOnce((_model, context) => {
-      expect(context.systemPrompt).toContain(
-        "You are Bustly, a Commerce Operating Agent for merchants.",
-      );
+      expect(context.systemPrompt).toContain("You are Bustly, a Commerce Operating Agent for merchants.");
       expect(context.systemPrompt).toContain("Any commerce-related request must call the tool.");
       expect(context.messages).toMatchObject([
         { role: "user", content: "loop question 2" },
@@ -984,12 +910,10 @@ describe("runReplyAgent fast reply gate", () => {
             delta: " the latest business changes now.",
             partial: {
               ...toolUseMessage,
-              content: [
-                toolUseMessage.content[0] as Extract<
-                  AssistantMessage["content"][number],
-                  { type: "text" }
-                >,
-              ],
+              content: [toolUseMessage.content[0] as Extract<
+                AssistantMessage["content"][number],
+                { type: "text" }
+              >],
             },
           },
           {
@@ -1108,9 +1032,7 @@ describe("runReplyAgent fast reply gate", () => {
     const messages = await readTranscriptMessages(sessionFile);
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(readTextContent(messages[0]?.content)).toBe("hello");
-    expect(readTextContent(messages[1]?.content)).toBe(
-      "I'm checking the latest business changes now.",
-    );
+    expect(readTextContent(messages[1]?.content)).toBe("I'm checking the latest business changes now.");
   });
 
   it("uses the fast gate tool reply when the model escalates without assistant text", async () => {
