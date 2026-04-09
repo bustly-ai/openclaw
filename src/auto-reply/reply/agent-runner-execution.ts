@@ -113,6 +113,8 @@ export async function runAgentTurnWithFallback(params: {
       sessionKey: params.sessionKey,
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
+      uiVisibility: params.isHeartbeat ? "hidden" : "visible",
+      silentReason: params.isHeartbeat ? "heartbeat" : undefined,
     });
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;

@@ -96,6 +96,17 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    selfEvolution: z
+      .object({
+        enabled: z.boolean().optional(),
+        minToolCalls: z.number().int().nonnegative().optional(),
+        maxRecentMessages: z.number().int().positive().optional(),
+        allowInGroupChats: z.boolean().optional(),
+        prompt: z.string().optional(),
+        systemPrompt: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     thinkingDefault: z
       .union([
         z.literal("off"),

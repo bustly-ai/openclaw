@@ -397,6 +397,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (!payload) {
     return;
   }
+  if (payload.data?.openclaw && (payload.data.openclaw as { visibility?: unknown }).visibility === "hidden") {
+    return;
+  }
 
   // Handle compaction events
   if (payload.stream === "compaction") {

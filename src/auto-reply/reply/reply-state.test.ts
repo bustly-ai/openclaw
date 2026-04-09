@@ -20,6 +20,12 @@ import {
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
 } from "./memory-flush.js";
+import {
+  DEFAULT_POST_RUN_MEMORY_REVIEW_MAX_RECENT_MESSAGES,
+  DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS,
+  decidePostRunMemoryReview,
+  resolvePostRunMemoryReviewSettings,
+} from "./post-run-memory-review.js";
 import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
@@ -245,6 +251,77 @@ describe("memory flush settings", () => {
 
     expect(settings?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
     expect(settings?.reserveTokensFloor).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
+  });
+});
+
+describe("post-run memory review settings", () => {
+  it("defaults to enabled", () => {
+    const settings = resolvePostRunMemoryReviewSettings();
+    expect(settings).not.toBeNull();
+    expect(settings?.enabled).toBe(true);
+  });
+
+  it("resolves enabled settings with defaults", () => {
+    const settings = resolvePostRunMemoryReviewSettings({
+      agents: {
+        defaults: {
+          selfEvolution: {
+            enabled: true,
+          },
+        },
+      },
+    });
+    expect(settings).not.toBeNull();
+    expect(settings?.enabled).toBe(true);
+    expect(settings?.minToolCalls).toBe(DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS);
+    expect(settings?.maxRecentMessages).toBe(DEFAULT_POST_RUN_MEMORY_REVIEW_MAX_RECENT_MESSAGES);
+    expect(settings?.allowInGroupChats).toBe(false);
+    expect(settings?.prompt).toContain("skill_manage");
+    expect(settings?.prompt).toContain("session_search");
+    expect(settings?.prompt).toContain("NO_REPLY");
+    expect(settings?.systemPrompt).toContain("NO_REPLY");
+  });
+
+  it("respects explicit disable flag", () => {
+    expect(
+      resolvePostRunMemoryReviewSettings({
+        agents: {
+          defaults: {
+            selfEvolution: {
+              enabled: false,
+            },
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("always runs a post-run review even without tool results", () => {
+    const decision = decidePostRunMemoryReview({
+      transcriptMessages: [{ role: "user", content: "普通问题" }],
+    });
+    expect(decision).toEqual({
+      shouldRun: true,
+      trigger: "agent_end",
+      toolCallCount: 0,
+    });
+  });
+
+  it("counts only current-turn tool results for review metadata", () => {
+    const decision = decidePostRunMemoryReview({
+      transcriptMessages: [
+        { role: "user", content: "older turn" },
+        { role: "toolResult", content: "old tool" },
+        { role: "user", content: "ship it" },
+        { role: "toolResult", content: "tool 1" },
+        { role: "toolResult", content: "tool 2" },
+      ],
+    });
+    expect(decision).toEqual({
+      shouldRun: true,
+      trigger: "agent_end",
+      toolCallCount: 2,
+    });
   });
 });
 

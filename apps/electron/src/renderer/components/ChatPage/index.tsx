@@ -568,6 +568,37 @@ function readThinkingText(message: unknown): string | null {
   return trimmed ? text : null;
 }
 
+function readOpenClawMeta(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const direct =
+    record.openclaw && typeof record.openclaw === "object"
+      ? (record.openclaw as Record<string, unknown>)
+      : null;
+  if (direct) {
+    return direct;
+  }
+  const persisted =
+    record.__openclaw && typeof record.__openclaw === "object"
+      ? (record.__openclaw as Record<string, unknown>)
+      : null;
+  if (persisted) {
+    return persisted;
+  }
+  const nested =
+    record.message && typeof record.message === "object"
+      ? readOpenClawMeta(record.message)
+      : null;
+  return nested;
+}
+
+function isHiddenOpenClawMessage(value: unknown): boolean {
+  const meta = readOpenClawMeta(value);
+  return typeof meta?.visibility === "string" && meta.visibility.toLowerCase() === "hidden";
+}
+
 function isCommandMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
@@ -599,10 +630,7 @@ function isCompactionSystemMessage(message: unknown, text: string | null): boole
   if (role !== "system") {
     return false;
   }
-  const meta =
-    rec.__openclaw && typeof rec.__openclaw === "object"
-      ? (rec.__openclaw as Record<string, unknown>)
-      : null;
+  const meta = readOpenClawMeta(rec);
   const kind = typeof meta?.kind === "string" ? meta.kind.toLowerCase() : "";
   if (kind === "compaction") {
     return true;
@@ -1578,6 +1606,9 @@ export default function ChatPage() {
       if (!message || typeof message !== "object") {
         continue;
       }
+      if (isHiddenOpenClawMessage(message)) {
+        continue;
+      }
       const rec = message as Record<string, unknown>;
       const nested =
         rec.message && typeof rec.message === "object" ? (rec.message as Record<string, unknown>) : null;
@@ -1845,7 +1876,23 @@ export default function ChatPage() {
           if (evt.event === "health") {
             return;
           }
-          if(!['presence', 'tick'].includes(evt.event)){
+          const hiddenGatewayEvent =
+            evt.event === "agent"
+              ? isHiddenOpenClawMessage(
+                  evt.payload && typeof evt.payload === "object"
+                    ? (evt.payload as { data?: unknown }).data
+                    : undefined,
+                )
+              : evt.event === "chat"
+                ? isHiddenOpenClawMessage(
+                    evt.payload && typeof evt.payload === "object"
+                      ? (evt.payload as { message?: unknown }).message
+                      : undefined,
+                  ) ||
+                  ((evt.payload as { meta?: { visibility?: unknown } } | undefined)?.meta
+                    ?.visibility === "hidden")
+                : false;
+          if (!hiddenGatewayEvent && !['presence', 'tick'].includes(evt.event)) {
             console.log("[electron-chat] received event", evt.event, evt.payload);
           }
           if (evt.event === "chat") {
@@ -1855,9 +1902,13 @@ export default function ChatPage() {
               sessionKey?: string;
               message?: unknown;
               errorMessage?: string;
+              meta?: Record<string, unknown>;
             };
             const sessionKey = typeof payload?.sessionKey === "string" ? payload.sessionKey : "";
             if (!payload || !sessionKey) {
+              return;
+            }
+            if (isHiddenOpenClawMessage(payload.message) || payload.meta?.visibility === "hidden") {
               return;
             }
             const runtime = getSessionRuntime(sessionKey);
@@ -1958,6 +2009,9 @@ export default function ChatPage() {
             };
             const sessionKey = typeof payload?.sessionKey === "string" ? payload.sessionKey : "";
             if (!payload || !sessionKey) {
+              return;
+            }
+            if (isHiddenOpenClawMessage(payload.data)) {
               return;
             }
             const runtime = getSessionRuntime(sessionKey);

@@ -158,6 +158,8 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
+  /** Hermes-style self-evolution controls (v1: silent post-run memory review). */
+  selfEvolution?: AgentSelfEvolutionConfig;
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
@@ -281,5 +283,20 @@ export type AgentCompactionMemoryFlushConfig = {
   /** User prompt used for the memory flush turn (NO_REPLY is enforced if missing). */
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
+  systemPrompt?: string;
+};
+
+export type AgentSelfEvolutionConfig = {
+  /** Enable the v1+ post-run self-evolution loop (default: true; set false only to force-disable). */
+  enabled?: boolean;
+  /** Minimum number of tool-result messages in the just-finished turn before review triggers. */
+  minToolCalls?: number;
+  /** Max recent transcript messages to inspect when deciding whether review should run. */
+  maxRecentMessages?: number;
+  /** Allow post-run review in group/channel sessions. Default: false (direct chats only). */
+  allowInGroupChats?: boolean;
+  /** User prompt used for the silent post-run review turn (NO_REPLY is enforced if missing). */
+  prompt?: string;
+  /** System prompt appended for the post-run review turn. */
   systemPrompt?: string;
 };

@@ -44,6 +44,7 @@ import {
 } from "./fast-reply-gate.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
+import { runPostRunMemoryReviewIfNeeded } from "./post-run-memory-review.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
@@ -640,6 +641,18 @@ export async function runReplyAgent(params: {
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
+    });
+
+    void runPostRunMemoryReviewIfNeeded({
+      cfg,
+      followupRun,
+      sessionCtx,
+      opts,
+      defaultModel,
+      resolvedVerboseLevel,
+      commandBody,
+      sessionKey,
+      isHeartbeat,
     });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".

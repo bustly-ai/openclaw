@@ -78,6 +78,27 @@ function normalizeHeartbeatChatFinalText(params: {
   return { suppress: false, text: stripped.text };
 }
 
+type SilentRunMeta = {
+  visibility: "hidden";
+  reason: string;
+};
+
+function resolveRunContext(runId: string, sourceRunId?: string) {
+  return getAgentRunContext(sourceRunId && sourceRunId !== runId ? sourceRunId : runId) ??
+    getAgentRunContext(runId);
+}
+
+function resolveSilentRunMeta(runId: string, sourceRunId?: string): SilentRunMeta | null {
+  const runContext = resolveRunContext(runId, sourceRunId);
+  if (runContext?.uiVisibility !== "hidden") {
+    return null;
+  }
+  return {
+    visibility: "hidden",
+    reason: runContext.silentReason?.trim() || "internal",
+  };
+}
+
 export type ChatRunEntry = {
   sessionKey: string;
   clientRunId: string;
@@ -311,6 +332,7 @@ export function createAgentEventHandler({
     seq: number,
     text: string,
   ) => {
+    const silentRunMeta = resolveSilentRunMeta(clientRunId, sourceRunId);
     const cleaned = stripInlineDirectiveTagsForDisplay(text).text;
     if (!cleaned) {
       return;
@@ -319,6 +341,9 @@ export function createAgentEventHandler({
       return;
     }
     chatRunState.buffers.set(clientRunId, cleaned);
+    if (silentRunMeta) {
+      return;
+    }
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
@@ -351,6 +376,7 @@ export function createAgentEventHandler({
     jobState: "done" | "error",
     error?: unknown,
   ) => {
+    const silentRunMeta = resolveSilentRunMeta(clientRunId, sourceRunId);
     const bufferedText = stripInlineDirectiveTagsForDisplay(
       chatRunState.buffers.get(clientRunId) ?? "",
     ).text.trim();
@@ -364,6 +390,9 @@ export function createAgentEventHandler({
       normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
+    if (silentRunMeta) {
+      return;
+    }
     if (jobState === "done") {
       const payload = {
         runId: clientRunId,
@@ -434,8 +463,21 @@ export function createAgentEventHandler({
     const eventForClients = chatLink ? { ...evt, runId: eventRunId } : evt;
     const isAborted =
       chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
+    const silentRunMeta = resolveSilentRunMeta(clientRunId, evt.runId);
+    const decorateEventData = (data: Record<string, unknown>) =>
+      silentRunMeta
+        ? {
+            ...data,
+            openclaw: {
+              visibility: silentRunMeta.visibility,
+              silentReason: silentRunMeta.reason,
+            },
+          }
+        : data;
     // Include sessionKey so Control UI can filter tool streams per session.
-    const agentPayload = sessionKey ? { ...eventForClients, sessionKey } : eventForClients;
+    const agentPayload = sessionKey
+      ? { ...eventForClients, sessionKey, data: decorateEventData(evt.data ?? {}) }
+      : { ...eventForClients, data: decorateEventData(evt.data ?? {}) };
     const last = agentRunSeq.get(evt.runId) ?? 0;
     const isToolEvent = evt.stream === "tool";
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
@@ -456,9 +498,10 @@ export function createAgentEventHandler({
               delete data.result;
               delete data.partialResult;
             }
+            const decoratedData = decorateEventData(data);
             return sessionKey
-              ? { ...eventForClients, sessionKey, data }
-              : { ...eventForClients, data };
+              ? { ...eventForClients, sessionKey, data: decoratedData }
+              : { ...eventForClients, data: decoratedData };
           })()
         : agentPayload;
     if (evt.seq !== last + 1) {

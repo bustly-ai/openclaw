@@ -111,6 +111,7 @@ describe("buildAgentSystemPrompt", () => {
     // Skills are included even in minimal mode when skillsPrompt is provided (cron sessions need them)
     expect(prompt).toContain("## Skills");
     expect(prompt).not.toContain("## Memory Recall");
+    expect(prompt).not.toContain("## Self Evolution");
     expect(prompt).not.toContain("## Documentation");
     expect(prompt).not.toContain("## Reply Tags");
     expect(prompt).not.toContain("## Messaging");
@@ -215,6 +216,20 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain(
       "2) If plugin `openclaw-weixin` is installed/enabled locally, use the official command `openclaw channels login --channel openclaw-weixin`.",
+    );
+  });
+
+  it("includes self-evolution guidance when session_search or skill_manage are available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["memory_search", "session_search", "skill_manage"],
+    });
+
+    expect(prompt).toContain("## Self Evolution");
+    expect(prompt).toContain("Use `session_search` to look for similar prior sessions");
+    expect(prompt).toContain("Use `skill_manage` to codify stable step-by-step procedures");
+    expect(prompt).toContain(
+      "Prefer MEMORY.md for durable facts/preferences/decisions; prefer skills for reusable procedures and operating playbooks.",
     );
   });
 

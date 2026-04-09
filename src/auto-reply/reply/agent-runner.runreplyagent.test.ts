@@ -29,6 +29,7 @@ type AgentRunParams = {
 type EmbeddedRunParams = {
   prompt?: string;
   extraSystemPrompt?: string;
+  sessionId?: string;
   onAgentEvent?: (evt: { stream?: string; data?: { phase?: string; willRetry?: boolean } }) => void;
 };
 
@@ -168,6 +169,15 @@ function createMinimalRun(params?: {
   resolvedQueueMode?: string;
   runOverrides?: Partial<FollowupRun["run"]>;
 }) {
+  const defaultRunConfig = {
+    agents: {
+      defaults: {
+        selfEvolution: {
+          enabled: false,
+        },
+      },
+    },
+  } as FollowupRun["run"]["config"];
   const typing = createMockTypingController();
   const opts = params?.opts;
   const sessionCtx = {
@@ -178,6 +188,13 @@ function createMinimalRun(params?: {
     mode: params?.resolvedQueueMode ?? "interrupt",
   } as unknown as QueueSettings;
   const sessionKey = params?.sessionKey ?? "main";
+  const runOverrides = params?.runOverrides;
+  const mergedRunConfig = runOverrides?.config
+    ? ({
+        ...defaultRunConfig,
+        ...runOverrides.config,
+      } as FollowupRun["run"]["config"])
+    : defaultRunConfig;
   const followupRun = {
     prompt: "hello",
     summaryLine: "hello",
@@ -188,7 +205,6 @@ function createMinimalRun(params?: {
       messageProvider: "whatsapp",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
-      config: {},
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
@@ -202,7 +218,13 @@ function createMinimalRun(params?: {
       },
       timeoutMs: 1_000,
       blockReplyBreak: "message_end",
-      ...params?.runOverrides,
+      ...(runOverrides
+        ? (() => {
+            const { config: _config, ...rest } = runOverrides;
+            return rest;
+          })()
+        : {}),
+      config: mergedRunConfig,
     },
   } as unknown as FollowupRun;
 
@@ -304,6 +326,23 @@ async function writeTranscriptMessages(
   await fs.writeFile(sessionFile, `${lines.join("\n")}\n`, "utf-8");
 }
 
+async function waitForCondition(
+  check: () => void,
+  timeoutMs = 500,
+  intervalMs = 10,
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      check();
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+  check();
+}
+
 function readTextContent(content: unknown): string | undefined {
   if (!Array.isArray(content)) {
     return undefined;
@@ -338,7 +377,16 @@ function createBaseRun(params: {
       messageProvider: "whatsapp",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
-      config: params.config ?? {},
+      config: {
+        agents: {
+          defaults: {
+            selfEvolution: {
+              enabled: false,
+            },
+          },
+        },
+        ...(params.config ?? {}),
+      },
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
@@ -357,7 +405,18 @@ function createBaseRun(params: {
   const run = {
     ...followupRun.run,
     ...params.runOverrides,
-    config: params.config ?? followupRun.run.config,
+    config:
+      params.runOverrides?.config ??
+      ({
+        agents: {
+          defaults: {
+            selfEvolution: {
+              enabled: false,
+            },
+          },
+        },
+        ...(params.config ?? {}),
+      } as FollowupRun["run"]["config"]),
   };
 
   return {
@@ -2280,9 +2339,9 @@ describe("runReplyAgent memory flush", () => {
 
       await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
 
-      const calls: Array<{ prompt?: string }> = [];
+      const calls: Array<{ prompt?: string; sessionId?: string }> = [];
       state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-        calls.push({ prompt: params.prompt });
+        calls.push({ prompt: params.prompt, sessionId: params.sessionId });
         if (params.prompt?.includes("Pre-compaction memory flush.")) {
           return { payloads: [], meta: {} };
         }
@@ -2307,9 +2366,12 @@ describe("runReplyAgent memory flush", () => {
 
       expect(calls).toHaveLength(2);
       expect(calls[0]?.prompt).toContain("Pre-compaction memory flush.");
+      expect(calls[0]?.sessionId).toContain("session__memory-flush__");
+      expect(calls[0]?.sessionId).not.toBe("session");
       expect(calls[0]?.prompt).toContain("Current time:");
       expect(calls[0]?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
       expect(calls[1]?.prompt).toBe("hello");
+      expect(calls[1]?.sessionId).toBe("session");
 
       const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(stored[sessionKey].memoryFlushAt).toBeTypeOf("number");
@@ -2440,6 +2502,146 @@ describe("runReplyAgent memory flush", () => {
       const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(stored[sessionKey].compactionCount).toBe(2);
       expect(stored[sessionKey].memoryFlushCompactionCount).toBe(2);
+    });
+  });
+
+  it("runs a silent post-run memory review after every completed run", async () => {
+    await withTempStore(async (storePath) => {
+      const tempDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-self-evolution-"));
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const agentDir = path.join(tempDir, "agent");
+      const sessionKey = "main";
+      const sessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+      await writeTranscriptMessages(sessionFile, [
+        { role: "user", content: [{ type: "text", text: "ship it" }] },
+      ]);
+
+      const calls: Array<{ prompt?: string; sessionId?: string }> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push({ prompt: params.prompt, sessionId: params.sessionId });
+        if (params.prompt?.includes("Post-run memory review.")) {
+          await fs.mkdir(workspaceDir, { recursive: true });
+          await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "durable fact\n", "utf-8");
+          return { payloads: [], meta: {} };
+        }
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+        config: {
+          agents: {
+            defaults: {
+              selfEvolution: {
+                enabled: true,
+              },
+            },
+          },
+        },
+        runOverrides: {
+          sessionFile,
+          workspaceDir,
+          agentDir,
+        },
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "ship it",
+      });
+
+      await waitForCondition(() => {
+        expect(calls).toHaveLength(2);
+      });
+      expect(calls[0]?.prompt).toBe("ship it");
+      expect(calls[0]?.sessionId).toBe("session");
+      expect(calls[1]?.prompt).toContain("Post-run memory review.");
+      expect(calls[1]?.sessionId).toContain("session__post-run-review__");
+      expect(calls[1]?.sessionId).not.toBe("session");
+      expect(calls[1]?.prompt).toContain("Current time:");
+      expect(calls[1]?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+
+      const ledgerPath = path.join(agentDir, "evolution", "reviews.jsonl");
+      const ledger = await waitForFileText(ledgerPath);
+      expect(ledger).toContain('"trigger":"agent_end"');
+      expect(ledger).toContain('"toolCallCount":0');
+      expect(ledger).toContain('"changedMemory":true');
+
+      const transcriptMessages = await readTranscriptMessages(sessionFile);
+      expect(transcriptMessages).toEqual([
+        { role: "user", content: [{ type: "text", text: "ship it" }] },
+      ]);
+    });
+  });
+
+  it("skips post-run memory review in group chats by default", async () => {
+    await withTempStore(async (storePath) => {
+      const tempDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-self-evolution-group-"));
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const sessionKey = "main";
+      const sessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+      await writeTranscriptMessages(sessionFile, [
+        { role: "user", content: [{ type: "text", text: "ship it" }] },
+        { role: "toolResult", content: [{ type: "text", text: "tool 1" }] },
+        { role: "toolResult", content: [{ type: "text", text: "tool 2" }] },
+        { role: "toolResult", content: [{ type: "text", text: "tool 3" }] },
+        { role: "toolResult", content: [{ type: "text", text: "tool 4" }] },
+        { role: "toolResult", content: [{ type: "text", text: "tool 5" }] },
+      ]);
+
+      state.runEmbeddedPiAgentMock.mockImplementation(async () => ({
+        payloads: [{ text: "ok" }],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      }));
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+        config: {
+          agents: {
+            defaults: {
+              selfEvolution: {
+                enabled: true,
+              },
+            },
+          },
+        },
+        runOverrides: {
+          sessionFile,
+        },
+      });
+      baseRun.sessionCtx.ChatType = "group";
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "ship it",
+      });
+
+      await waitForCondition(() => {
+        expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      });
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     });
   });
 });

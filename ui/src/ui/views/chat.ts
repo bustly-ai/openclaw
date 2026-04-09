@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { stripHeartbeatToken } from "../../../../src/auto-reply/heartbeat.js";
 import { renderCopyAsMarkdownButton } from "../chat/copy-as-markdown.ts";
 import { extractTextCached, extractThinkingCached } from "../chat/message-extract.ts";
 import { normalizeMessage } from "../chat/message-normalizer.ts";
@@ -760,6 +761,13 @@ function buildTimelineNodes(props: ChatProps): TimelineNode[] {
     const normalized = normalizeMessage(msg);
     const timestamp = resolveMessageTimestamp(msg, envelope, fallbackBaseTs + i);
     const seq = resolveMessageSeq(msg, envelope);
+    const openclawMeta =
+      msg && typeof msg === "object" && "openclaw" in (msg as Record<string, unknown>)
+        ? ((msg as Record<string, unknown>).openclaw as Record<string, unknown> | undefined)
+        : undefined;
+    if (openclawMeta?.visibility === "hidden") {
+      continue;
+    }
     // Filter out system notification messages (e.g., "Exec completed", background process updates)
     // These are internal OpenClaw events that shouldn't be shown to users
     if (normalized.role.toLowerCase() === "system") {
@@ -806,6 +814,12 @@ function buildTimelineNodes(props: ChatProps): TimelineNode[] {
       return lower === "toolresult" || lower === "tool_result" || lower === "tool";
     })();
     const text = extractTextCached(msg) ?? extractAssistantTerminalFallback(msg);
+    if (role === "assistant" && text?.trim()) {
+      const strippedHeartbeat = stripHeartbeatToken(text, { mode: "heartbeat" });
+      if (strippedHeartbeat.didStrip && strippedHeartbeat.shouldSkip) {
+        continue;
+      }
+    }
     if (!text?.trim() || isToolRole) {
       continue;
     }
