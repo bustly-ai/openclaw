@@ -7,9 +7,6 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
-import type { ModelAuthMode } from "./model-auth.js";
-import type { AnyAgentTool } from "./pi-tools.types.js";
-import type { SandboxContext } from "./sandbox.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -25,6 +22,7 @@ import {
 } from "./bash-tools.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
+import type { ModelAuthMode } from "./model-auth.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
@@ -48,6 +46,8 @@ import {
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
+import type { SandboxContext } from "./sandbox.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import {
@@ -159,6 +159,19 @@ export const __testing = {
   assertRequiredParams,
 } as const;
 
+function addLargeToolResultWriteGuidance(description?: string): string {
+  const baseDescription = description?.trim();
+  const guidance =
+    "When saving large content that already came from a previous tool result, prefer write_large_tool_result instead of inlining huge content values.";
+  if (!baseDescription) {
+    return guidance;
+  }
+  if (baseDescription.includes("write_large_tool_result")) {
+    return baseDescription;
+  }
+  return `${baseDescription} ${guidance}`;
+}
+
 export function createOpenClawCodingTools(options?: {
   agentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
@@ -220,6 +233,8 @@ export function createOpenClawCodingTools(options?: {
   runId?: string;
   /** Logical session id for per-command skill/model-gateway attribution. */
   sessionId?: string;
+  /** Additional tools to inject into the standard tool pipeline. */
+  extraTools?: AnyAgentTool[];
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -348,7 +363,15 @@ export function createOpenClawCodingTools(options?: {
         createWriteTool(workspaceRoot),
         CLAUDE_PARAM_GROUPS.write,
       );
-      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+      const guidedWriteTool: AnyAgentTool = {
+        ...wrapped,
+        description: addLargeToolResultWriteGuidance(wrapped.description),
+      };
+      return [
+        workspaceOnly
+          ? wrapToolWorkspaceRootGuard(guidedWriteTool, workspaceRoot)
+          : guidedWriteTool,
+      ];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) {
@@ -365,7 +388,7 @@ export function createOpenClawCodingTools(options?: {
   });
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
   const runtimeExecEnv = {
-    ...(execDefaults.env ?? {}),
+    ...execDefaults.env,
     ...(options?.runId?.trim() ? { OPENCLAW_RUN_ID: options.runId.trim() } : {}),
     ...(options?.sessionId?.trim() ? { OPENCLAW_SESSION_ID: options.sessionId.trim() } : {}),
   };
@@ -489,6 +512,7 @@ export function createOpenClawCodingTools(options?: {
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
     }),
+    ...(options?.extraTools ?? []),
   ];
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnyAgentTool } from "./tools/common.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -9,6 +8,7 @@ import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-sessio
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 vi.mock("../plugins/hook-runner-global.js");
 
@@ -191,6 +191,25 @@ describe("before_tool_call loop detection behavior", () => {
         tool.execute(`poll-progress-${i}`, params, undefined, undefined),
       ).resolves.toBeDefined();
     }
+  });
+
+  it("blocks oversized write content before executing the tool", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "write ok" }],
+      details: { ok: true },
+    });
+    const tool = createWrappedTool("write", execute);
+
+    await expect(
+      tool.execute(
+        "write-oversized",
+        { path: "/tmp/transcript.md", content: "x".repeat(40_000) },
+        undefined,
+        undefined,
+      ),
+    ).rejects.toThrow("write.content");
+
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("keeps generic repeated calls warn-only below global breaker", async () => {

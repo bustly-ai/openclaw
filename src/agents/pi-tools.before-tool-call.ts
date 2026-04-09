@@ -1,10 +1,10 @@
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
-import type { AnyAgentTool } from "./tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 export type HookContext = {
   agentId?: string;
@@ -20,6 +20,21 @@ const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+const MAX_WRITE_CONTENT_CHARS = 32_000;
+
+function detectOversizedWritePayload(toolName: string, params: unknown): string | null {
+  if (toolName !== "write" || !isPlainObject(params)) {
+    return null;
+  }
+  const content = params.content;
+  if (typeof content !== "string" || content.length <= MAX_WRITE_CONTENT_CHARS) {
+    return null;
+  }
+  return (
+    `write.content exceeds ${MAX_WRITE_CONTENT_CHARS} characters ` +
+    `(received ${content.length}). Use a file-based or chunked flow instead.`
+  );
+}
 
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
   if (!state.toolLoopWarningBuckets) {
@@ -79,6 +94,13 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+  const oversizedWriteReason = detectOversizedWritePayload(toolName, params);
+  if (oversizedWriteReason) {
+    return {
+      blocked: true,
+      reason: oversizedWriteReason,
+    };
+  }
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState } = await import("../logging/diagnostic-session-state.js");
@@ -246,6 +268,7 @@ export function consumeAdjustedParamsForToolCall(toolCallId: string): unknown {
 export const __testing = {
   BEFORE_TOOL_CALL_WRAPPED,
   adjustedParamsByToolCallId,
+  detectOversizedWritePayload,
   runBeforeToolCallHook,
   isPlainObject,
 };
