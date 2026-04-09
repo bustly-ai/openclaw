@@ -25,7 +25,10 @@ import {
   resolveRelayExtensionDownloadUrl,
 } from "../../browser/relay-guidance.js";
 import { resolveBrowserConfig } from "../../browser/config.js";
-import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
+import {
+  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+} from "../../browser/constants.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
 import { loadConfig } from "../../config/config.js";
@@ -81,6 +84,71 @@ function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
       ? params.timeoutMs
       : undefined;
   return { targetId, timeoutMs };
+}
+
+const MANAGED_BROWSER_PROFILE_ALIAS = "default";
+
+function normalizeBrowserProfileName(name: string | undefined): string | undefined {
+  if (!name) {
+    return undefined;
+  }
+  const normalized = name.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === MANAGED_BROWSER_PROFILE_ALIAS) {
+    return DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
+  }
+  return normalized;
+}
+
+function sanitizeBrowserToolOutput(value: unknown, key?: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeBrowserToolOutput(entry));
+  }
+  if (!value || typeof value !== "object") {
+    if (
+      typeof value === "string" &&
+      value === DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME &&
+      (key === "profile" || key === "defaultProfile")
+    ) {
+      return MANAGED_BROWSER_PROFILE_ALIAS;
+    }
+    return value;
+  }
+  const source = value as Record<string, unknown>;
+  const output: Record<string, unknown> = {};
+  for (const [entryKey, entryValue] of Object.entries(source)) {
+    output[entryKey] = sanitizeBrowserToolOutput(entryValue, entryKey);
+  }
+  return output;
+}
+
+function browserJsonResult(payload: unknown) {
+  return jsonResult(sanitizeBrowserToolOutput(payload));
+}
+
+function sanitizeBrowserProfilesPayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object") {
+    return payload;
+  }
+  const source = payload as Record<string, unknown>;
+  if (!Array.isArray(source.profiles)) {
+    return payload;
+  }
+  return {
+    ...source,
+    profiles: source.profiles.map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return entry;
+      }
+      const profile = entry as Record<string, unknown>;
+      if (profile.name !== DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME) {
+        return entry;
+      }
+      return { ...profile, name: MANAGED_BROWSER_PROFILE_ALIAS };
+    }),
+  };
 }
 
 type BrowserProxyFile = {
@@ -241,7 +309,7 @@ function resolveBrowserBaseUrl(params: {
   }
   if (!resolved.enabled) {
     throw new Error(
-      "Browser control is disabled. Set browser.enabled=true in ~/.bustly/openclaw.json.",
+      "Browser control is disabled. Set browser.enabled=true in your Bustly config file.",
     );
   }
   return undefined;
@@ -259,12 +327,13 @@ export function createBrowserTool(opts?: {
     label: "Browser",
     name: "browser",
     description: [
-      "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      'Profiles: use profile="chrome" for Chrome extension relay takeover (your existing Chrome tabs). Use profile="openclaw" for the isolated openclaw-managed browser.',
+      "Control the browser via Bustly's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
+      'Profiles: use profile="chrome" for Chrome extension relay takeover (your existing Chrome tabs). Omit profile (or use profile="default") for the isolated managed browser profile.',
       'If the user mentions the Chrome extension / Browser Relay / toolbar button / “attach tab”, ALWAYS use profile="chrome" (do not ask which profile).',
-      'Name this extension only as "Bustly Browser Relay" in user-facing text (never call it "OpenClaw Browser Relay").',
+      'Name this extension only as "Bustly Browser Relay" in user-facing text.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
-      `Chrome extension relay needs an attached tab: user must click the Bustly Browser Relay toolbar icon on the tab (badge ON). If extension is missing, install it first: ${relayDownloadUrl} (or run openclaw browser extension install).`,
+      `Chrome extension relay needs an attached tab: user must click the Bustly Browser Relay toolbar icon on the tab (badge ON). If extension is missing, install it first: ${relayDownloadUrl}.`,
+      "If Chrome relay is unreachable / not connected / no tab attached, STOP retry loops and give the user a concrete install+enable checklist (download extension, load it in chrome://extensions, click toolbar icon to attach tab, then retry once).",
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
@@ -275,7 +344,7 @@ export function createBrowserTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const profile = readStringParam(params, "profile");
+      const profile = normalizeBrowserProfileName(readStringParam(params, "profile"));
       const requestedNode = readStringParam(params, "node");
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
 
@@ -330,7 +399,7 @@ export function createBrowserTool(opts?: {
       switch (action) {
         case "status":
           if (proxyRequest) {
-            return jsonResult(
+            return browserJsonResult(
               await proxyRequest({
                 method: "GET",
                 path: "/",
@@ -338,7 +407,7 @@ export function createBrowserTool(opts?: {
               }),
             );
           }
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          return browserJsonResult(await browserStatus(baseUrl, { profile }));
         case "start":
           if (proxyRequest) {
             await proxyRequest({
@@ -346,7 +415,7 @@ export function createBrowserTool(opts?: {
               path: "/start",
               profile,
             });
-            return jsonResult(
+            return browserJsonResult(
               await proxyRequest({
                 method: "GET",
                 path: "/",
@@ -355,7 +424,7 @@ export function createBrowserTool(opts?: {
             );
           }
           await browserStart(baseUrl, { profile });
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          return browserJsonResult(await browserStatus(baseUrl, { profile }));
         case "stop":
           if (proxyRequest) {
             await proxyRequest({
@@ -363,7 +432,7 @@ export function createBrowserTool(opts?: {
               path: "/stop",
               profile,
             });
-            return jsonResult(
+            return browserJsonResult(
               await proxyRequest({
                 method: "GET",
                 path: "/",
@@ -372,16 +441,18 @@ export function createBrowserTool(opts?: {
             );
           }
           await browserStop(baseUrl, { profile });
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          return browserJsonResult(await browserStatus(baseUrl, { profile }));
         case "profiles":
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "GET",
               path: "/profiles",
             });
-            return jsonResult(result);
+            return browserJsonResult(sanitizeBrowserProfilesPayload(result));
           }
-          return jsonResult({ profiles: await browserProfiles(baseUrl) });
+          return browserJsonResult(
+            sanitizeBrowserProfilesPayload({ profiles: await browserProfiles(baseUrl) }),
+          );
         case "tabs":
           if (proxyRequest) {
             const result = await proxyRequest({
@@ -407,9 +478,9 @@ export function createBrowserTool(opts?: {
               profile,
               body: { url: targetUrl },
             });
-            return jsonResult(result);
+            return browserJsonResult(result);
           }
-          return jsonResult(await browserOpenTab(baseUrl, targetUrl, { profile }));
+          return browserJsonResult(await browserOpenTab(baseUrl, targetUrl, { profile }));
         }
         case "focus": {
           const targetId = readStringParam(params, "targetId", {
@@ -422,10 +493,10 @@ export function createBrowserTool(opts?: {
               profile,
               body: { targetId },
             });
-            return jsonResult(result);
+            return browserJsonResult(result);
           }
           await browserFocusTab(baseUrl, targetId, { profile });
-          return jsonResult({ ok: true });
+          return browserJsonResult({ ok: true });
         }
         case "close": {
           const targetId = readStringParam(params, "targetId");
@@ -442,14 +513,14 @@ export function createBrowserTool(opts?: {
                   profile,
                   body: { kind: "close" },
                 });
-            return jsonResult(result);
+            return browserJsonResult(result);
           }
           if (targetId) {
             await browserCloseTab(baseUrl, targetId, { profile });
           } else {
             await browserAct(baseUrl, { kind: "close" }, { profile });
           }
-          return jsonResult({ ok: true });
+          return browserJsonResult({ ok: true });
         }
         case "snapshot": {
           const snapshotDefaults = loadConfig().browser?.snapshotDefaults;
@@ -641,9 +712,9 @@ export function createBrowserTool(opts?: {
                 targetId,
               },
             });
-            return jsonResult(result);
+            return browserJsonResult(result);
           }
-          return jsonResult(
+          return browserJsonResult(
             await browserNavigate(baseUrl, {
               url: targetUrl,
               targetId,
@@ -742,9 +813,9 @@ export function createBrowserTool(opts?: {
                 timeoutMs,
               },
             });
-            return jsonResult(result);
+            return browserJsonResult(result);
           }
-          return jsonResult(
+          return browserJsonResult(
             await browserArmFileChooser(baseUrl, {
               paths: normalizedPaths,
               ref,
@@ -772,9 +843,9 @@ export function createBrowserTool(opts?: {
                 timeoutMs,
               },
             });
-            return jsonResult(result);
+            return browserJsonResult(result);
           }
-          return jsonResult(
+          return browserJsonResult(
             await browserArmDialog(baseUrl, {
               accept,
               promptText,
@@ -800,7 +871,7 @@ export function createBrowserTool(opts?: {
               : await browserAct(baseUrl, request as Parameters<typeof browserAct>[1], {
                   profile,
                 });
-            return jsonResult(result);
+            return browserJsonResult(result);
           } catch (err) {
             const msg = String(err);
             if (msg.includes("404:") && msg.includes("tab not found") && profile === "chrome") {

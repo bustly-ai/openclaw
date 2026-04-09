@@ -260,6 +260,41 @@ describe("browser tool snapshot maxChars", () => {
     );
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
+
+  it('maps profile="default" to the managed profile and sanitizes output', async () => {
+    browserClientMocks.browserStatus.mockResolvedValueOnce({
+      ok: true,
+      profile: "openclaw",
+      running: true,
+    });
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", { action: "status", profile: "default" });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "openclaw" }),
+    );
+    expect(result?.details).toMatchObject({
+      ok: true,
+      profile: "default",
+    });
+  });
+
+  it("sanitizes managed profile names in profiles output", async () => {
+    browserClientMocks.browserProfiles.mockResolvedValueOnce([
+      { name: "openclaw", driver: "openclaw" },
+      { name: "chrome", driver: "extension" },
+    ]);
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", { action: "profiles" });
+
+    expect(result?.details).toMatchObject({
+      profiles: [
+        { name: "default", driver: "openclaw" },
+        { name: "chrome", driver: "extension" },
+      ],
+    });
+  });
 });
 
 describe("browser tool snapshot labels", () => {
