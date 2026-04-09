@@ -1,1 +1,0 @@
-export const LARGE_TOOL_RESULT_MIN_CHARS = 4_096;

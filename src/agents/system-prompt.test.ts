@@ -294,22 +294,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
-  it("guides large tool result writes toward the dedicated writer tool", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["write", "write_large_tool_result"],
-      toolSummaries: {
-        write_large_tool_result: "Write the latest large tool result to a file",
-      },
-    });
-
-    expect(prompt).toContain(
-      "If a large transcript, fetched page, or search result is already in a prior tool result",
-    );
-    expect(prompt).toContain("use `write_large_tool_result` and pass only the destination path");
-    expect(prompt).toContain("Do not paste large existing tool-result text into `write.content`");
-  });
-
   it("preserves tool casing in the prompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

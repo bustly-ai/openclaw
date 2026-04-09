@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
@@ -82,44 +81,6 @@ describe("createOpenClawCodingTools", () => {
 
       const edited = await fs.readFile(filePath, "utf8");
       expect(edited).toBe("const value = 'new';\n");
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("guides large file writes toward the dedicated large tool result writer", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-description-"));
-    try {
-      const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
-      const writeTool = tools.find((tool) => tool.name === "write");
-      expect(writeTool?.description).toContain("write_large_tool_result");
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("includes extra tools in the wrapped tool list", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-extra-tools-"));
-    try {
-      const tools = createOpenClawCodingTools({
-        workspaceDir: tmpDir,
-        extraTools: [
-          {
-            name: "write_large_tool_result",
-            label: "write_large_tool_result",
-            description: "Write the latest large tool result to a file",
-            parameters: Type.Object({
-              path: Type.String(),
-            }),
-            execute: async () => ({
-              content: [{ type: "text", text: "ok" }],
-            }),
-          },
-        ],
-      });
-      const extraTool = tools.find((tool) => tool.name === "write_large_tool_result");
-      expect(extraTool).toBeDefined();
-      expect(extraTool?.description).toContain("latest large tool result");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

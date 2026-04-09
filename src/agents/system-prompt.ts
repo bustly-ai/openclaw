@@ -1,11 +1,11 @@
 import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
-import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { EmbeddedSandboxInfo } from "./pi-embedded-runner/types.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 /**
@@ -133,8 +133,8 @@ function buildMessagingSection(params: {
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
-    '- sessions_send returns `status: "ok"` once the target session accepts the message; any agent-to-agent follow-up continues in the background.',
-    '- If sessions_send returns `acceptance.status = "received"` with `acceptance.replyStatus = "pending"`, treat that as: the other session has received the message and may reply later. Do not describe it as a failure or as "no reply".',
+    "- sessions_send returns `status: \"ok\"` once the target session accepts the message; any agent-to-agent follow-up continues in the background.",
+    "- If sessions_send returns `acceptance.status = \"received\"` with `acceptance.replyStatus = \"pending\"`, treat that as: the other session has received the message and may reply later. Do not describe it as a failure or as \"no reply\".",
     "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
     "- `[System Message] ...` blocks are internal context and are not user-visible by default.",
     `- If a \`[System Message]\` reports completed cron/subagent work and asks for a user update, rewrite it in your normal assistant voice and send that update (do not forward raw system text or default to ${SILENT_REPLY_TOKEN}).`,
@@ -182,25 +182,6 @@ function buildInteractionSection() {
     "Do not use Markdown image syntax for local video/audio files. Render local video/audio paths as Markdown links with the absolute path target, for example `[clip.mp4](/absolute/path/to/clip.mp4)`.",
     "When your reply includes a local file path or directory path that the user may open, always render it as a Markdown link with the absolute path as the target, for example `[report.pdf](/absolute/path/to/report.pdf)` or `[open folder](/absolute/path/to/folder/)`. Do not leave openable local paths as plain text or only in code spans.",
     "After generating or modifying any file for the user, return the directory path containing that file in your reply so the user can inspect it.",
-    "",
-  ];
-}
-
-function buildLargeToolResultWriteSection(params: {
-  isMinimal: boolean;
-  availableTools: Set<string>;
-}) {
-  if (params.isMinimal) {
-    return [];
-  }
-  if (!params.availableTools.has("write_large_tool_result")) {
-    return [];
-  }
-  return [
-    "## Large Tool Outputs",
-    "If a large transcript, fetched page, or search result is already in a prior tool result, use `write_large_tool_result` and pass only the destination path.",
-    "Do not paste large existing tool-result text into `write.content`.",
-    "Use `write` for small, newly-authored content; use `write_large_tool_result` to persist large content that already exists in tool output.",
     "",
   ];
 }
@@ -389,6 +370,7 @@ export function buildAgentSystemPrompt(params: {
     toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
   }
 
+  const hasGateway = availableTools.has("gateway");
   const readToolName = resolveToolName("read");
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
@@ -510,10 +492,6 @@ export function buildAgentSystemPrompt(params: {
     "",
     ...safetySection,
     ...buildInteractionSection(),
-    ...buildLargeToolResultWriteSection({
-      isMinimal,
-      availableTools,
-    }),
     ...buildChannelConnectionSection({
       isMinimal,
       availableTools,

@@ -10,12 +10,15 @@ import {
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
-import { readBustlyOAuthState } from "../../../bustly-oauth.js";
+import { mergeBustlyRuntimeHeaders } from "../../bustly-runtime-headers.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { consumeCompletedAssistantRequestMetrics } from "../../../infra/assistant-request-metrics.js";
-import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { readBustlyOAuthState } from "../../../bustly-oauth.js";
+import {
+  consumeCompletedAssistantRequestMetrics,
+} from "../../../infra/assistant-request-metrics.js";
 import { wrapStreamFnWithModelRequestTracking } from "../../../infra/model-request-adapter.js";
+import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { reportSessionCompletionToSupabase } from "../../../infra/supabase-chat-report.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -36,7 +39,6 @@ import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
-import { mergeBustlyRuntimeHeaders } from "../../bustly-runtime-headers.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   listChannelSupportedActions,
@@ -81,7 +83,6 @@ import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
-import { createWriteLargeToolResultTool } from "../../tools/write-large-tool-result-tool.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -94,7 +95,6 @@ import {
   sanitizeToolsForGoogle,
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
-import { resolveLargeToolResultStreamParams } from "../large-tool-result-stream-params.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
 import {
@@ -121,6 +121,7 @@ import {
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
+
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 const BUSTLY_PROVIDER_ID = "bustly";
@@ -233,9 +234,7 @@ function rewindRetryLeafToLatestUserTurn(params: {
   while (leafEntry) {
     if (leafEntry.type === "message" && leafEntry.message.role === "user") {
       if (rewound) {
-        params.activeSession.agent.replaceMessages(
-          params.sessionManager.buildSessionContext().messages,
-        );
+        params.activeSession.agent.replaceMessages(params.sessionManager.buildSessionContext().messages);
       }
       return true;
     }
@@ -249,9 +248,7 @@ function rewindRetryLeafToLatestUserTurn(params: {
   }
 
   if (rewound) {
-    params.activeSession.agent.replaceMessages(
-      params.sessionManager.buildSessionContext().messages,
-    );
+    params.activeSession.agent.replaceMessages(params.sessionManager.buildSessionContext().messages);
   }
   return false;
 }
@@ -507,9 +504,6 @@ export async function runEmbeddedAttempt(
       config: params.config,
       sessionAgentId,
     });
-    let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
-    const getCurrentSessionMessages = (): AgentMessage[] =>
-      sessionManager?.buildSessionContext().messages ?? [];
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
     const toolsRaw = params.disableTools
@@ -554,12 +548,6 @@ export async function runEmbeddedAttempt(
           disableMessageTool: params.disableMessageTool,
           runId: params.runId,
           sessionId: params.sessionId,
-          extraTools: [
-            createWriteLargeToolResultTool({
-              cwd: effectiveWorkspace,
-              getMessages: getCurrentSessionMessages,
-            }),
-          ],
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     const allowedToolNames = collectAllowedToolNames({
@@ -729,6 +717,7 @@ export async function runEmbeddedAttempt(
       }),
     });
 
+    let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
     let subscriptionDisposed = false;
@@ -907,26 +896,12 @@ export async function runEmbeddedAttempt(
         },
       );
 
-      const effectiveStreamParams = resolveLargeToolResultStreamParams({
-        messages: activeSession.messages,
-        streamParams: params.streamParams,
-      });
-      if (
-        effectiveStreamParams?.maxTokens !== undefined &&
-        effectiveStreamParams.maxTokens !== params.streamParams?.maxTokens
-      ) {
-        log.warn(
-          `[large-tool-result] capping maxTokens to ${effectiveStreamParams.maxTokens} ` +
-            `for ${params.provider}/${params.modelId} due to oversized tool output in session history`,
-        );
-      }
-
       applyExtraParamsToAgent(
         activeSession.agent,
         params.config,
         params.provider,
         params.modelId,
-        effectiveStreamParams,
+        params.streamParams,
         params.thinkLevel,
         sessionAgentId,
       );
@@ -1439,8 +1414,9 @@ export async function runEmbeddedAttempt(
         // assistant message, which can be just a tool_use. Wait for the agent
         // to become truly idle before capturing the final session snapshot or
         // tearing down the subscription bridge.
-        if (typeof activeSession.agent.waitForIdle === "function") {
-          await abortable(activeSession.agent.waitForIdle());
+        const waitForIdle = activeSession.agent.waitForIdle;
+        if (typeof waitForIdle === "function") {
+          await abortable(waitForIdle.call(activeSession.agent));
         }
 
         // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
