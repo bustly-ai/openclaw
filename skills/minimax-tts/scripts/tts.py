@@ -91,16 +91,6 @@ def resolve_run_id(args: argparse.Namespace) -> str:
     return run_id or f"skill-{uuid4()}"
 
 
-def resolve_session_id(args: argparse.Namespace) -> str:
-    # OPENCLAW_SESSION_ID is injected per skill subprocess (exec tool defaults/env),
-    # not as a process-global singleton across concurrent agent runs.
-    return (
-        (getattr(args, "session_id", "") or "").strip()
-        or os.environ.get("OPENCLAW_SESSION_ID", "").strip()
-        or os.environ.get("BUSTLY_SESSION_ID", "").strip()
-    )
-
-
 def audio_speech_url(base_url: str) -> str:
     base = (base_url or "").strip().rstrip("/")
     if not base:
@@ -191,25 +181,21 @@ def call_gateway(
     jwt: str,
     workspace_id: str,
     run_id: str,
-    session_id: str,
     payload: dict,
 ) -> tuple[dict | None, bytes, str]:
     target = audio_speech_url(gateway_base_url)
-    headers = {
-        "Authorization": f"Bearer {jwt}",
-        "X-Workspace-Id": workspace_id,
-        "X-Run-Id": run_id,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": DEFAULT_USER_AGENT,
-    }
-    if session_id:
-        headers["X-Session-Id"] = session_id
     req = Request(
         target,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         method="POST",
-        headers=headers,
+        headers={
+            "Authorization": f"Bearer {jwt}",
+            "X-Workspace-Id": workspace_id,
+            "X-Run-Id": run_id,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": DEFAULT_USER_AGENT,
+        },
     )
     try:
         with urlopen(req, timeout=120) as resp:
@@ -283,26 +269,14 @@ def main():
         "--run-id",
         help="Logical task run id for usage aggregation (defaults to OPENCLAW_RUN_ID/BUSTLY_RUN_ID or a generated id)",
     )
-    parser.add_argument(
-        "--session-id",
-        help="Logical task session id for usage aggregation (defaults to OPENCLAW_SESSION_ID/BUSTLY_SESSION_ID)",
-    )
     args = parser.parse_args()
 
     try:
         jwt, workspace_id = resolve_auth(args)
         run_id = resolve_run_id(args)
-        session_id = resolve_session_id(args)
         gateway_base_url = resolve_gateway_base_url()
         payload = build_payload(args)
-        data, raw_body, content_type = call_gateway(
-            gateway_base_url,
-            jwt,
-            workspace_id,
-            run_id,
-            session_id,
-            payload,
-        )
+        data, raw_body, content_type = call_gateway(gateway_base_url, jwt, workspace_id, run_id, payload)
 
         extra: dict[str, Any] = {}
         if isinstance(data, dict):

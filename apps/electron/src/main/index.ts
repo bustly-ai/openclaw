@@ -6,6 +6,8 @@ import {
   shell,
   powerSaveBlocker,
   dialog,
+  Menu,
+  type MenuItemConstructorOptions,
   type OpenDialogOptions,
 } from "electron";
 import * as Sentry from "@sentry/electron/main";
@@ -3199,6 +3201,73 @@ function loadRendererWindow(targetWindow: BrowserWindow, options?: { hash?: stri
   }
 }
 
+function attachNativeContextMenu(targetWindow: BrowserWindow): void {
+  targetWindow.webContents.on("context-menu", (_event, params) => {
+    const hasSelection = Boolean(params.selectionText?.trim());
+    const template: MenuItemConstructorOptions[] = [];
+    const pushSeparator = () => {
+      if (template.length > 0 && template[template.length - 1]?.type !== "separator") {
+        template.push({ type: "separator" });
+      }
+    };
+
+    if (params.misspelledWord) {
+      for (const suggestion of params.dictionarySuggestions.slice(0, 5)) {
+        template.push({
+          label: suggestion,
+          click: () => {
+            targetWindow.webContents.replaceMisspelling(suggestion);
+          },
+        });
+      }
+      if (params.dictionarySuggestions.length > 0) {
+        pushSeparator();
+      }
+      template.push({
+        label: "Add to Dictionary",
+        click: () => {
+          targetWindow.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord);
+        },
+      });
+    }
+
+    if (params.isEditable) {
+      pushSeparator();
+      template.push(
+        { role: "undo", enabled: params.editFlags.canUndo },
+        { role: "redo", enabled: params.editFlags.canRedo },
+      );
+      pushSeparator();
+      template.push(
+        { role: "cut", enabled: params.editFlags.canCut },
+        { role: "copy", enabled: params.editFlags.canCopy },
+        { role: "paste", enabled: params.editFlags.canPaste },
+      );
+      if (process.platform === "darwin") {
+        template.push({ role: "pasteAndMatchStyle", enabled: params.editFlags.canPaste });
+      }
+      template.push({ role: "delete", enabled: params.editFlags.canDelete });
+      pushSeparator();
+      template.push({ role: "selectAll", enabled: params.editFlags.canSelectAll });
+    } else if (hasSelection) {
+      pushSeparator();
+      template.push(
+        { role: "copy", enabled: true },
+        { role: "selectAll", enabled: params.editFlags.canSelectAll },
+      );
+    }
+
+    if (template.length === 0) {
+      return;
+    }
+    if (template[template.length - 1]?.type === "separator") {
+      template.pop();
+    }
+
+    Menu.buildFromTemplate(template).popup({ window: targetWindow });
+  });
+}
+
 function createUpdaterHelperWindow(): void {
   mainWindow = new BrowserWindow({
     width: 420,
@@ -3223,6 +3292,7 @@ function createUpdaterHelperWindow(): void {
     title: "Bustly Updater",
   });
 
+  attachNativeContextMenu(mainWindow);
   loadRendererWindow(mainWindow, { hash: "/update-helper" });
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -3251,6 +3321,8 @@ function createWindow(): void {
     },
     title: APP_DISPLAY_NAME,
   });
+
+  attachNativeContextMenu(mainWindow);
 
   // Load the app
   if (process.env.NODE_ENV === "development") {
