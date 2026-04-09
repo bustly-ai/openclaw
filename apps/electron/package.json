@@ -1,6 +1,6 @@
 {
   "name": "bustly",
-  "version": "0.0.5",
+  "version": "0.0.7-beta.1",
   "description": "Bustly Desktop Client",
   "main": "dist/main/index.js",
   "private": true,
@@ -92,6 +92,7 @@
     "files": [
       "dist/**",
       "!dist/electron/**",
+      "!dist/electron-local/**",
       "package.json",
       ".env"
     ],
@@ -160,13 +161,6 @@
       {
         "from": "resources/openclaw/skills",
         "to": "skills"
-      },
-      {
-        "from": "resources/bustly-skills",
-        "to": "bustly-skills",
-        "filter": [
-          "**/*"
-        ]
       }
     ]
   }

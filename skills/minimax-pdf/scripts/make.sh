@@ -3,10 +3,10 @@
 # Usage: bash make.sh <command> [options]
 #
 # Commands:
-#   check                          Verify all dependencies
-#   fix                            Auto-install missing dependencies
-#   run   --title T --type TYPE    Full pipeline → output.pdf
-#         --out FILE               Output path (default: output.pdf)
+#   check                          Verify default CREATE/REFORMAT dependencies
+#   fix                            Auto-install missing default dependencies
+#   run   --title T --type TYPE    Node-first CREATE pipeline → <topic>_YYYYMMDD_HHMMSS.pdf
+#         --out FILE               Output path (default: auto topic+timestamp filename)
 #         --author A --date D
 #         --subtitle S
 #         --abstract A             Optional abstract text for cover
@@ -29,7 +29,21 @@
 set -euo pipefail
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY="python3"
-NODE="node"
+NODE="$(command -v node 2>/dev/null || true)"
+[[ -z "$NODE" && -x /opt/homebrew/bin/node ]] && NODE="/opt/homebrew/bin/node"
+[[ -z "$NODE" && -x /usr/local/bin/node ]] && NODE="/usr/local/bin/node"
+[[ -z "$NODE" ]] && NODE="node"
+if [[ "$NODE" == */* ]]; then
+  export PATH="$(dirname "$NODE"):$PATH"
+fi
+NPM="$(command -v npm 2>/dev/null || true)"
+[[ -z "$NPM" && -x /opt/homebrew/bin/npm ]] && NPM="/opt/homebrew/bin/npm"
+[[ -z "$NPM" && -x /usr/local/bin/npm ]] && NPM="/usr/local/bin/npm"
+[[ -z "$NPM" ]] && NPM="npm"
+NPX="$(command -v npx 2>/dev/null || true)"
+[[ -z "$NPX" && -x /opt/homebrew/bin/npx ]] && NPX="/opt/homebrew/bin/npx"
+[[ -z "$NPX" && -x /usr/local/bin/npx ]] && NPX="/usr/local/bin/npx"
+[[ -z "$NPX" ]] && NPX="npx"
 
 # ── Colour helpers ─────────────────────────────────────────────────────────────
 red()    { printf '\033[0;31m%s\033[0m\n' "$*"; }
@@ -37,64 +51,140 @@ green()  { printf '\033[0;32m%s\033[0m\n' "$*"; }
 yellow() { printf '\033[0;33m%s\033[0m\n' "$*"; }
 bold()   { printf '\033[1m%s\033[0m\n' "$*"; }
 
+# ── naming helpers ─────────────────────────────────────────────────────────────
+timestamp_ymdhms() {
+  date '+%Y%m%d_%H%M%S'
+}
+
+sanitize_report_topic() {
+  local raw="${1:-report}"
+  local topic
+
+  topic="$(printf '%s' "$raw" | tr '\r\n\t' '   ' | sed -E 's/[[:space:]]+/ /g; s/^[[:space:]]+//; s/[[:space:]]+$//')"
+  topic="${topic//\//-}"
+  topic="${topic//\\/-}"
+  topic="${topic//:/-}"
+  topic="${topic//\?/-}"
+  topic="${topic//\*/-}"
+  topic="${topic//\"/-}"
+  topic="${topic//</-}"
+  topic="${topic//>/-}"
+  topic="${topic//|/-}"
+  topic="$(printf '%s' "$topic" | sed -E 's/[[:space:]]+/-/g; s/-+/-/g; s/^-+//; s/-+$//')"
+
+  if [[ -z "$topic" ]]; then
+    topic="report"
+  fi
+
+  printf '%s' "$topic"
+}
+
+build_report_filename() {
+  local title="${1:-Report}"
+  local topic ts
+  topic="$(sanitize_report_topic "$title")"
+  ts="$(timestamp_ymdhms)"
+  printf '%s_%s.pdf' "$topic" "$ts"
+}
+
+looks_generic_pdf_name() {
+  local base
+  base="$(basename "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$base" in
+    output.pdf|report.pdf|daily-report.pdf|document.pdf|result.pdf|final.pdf|untitled.pdf)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+resolve_output_path() {
+  local requested="${1:-}"
+  local title="${2:-Report}"
+  local generated
+  generated="$(build_report_filename "$title")"
+
+  if [[ -z "$requested" ]]; then
+    printf './%s' "$generated"
+    return
+  fi
+
+  if [[ -d "$requested" || "$requested" == */ ]]; then
+    local dir="${requested%/}"
+    [[ -z "$dir" ]] && dir="."
+    printf '%s/%s' "$dir" "$generated"
+    return
+  fi
+
+  local lower
+  lower="$(printf '%s' "$requested" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$lower" != *.pdf ]]; then
+    printf '%s.pdf' "$requested"
+    return
+  fi
+
+  printf '%s' "$requested"
+}
+
+rewrite_tmp_generic_output() {
+  local requested="${1:-}"
+  local title="${2:-Report}"
+
+  if [[ "$requested" == /tmp/* || "$requested" == /private/tmp/* ]]; then
+    if looks_generic_pdf_name "$requested"; then
+      printf './%s' "$(build_report_filename "$title")"
+      return
+    fi
+  fi
+
+  printf '%s' "$requested"
+}
+
 # ── check ──────────────────────────────────────────────────────────────────────
 cmd_check() {
   local ok=true
   bold "Checking dependencies..."
 
-  # Python
-  if command -v python3 &>/dev/null; then
-    green "  ✓ python3 $(python3 --version 2>&1 | awk '{print $2}')"
-  else
-    red   "  ✗ python3 not found"
-    ok=false
-  fi
-
-  # reportlab
-  if python3 -c "import reportlab" 2>/dev/null; then
-    green "  ✓ reportlab"
-  else
-    yellow "  ⚠ reportlab not installed  (run: make.sh fix)"
-    ok=false
-  fi
-
-  # pypdf
-  if python3 -c "import pypdf" 2>/dev/null; then
-    green "  ✓ pypdf"
-  else
-    yellow "  ⚠ pypdf not installed  (run: make.sh fix)"
-    ok=false
-  fi
-
   # Node.js
-  if command -v node &>/dev/null; then
-    green "  ✓ node $(node --version)"
+  if [[ -x "$NODE" ]] || command -v "$NODE" &>/dev/null; then
+    green "  ✓ node $("$NODE" --version)"
   else
-    red   "  ✗ node not found — cover rendering unavailable"
+    red   "  ✗ node not found"
     ok=false
   fi
 
   # Playwright
-  if node -e "require('playwright')" 2>/dev/null || \
-     node -e "require(require('child_process').execSync('npm root -g').toString().trim()+'/playwright')" 2>/dev/null; then
-    green "  ✓ playwright"
+  if [[ -x "$NODE" ]] || command -v "$NODE" &>/dev/null; then
+    if "$NODE" -e "require('playwright')" 2>/dev/null || \
+       "$NODE" -e "require(require('child_process').execSync('$NPM root -g').toString().trim()+'/playwright')" 2>/dev/null; then
+      green "  ✓ playwright"
+    else
+      yellow "  ⚠ playwright not found  (run: make.sh fix)"
+      ok=false
+    fi
   else
-    yellow "  ⚠ playwright not found  (run: make.sh fix)"
-    ok=false
+    yellow "  ⚠ playwright check skipped because node is unavailable"
   fi
 
-  # matplotlib (optional — required for math/chart/flowchart; degrades gracefully)
-  if python3 -c "import matplotlib" 2>/dev/null; then
-    green "  ✓ matplotlib (math, chart, flowchart blocks enabled)"
+  # Python is now optional and only needed for FILL + PDF-source REFORMAT.
+  if command -v python3 &>/dev/null; then
+    green "  ✓ python3 $(python3 --version 2>&1 | awk '{print $2}')  (optional: fill/pdf-reformat)"
+    if python3 -c "import pypdf" 2>/dev/null; then
+      green "  ✓ pypdf (optional)"
+    else
+      yellow "  ⚠ pypdf not installed — PDF form fill / PDF-source reformat may be unavailable"
+    fi
   else
-    yellow "  ⚠ matplotlib not installed — math/chart/flowchart blocks degrade to text  (run: make.sh fix)"
+    yellow "  ⚠ python3 not found — FILL and PDF-source REFORMAT will be unavailable"
   fi
 
   if $ok; then
-    green "\nAll dependencies satisfied."
+    green "\nDefault CREATE/REFORMAT dependencies satisfied."
     exit 0
   else
-    yellow "\nSome dependencies missing. Run: bash make.sh fix"
+    yellow "\nDefault dependencies missing. Run: bash make.sh fix"
     exit 2
   fi
 }
@@ -104,18 +194,10 @@ cmd_fix() {
   bold "Installing missing dependencies..."
   local rc=0
 
-  # Python packages
-  if command -v python3 &>/dev/null; then
-    python3 -m pip install --break-system-packages -q reportlab pypdf matplotlib 2>/dev/null \
-      || python3 -m pip install -q reportlab pypdf matplotlib 2>/dev/null \
-      || { yellow "  pip install failed — try: pip install reportlab pypdf matplotlib"; rc=3; }
-    green "  ✓ Python packages installed (reportlab, pypdf, matplotlib)"
-  fi
-
   # Playwright
-  if command -v npm &>/dev/null; then
-    npm install -g playwright --silent 2>/dev/null && \
-    npx playwright install chromium --silent 2>/dev/null && \
+  if [[ -x "$NPM" ]] || command -v "$NPM" &>/dev/null; then
+    "$NPM" install -g playwright --silent 2>/dev/null && \
+    "$NPX" playwright install chromium 2>/dev/null && \
     green "  ✓ Playwright + Chromium installed" || \
     { yellow "  playwright install failed — try manually"; rc=3; }
   else
@@ -123,8 +205,15 @@ cmd_fix() {
     rc=2
   fi
 
+  # Optional Python package for fill/pdf-source reformat flows
+  if command -v python3 &>/dev/null; then
+    python3 -m pip install --break-system-packages -q pypdf 2>/dev/null \
+      || python3 -m pip install -q pypdf 2>/dev/null \
+      || yellow "  ⚠ optional pypdf install failed — fill/pdf-source reformat may still be unavailable"
+  fi
+
   if [[ $rc -eq 0 ]]; then
-    green "\nAll dependencies installed. Run: bash make.sh check"
+    green "\nDefault dependencies installed. Run: bash make.sh check"
   fi
   exit $rc
 }
@@ -141,9 +230,8 @@ cmd_run() {
   local accent=""
   local cover_bg=""
   local content_file=""
-  local out="output.pdf"
-  local workdir
-  workdir="$(mktemp -d)"
+  local out=""
+  local out_explicit=false
 
   # Parse options
   while [[ $# -gt 0 ]]; do
@@ -158,106 +246,48 @@ cmd_run() {
       --accent)       accent="$2";       shift 2 ;;
       --cover-bg)     cover_bg="$2";     shift 2 ;;
       --content)      content_file="$2"; shift 2 ;;
-      --out)          out="$2";          shift 2 ;;
+      --out)          out="$2"; out_explicit=true; shift 2 ;;
       *) echo "Unknown option: $1"; exit 1 ;;
     esac
   done
+
+  out="$(resolve_output_path "$out" "$title")"
+  if [[ "$out_explicit" == true ]]; then
+    local rewritten_out
+    rewritten_out="$(rewrite_tmp_generic_output "$out" "$title")"
+    if [[ "$rewritten_out" != "$out" ]]; then
+      yellow "  Temporary generic path detected. Rewriting output to: $rewritten_out"
+      out="$rewritten_out"
+    fi
+  fi
 
   bold "Building: $title"
   echo "  Type    : $type"
   echo "  Output  : $out"
 
-  # Step 1: tokens
-  echo ""
-  bold "Step 1/4  Generating design tokens..."
-  local accent_args=()
-  [[ -n "$accent"   ]] && accent_args+=(--accent   "$accent")
-  [[ -n "$cover_bg" ]] && accent_args+=(--cover-bg "$cover_bg")
-  $PY "$SCRIPTS/palette.py" \
-    --title "$title" --type "$type" \
-    --author "$author" --date "$date" \
-    --out "$workdir/tokens.json" \
-    "${accent_args[@]+"${accent_args[@]}"}"
-
-  # Inject optional cover fields into tokens.json
-  if [[ -n "$abstract" || -n "$cover_image" ]]; then
-    PDF_ABSTRACT="$abstract" PDF_COVER_IMAGE="$cover_image" PDF_TOKENS="$workdir/tokens.json" \
-    $PY - <<'PYEOF'
-import json, os
-with open(os.environ["PDF_TOKENS"]) as f:
-    t = json.load(f)
-abstract = os.environ.get("PDF_ABSTRACT", "")
-cover_image = os.environ.get("PDF_COVER_IMAGE", "")
-if abstract:
-    t["abstract"] = abstract
-if cover_image:
-    t["cover_image"] = cover_image
-with open(os.environ["PDF_TOKENS"], "w") as f:
-    json.dump(t, f, indent=2)
-PYEOF
-  fi
-
-  cat "$workdir/tokens.json" | $PY -c "
-import json,sys
-t=json.load(sys.stdin)
-print(f'  Mood    : {t[\"mood\"]}')
-print(f'  Pattern : {t[\"cover_pattern\"]}')
-print(f'  Fonts   : {t[\"font_display\"]} / {t[\"font_body\"]}')"
-
-  # Step 2: cover HTML + render
-  echo ""
-  bold "Step 2/4  Rendering cover..."
-  local subtitle_args=()
-  [[ -n "$subtitle" ]] && subtitle_args=(--subtitle "$subtitle")
-  $PY "$SCRIPTS/cover.py" \
-    --tokens "$workdir/tokens.json" \
-    --out "$workdir/cover.html" \
-    "${subtitle_args[@]+"${subtitle_args[@]}"}"
-
-  $NODE "$SCRIPTS/render_cover.cjs" \
-    --input "$workdir/cover.html" \
-    --out   "$workdir/cover.pdf"
-  green "  ✓ Cover rendered"
-
-  # Step 3: body
-  echo ""
-  bold "Step 3/4  Rendering body pages..."
   if [[ -z "$content_file" ]]; then
-    # Generate a minimal placeholder body
-    cat > "$workdir/content.json" <<'JSON'
-[
-  {"type":"h1",   "text":"Document Body"},
-  {"type":"body", "text":"Replace this with your content.json file using --content path/to/content.json"},
-  {"type":"body", "text":"See the content.json schema in the skill README for the full list of supported block types: h1, h2, h3, body, bullet, callout, table, pagebreak, spacer."}
-]
-JSON
-    content_file="$workdir/content.json"
-    yellow "  No content file provided — using placeholder body."
+    content_file="$SCRIPTS/../assets/sample-content.json"
+    yellow "  No content file provided — using bundled sample content."
   fi
 
-  $PY "$SCRIPTS/normalize_content.py" \
-    --input "$content_file" \
-    --out "$workdir/content.normalized.json"
-  content_file="$workdir/content.normalized.json"
-  green "  ✓ Content normalized"
-
-  $PY "$SCRIPTS/render_body.py" \
-    --tokens  "$workdir/tokens.json" \
-    --content "$content_file" \
-    --out     "$workdir/body.pdf"
-  green "  ✓ Body rendered"
-
-  # Step 4: merge
   echo ""
-  bold "Step 4/4  Merging and QA..."
-  $PY "$SCRIPTS/merge.py" \
-    --cover "$workdir/cover.pdf" \
-    --body  "$workdir/body.pdf" \
-    --out   "$out" \
+  bold "Step 1/1  Rendering PDF via Node + Playwright..."
+  local render_args=(
     --title "$title"
+    --type "$type"
+    --author "$author"
+    --date "$date"
+    --content "$content_file"
+    --out "$out"
+  )
+  [[ -n "$subtitle"    ]] && render_args+=(--subtitle "$subtitle")
+  [[ -n "$abstract"    ]] && render_args+=(--abstract "$abstract")
+  [[ -n "$cover_image" ]] && render_args+=(--cover-image "$cover_image")
+  [[ -n "$accent"      ]] && render_args+=(--accent "$accent")
+  [[ -n "$cover_bg"    ]] && render_args+=(--cover-bg "$cover_bg")
 
-  # Cleanup
-  rm -rf "$workdir"
+  $NODE "$SCRIPTS/render_document.cjs" "${render_args[@]}"
+  green "  ✓ PDF rendered"
 }
 
 # ── fill ──────────────────────────────────────────────────────────────────────
@@ -281,9 +311,18 @@ cmd_fill() {
   fi
 
   if $inspect_only || [[ -z "$out" && -z "$values" && -z "$data_file" ]]; then
+    if ! command -v "$PY" &>/dev/null; then
+      red "python3 is required for fill inspection"
+      exit 2
+    fi
     bold "Inspecting form fields in: $input"
     $PY "$SCRIPTS/fill_inspect.py" --input "$input"
     return
+  fi
+
+  if ! command -v "$PY" &>/dev/null; then
+    red "python3 is required for fill"
+    exit 2
   fi
 
   bold "Filling form: $input → $out"
@@ -298,9 +337,8 @@ cmd_fill() {
 # ── reformat ───────────────────────────────────────────────────────────────────
 cmd_reformat() {
   local input="" title="Reformatted Document" type="general"
-  local author="" date="" out="output.pdf" subtitle=""
-  local tmpdir
-  tmpdir="$(mktemp -d)"
+  local author="" date="" out="" subtitle=""
+  local out_explicit=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -310,32 +348,67 @@ cmd_reformat() {
       --author)   author="$2";   shift 2 ;;
       --date)     date="$2";     shift 2 ;;
       --subtitle) subtitle="$2"; shift 2 ;;
-      --out)      out="$2";      shift 2 ;;
+      --out)      out="$2"; out_explicit=true; shift 2 ;;
       *) echo "Unknown option: $1"; exit 1 ;;
     esac
   done
 
   if [[ -z "$input" ]]; then
-    echo "Usage: make.sh reformat --input source.md --title T --type TYPE --out output.pdf"
+    echo "Usage: make.sh reformat --input source.md --title T --type TYPE [--out title_YYYYMMDD_HHMMSS.pdf]"
     exit 1
   fi
 
-  bold "Parsing: $input"
-  $PY "$SCRIPTS/reformat_parse.py" --input "$input" --out "$tmpdir/content.json"
-  green "  ✓ Parsed to content.json"
+  out="$(resolve_output_path "$out" "$title")"
+  if [[ "$out_explicit" == true ]]; then
+    local rewritten_out
+    rewritten_out="$(rewrite_tmp_generic_output "$out" "$title")"
+    if [[ "$rewritten_out" != "$out" ]]; then
+      yellow "  Temporary generic path detected. Rewriting output to: $rewritten_out"
+      out="$rewritten_out"
+    fi
+  fi
+
+  local ext="${input##*.}"
+  ext="$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')"
+
+  if [[ "$ext" == "pdf" ]]; then
+    if ! command -v "$PY" &>/dev/null; then
+      red "python3 is required to reformat from an existing PDF source"
+      exit 2
+    fi
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+    bold "Parsing PDF source via optional Python path: $input"
+    $PY "$SCRIPTS/reformat_parse.py" --input "$input" --out "$tmpdir/content.json"
+    green "  ✓ Parsed to content.json"
+
+    bold "Applying design and building PDF..."
+    local sub_args=()
+    [[ -n "$subtitle" ]] && sub_args=(--subtitle "$subtitle")
+
+    cmd_run \
+      --title "$title" --type "$type" \
+      --author "$author" --date "$date" \
+      --content "$tmpdir/content.json" \
+      --out "$out" \
+      "${sub_args[@]+"${sub_args[@]}"}"
+
+    rm -rf "$tmpdir"
+    return
+  fi
 
   bold "Applying design and building PDF..."
-  local sub_args=()
-  [[ -n "$subtitle" ]] && sub_args=(--subtitle "$subtitle")
-
-  cmd_run \
-    --title "$title" --type "$type" \
-    --author "$author" --date "$date" \
-    --content "$tmpdir/content.json" \
-    --out "$out" \
-    "${sub_args[@]+"${sub_args[@]}"}"
-
-  rm -rf "$tmpdir"
+  echo "  Output  : $out"
+  local render_args=(
+    --title "$title"
+    --type "$type"
+    --author "$author"
+    --date "$date"
+    --input "$input"
+    --out "$out"
+  )
+  [[ -n "$subtitle" ]] && render_args+=(--subtitle "$subtitle")
+  $NODE "$SCRIPTS/render_document.cjs" "${render_args[@]}"
 }
 
 # ── demo ──────────────────────────────────────────────────────────────────────
@@ -470,15 +543,15 @@ main() {
     echo "Usage: bash make.sh <command> [options]"
     echo ""
     echo "Commands:"
-    echo "  check                             Verify all dependencies"
-    echo "  fix                               Auto-install missing deps"
-    echo "  run    --title T --type TYPE      CREATE: full pipeline → PDF"
+    echo "  check                             Verify default CREATE/REFORMAT dependencies"
+    echo "  fix                               Auto-install default deps"
+    echo "  run    --title T --type TYPE      CREATE: Node-first pipeline → PDF"
     echo "         [--author A] [--date D] [--subtitle S]"
     echo "         [--abstract A] [--cover-image URL]"
     echo "         [--accent #HEX] [--cover-bg #HEX]"
-    echo "         [--content content.json] [--out output.pdf]"
-    echo "  fill   --input f.pdf              FILL: inspect or fill form fields"
-    echo "  reformat --input doc.md           REFORMAT: parse doc → apply design → PDF"
+    echo "         [--content content.json] [--out title_YYYYMMDD_HHMMSS.pdf]"
+    echo "  fill   --input f.pdf              FILL: inspect or fill form fields (optional python path)"
+    echo "  reformat --input doc.md           REFORMAT: md/txt/json via Node; pdf via optional python parser"
     echo "  demo                              Build a full-featured demo PDF"
     exit 0
   fi

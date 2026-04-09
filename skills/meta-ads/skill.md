@@ -1,4 +1,6 @@
 ---
+name: meta-ads
+description: Full read/write integration with Meta (Facebook) Ads API for campaigns, ad sets, ads, and insights.
 slug: meta-ads
 display_name: Meta Ads API
 version: 1.0.0
