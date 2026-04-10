@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { MagnifyingGlass } from "@phosphor-icons/react";
 import { GatewayBrowserClient } from "../../lib/gateway-client";
 import { createGatewayInstanceId } from "../../lib/gateway-instance-id";
+import { runSupabaseRequestWithRetry } from "../../lib/bustly-supabase";
 import { buildBustlyWorkspaceAgentId } from "../../../shared/bustly-agent";
 import Skeleton from "../ui/Skeleton";
 import collapsedLogo from "../../assets/imgs/collapsed_logo_clean.svg";
@@ -198,6 +199,161 @@ const INITIAL_SKILLS: SkillItemData[] = [
   { id: 4, name: "Generate weekly report", description: "Summarize weekly metrics.", icon: ChartBarIcon, enabled: true },
 ];
 
+const SKILL_LAYER_KEYS = new Set([
+  "core",
+  "ecommerce",
+  "retail",
+  "food-bev",
+  "health-beauty",
+  "professional",
+  "home-service",
+] as const);
+
+type SkillLayerKey = "core" | "ecommerce" | "retail" | "food-bev" | "health-beauty" | "professional" | "home-service";
+type SkillLayerFilterKey = SkillLayerKey | "";
+
+const DEFAULT_SKILL_LAYER: SkillLayerKey = "core";
+const DEFAULT_SKILL_SUB_LAYER = "general";
+
+const LAYER_TABS: ReadonlyArray<{ key: SkillLayerFilterKey; label: string }> = [
+  { key: "", label: "All" },
+  { key: "core", label: "General" },
+  { key: "ecommerce", label: "Ecommerce / DTC" },
+  { key: "retail", label: "Retail Stores" },
+  { key: "food-bev", label: "Food & Beverage" },
+  { key: "health-beauty", label: "Health & Beauty" },
+  { key: "professional", label: "Professional Services" },
+  { key: "home-service", label: "Home Services" },
+];
+
+type SkillLayerMapRow = {
+  slug: string | null;
+  name: string | null;
+  layer: string | null;
+  sub_layer: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+type SkillCategoryLookupEntry = {
+  layer: SkillLayerKey;
+  subLayer: string;
+};
+
+function normalizeSkillLookupToken(value: string | undefined): string {
+  return value
+    ?.trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, "-")
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "") ?? "";
+}
+
+function normalizeSkillLayerKey(value: string | undefined): SkillLayerKey {
+  const normalized = value?.trim().toLowerCase() ?? "";
+  return SKILL_LAYER_KEYS.has(normalized as SkillLayerKey) ? (normalized as SkillLayerKey) : DEFAULT_SKILL_LAYER;
+}
+
+function normalizeSkillSubLayerKey(value: string | undefined): string {
+  return value
+    ?.trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, "-")
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "") ?? "";
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function toStringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function extractSkillSlugFromFilePath(filePath: string | undefined): string {
+  const normalized = filePath?.replace(/\\/g, "/").replace(/\/+$/, "") ?? "";
+  if (!normalized) {
+    return "";
+  }
+  const segments = normalized.split("/").filter(Boolean);
+  if (segments.length === 0) {
+    return "";
+  }
+  const last = segments.at(-1)?.toLowerCase() ?? "";
+  if (last === "skill.md") {
+    return segments.at(-2)?.trim() ?? "";
+  }
+  return segments.at(-1)?.trim() ?? "";
+}
+
+function buildCategoryLookupMap(rows: SkillLayerMapRow[]): Map<string, SkillCategoryLookupEntry> {
+  const mapping = new Map<string, SkillCategoryLookupEntry>();
+
+  for (const row of rows) {
+    const layer = normalizeSkillLayerKey(row.layer ?? undefined);
+    const subLayer = normalizeSkillSubLayerKey(
+      row.sub_layer ?? undefined,
+    ) || normalizeSkillSubLayerKey(
+      toStringValue(asRecord(row.metadata)?.sub_layer),
+    );
+    const resolvedSubLayer = subLayer || DEFAULT_SKILL_SUB_LAYER;
+    const lookupEntry: SkillCategoryLookupEntry = {
+      layer,
+      subLayer: resolvedSubLayer,
+    };
+    const metadata = asRecord(row.metadata);
+    const tokens = [
+      row.slug ?? "",
+      row.name ?? "",
+      toStringValue(metadata?.skill_key),
+      toStringValue(metadata?.skillKey),
+      toStringValue(metadata?.slug),
+      toStringValue(metadata?.skill_id),
+      toStringValue(metadata?.skillId),
+    ];
+
+    for (const token of tokens) {
+      const normalizedToken = normalizeSkillLookupToken(token);
+      if (!normalizedToken || mapping.has(normalizedToken)) {
+        continue;
+      }
+      mapping.set(normalizedToken, lookupEntry);
+    }
+  }
+
+  return mapping;
+}
+
+function resolveSkillCategory(
+  skill: SkillItemData,
+  categoryLookup: Map<string, SkillCategoryLookupEntry>,
+): SkillCategoryLookupEntry {
+  const tokens = [
+    skill.skillKey,
+    skill.name,
+    extractSkillSlugFromFilePath(skill.filePath),
+  ];
+  for (const token of tokens) {
+    const normalized = normalizeSkillLookupToken(token);
+    if (!normalized) {
+      continue;
+    }
+    const category = categoryLookup.get(normalized);
+    if (category) {
+      return category;
+    }
+  }
+  return {
+    layer: DEFAULT_SKILL_LAYER,
+    subLayer: DEFAULT_SKILL_SUB_LAYER,
+  };
+}
+
 function toSkillItem(skill: SkillStatusEntry, index: number): SkillItemData {
   return {
     id: skill.skillKey || `${skill.name}-${index}`,
@@ -305,7 +461,12 @@ const BUILD_WITH_BUSTLY_PROMPT =
   "/skill-creator Help me create a skill together. First ask me what the skill should do.";
 
 function buildImportGithubSkillPrompt(url: string): string {
-  return `Help me install a skill from GitHub together. I want to use this repository: ${url}`;
+  return [
+    "Help me install a skill from this GitHub source:",
+    `"${url}".`,
+    "If this is a repo subpath, handle it accordingly.",
+    "After installation, verify the skill is available.",
+  ].join(" ");
 }
 
 type PendingChatContext = {
@@ -320,7 +481,45 @@ function basenameFromPath(pathValue: string): string {
 
 function buildUploadSkillPrompt(selection: PendingChatContext): string {
   const sourceType = selection.kind === "directory" ? "folder" : "file";
-  return `Help me install a local skill together. I just selected a ${sourceType} named "${selection.name}". First help me inspect whether it is a valid skill, then guide me through installation.`;
+  return [
+    `Help me install a local skill from the attached ${sourceType} "${selection.name}".`,
+    "If it is a zip archive, unpack and validate before installing.",
+    "After installation, verify the skill is available.",
+  ].join(" ");
+}
+
+function isLikelyGitHubUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    if (!/^https?:$/.test(parsed.protocol)) {
+      return false;
+    }
+    if (parsed.hostname !== "github.com" && !parsed.hostname.endsWith(".github.com")) {
+      return false;
+    }
+    return parsed.pathname.split("/").filter(Boolean).length >= 2;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeGitHubInput(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  // Support common SSH-style GitHub links pasted by users.
+  const sshMatch = trimmed.match(/^git@github\.com:([^/\s]+\/[^/\s]+?)(?:\.git)?$/i);
+  if (sshMatch) {
+    return `https://github.com/${sshMatch[1]}`;
+  }
+
+  if (/^github\.com\//i.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+
+  return trimmed;
 }
 
 function parseTransferredFilePaths(raw: string | undefined): string[] {
@@ -485,6 +684,17 @@ function GithubImportModal(props: {
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
 
+  const submitImport = () => {
+    const normalized = normalizeGitHubInput(url);
+    const isValid = isLikelyGitHubUrl(normalized);
+    if (!isValid) {
+      setError("Please enter a valid GitHub URL.");
+      return;
+    }
+    setUrl(normalized);
+    props.onImport(normalized);
+  };
+
   useEffect(() => {
     if (!props.isOpen) {
       setUrl("");
@@ -525,6 +735,12 @@ function GithubImportModal(props: {
                 setUrl(event.target.value);
                 setError("");
               }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  submitImport();
+                }
+              }}
               placeholder="https://github.com/username/repo"
               className="h-10 w-full rounded-lg border border-gray-200 px-3 text-sm outline-none transition-all focus:border-[#1A162F] focus:ring-2 focus:ring-[#1A162F]/10"
             />
@@ -534,15 +750,7 @@ function GithubImportModal(props: {
           <button
             type="button"
             disabled={!url}
-            onClick={() => {
-              const normalized = url.trim();
-              const isValid = /^https?:\/\/github\.com\/[^/\s]+\/[^/\s]+(?:\.git)?\/?$/.test(normalized);
-              if (!isValid) {
-                setError("Please enter a valid GitHub repository URL.");
-                return;
-              }
-              props.onImport(normalized);
-            }}
+            onClick={submitImport}
             className="h-10 w-full rounded-lg bg-[#1A162F] text-sm font-bold text-white shadow-sm transition-all hover:bg-[#1A162F]/90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Import
@@ -565,10 +773,14 @@ export default function SkillPage() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showGithubModal, setShowGithubModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedLayer, setSelectedLayer] = useState<SkillLayerFilterKey>(DEFAULT_SKILL_LAYER);
+  const [skillCategoryLookup, setSkillCategoryLookup] = useState<Map<string, SkillCategoryLookupEntry>>(new Map());
+  const [chatAgentId, setChatAgentId] = useState(() => buildBustlyWorkspaceAgentId("", "overview"));
   const deferredSearchQuery = useDeferredValue(searchQuery);
 
   const navigateToChatWithPrompt = (prompt: string, context?: PendingChatContext) => {
     const searchParams = new URLSearchParams();
+    searchParams.set("agent", chatAgentId);
     searchParams.set("prompt", prompt);
     if (context) {
       searchParams.set("contextPath", context.path);
@@ -602,6 +814,9 @@ export default function SkillPage() {
           return;
         }
         const agentId = buildBustlyWorkspaceAgentId(supabaseConfig.workspaceId);
+        if (!disposed) {
+          setChatAgentId(agentId);
+        }
         const status = await window.electronAPI.gatewayStatus();
         if (!status.running) {
           if (!disposed) {
@@ -677,21 +892,70 @@ export default function SkillPage() {
       clientRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+
+    const loadCategoryMappings = async () => {
+      try {
+        const mapping = await runSupabaseRequestWithRetry(
+          async ({ client }) => {
+            const { data, error } = await client
+              .schema("skillops")
+              .from("skills")
+              .select("slug,name,layer,sub_layer,metadata");
+            if (error) {
+              throw error;
+            }
+            return buildCategoryLookupMap((data ?? []) as SkillLayerMapRow[]);
+          },
+          {
+            operation: "listSkillCategoryMappings",
+            force: false,
+          },
+        );
+        if (!disposed) {
+          setSkillCategoryLookup(mapping);
+        }
+      } catch (error) {
+        if (!disposed) {
+          setSkillCategoryLookup(new Map());
+        }
+        console.warn("[SkillPage] Failed to load skill category mappings:", error);
+      }
+    };
+
+    void loadCategoryMappings();
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
   const normalizedSearchQuery = normalizeSkillSearchText(deferredSearchQuery);
   const hasActiveSearch = normalizedSearchQuery.length > 0;
-  const visibleSkillRows = useMemo(() => {
-    return [...skills]
+  const filteredSkillRows = useMemo(() => {
+    return skills
       .filter((skill) => skillMatchesQuery(skill, normalizedSearchQuery))
-      .sort((left, right) => {
-      if (left.enabled !== right.enabled) {
-        return left.enabled ? -1 : 1;
-      }
-      return left.name.localeCompare(right.name, undefined, {
-        sensitivity: "base",
-        numeric: true,
+      .filter((skill) => {
+        if (!selectedLayer) {
+          return true;
+        }
+        return resolveSkillCategory(skill, skillCategoryLookup).layer === selectedLayer;
+      })
+      .toSorted((left, right) => {
+        if (left.enabled !== right.enabled) {
+          return left.enabled ? -1 : 1;
+        }
+        return left.name.localeCompare(right.name, undefined, {
+          sensitivity: "base",
+          numeric: true,
+        });
       });
-      });
-  }, [normalizedSearchQuery, skills]);
+  }, [normalizedSearchQuery, selectedLayer, skillCategoryLookup, skills]);
+  const emptyStateTitle = "Coming soon";
+  const emptyStateDescription = hasActiveSearch
+    ? "No matching skills in this view yet. More skills are coming soon."
+    : "We are adding more skills to this category. Please check back soon.";
 
   return (
     <div className="custom-scrollbar h-full overflow-y-auto">
@@ -769,7 +1033,7 @@ export default function SkillPage() {
           </div>
         </div>
 
-        <div className="mb-6 rounded-2xl border border-[#EEF1F6] bg-white/90 p-3 shadow-[0_10px_24px_rgba(26,22,47,0.04)]">
+        <div className="mb-3 rounded-2xl border border-[#EEF1F6] bg-white/90 p-3 shadow-[0_10px_24px_rgba(26,22,47,0.04)]">
           <div className="relative">
             <MagnifyingGlass
               size={18}
@@ -787,81 +1051,82 @@ export default function SkillPage() {
           </div>
           <div className="mt-2 flex items-center justify-between px-1 text-xs text-[#666F8D]">
             <span>
-              {loadingSkills ? "Loading skills..." : `${visibleSkillRows.length} ${visibleSkillRows.length === 1 ? "skill" : "skills"}`}
+              {loadingSkills ? "Loading skills..." : `${filteredSkillRows.length} ${filteredSkillRows.length === 1 ? "skill" : "skills"}`}
               {hasActiveSearch ? " matched" : ""}
             </span>
-            {hasActiveSearch ? (
-              <button
-                type="button"
-                onClick={() => setSearchQuery("")}
-                className="font-semibold text-[#1A162F] transition-colors hover:text-[#0F0C21]"
-              >
-                Clear
-              </button>
-            ) : null}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="mb-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 px-3">
+          {LAYER_TABS.map((tab) => (
+            <button
+              key={tab.key || "all"}
+              type="button"
+              onClick={() => setSelectedLayer(tab.key)}
+              className={`h-7 border-b-2 px-1 text-[13px] font-medium whitespace-nowrap transition-colors ${
+                selectedLayer === tab.key
+                  ? "border-[#3B82F6] text-[#2F6FDB]"
+                  : "border-transparent text-[#667085] hover:text-[#1A162F]"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        <div>
           {loadingSkills ? (
-            <>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <SkillCardSkeleton />
               <SkillCardSkeleton />
               <SkillCardSkeleton />
               <SkillCardSkeleton />
-            </>
+            </div>
           ) : skillsError ? (
             <div className="col-span-full rounded-xl border border-red-100 bg-red-50 py-12 text-center text-sm text-red-600">
               {skillsError}
             </div>
-          ) : visibleSkillRows.length > 0 ? (
-            visibleSkillRows.map((skill) => (
-              <SkillCard
-                key={skill.id}
-                skill={skill}
-                onToggle={(id) => {
-                  const target = skills.find((item) => item.id === id);
-                  if (!target?.skillKey || !clientRef.current) {
-                    return;
-                  }
-                  setSkills((previous) =>
-                    previous.map((item) => (item.id === id ? { ...item, loading: true } : item)),
-                  );
-                  void clientRef.current
-                    .request("skills.update", {
-                      skillKey: target.skillKey,
-                      enabled: !target.enabled,
-                    })
-                    .then(() => {
-                      setSkills((previous) =>
-                        previous.map((item) =>
-                          item.id === id ? { ...item, enabled: !item.enabled, loading: false } : item,
-                        ),
-                      );
-                    })
-                    .catch((error) => {
-                      setSkills((previous) =>
-                        previous.map((item) => (item.id === id ? { ...item, loading: false } : item)),
-                      );
-                      setSkillsError(error instanceof Error ? error.message : String(error));
-                    });
-                }}
-              />
-            ))
+          ) : filteredSkillRows.length > 0 ? (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {filteredSkillRows.map((skill) => (
+                <SkillCard
+                  key={skill.id}
+                  skill={skill}
+                  onToggle={(id) => {
+                    const target = skills.find((item) => item.id === id);
+                    if (!target?.skillKey || !clientRef.current) {
+                      return;
+                    }
+                    setSkills((previous) =>
+                      previous.map((item) => (item.id === id ? { ...item, loading: true } : item)),
+                    );
+                    void clientRef.current
+                      .request("skills.update", {
+                        skillKey: target.skillKey,
+                        enabled: !target.enabled,
+                      })
+                      .then(() => {
+                        setSkills((previous) =>
+                          previous.map((item) =>
+                            item.id === id ? { ...item, enabled: !item.enabled, loading: false } : item,
+                          ),
+                        );
+                      })
+                      .catch((error) => {
+                        setSkills((previous) =>
+                          previous.map((item) => (item.id === id ? { ...item, loading: false } : item)),
+                        );
+                        setSkillsError(error instanceof Error ? error.message : String(error));
+                      });
+                  }}
+                />
+              ))}
+            </div>
           ) : skills.length > 0 ? (
             <div className="col-span-full rounded-xl border border-dashed border-[#DCE2EC] bg-[#FAFBFD] py-12 text-center">
               <div className="mx-auto max-w-md px-6">
-                <h3 className="text-base font-bold text-[#1A162F]">No skills found</h3>
-                <p className="mt-2 text-sm text-[#666F8D]">Try another keyword or clear the current search.</p>
-                {hasActiveSearch ? (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery("")}
-                    className="mt-5 rounded-lg bg-[#1A162F] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-[#1A162F]/90"
-                  >
-                    Clear search
-                  </button>
-                ) : null}
+                <h3 className="text-base font-bold text-[#1A162F]">{emptyStateTitle}</h3>
+                <p className="mt-2 text-sm text-[#666F8D]">{emptyStateDescription}</p>
               </div>
             </div>
           ) : (

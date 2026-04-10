@@ -2283,7 +2283,11 @@ export default function ChatPage() {
 
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search);
-    const explicitSessionKey = searchParams.get("session")?.trim() || currentViewKey;
+    const explicitSession = searchParams.get("session")?.trim();
+    const explicitAgent = searchParams.get("agent")?.trim();
+    const explicitSessionKey =
+      explicitSession ||
+      (explicitAgent ? buildBustlyAgentDraftViewKey(explicitAgent) : currentViewKey);
     const prompt = searchParams.get("prompt")?.trim();
     const contextPath = searchParams.get("contextPath")?.trim();
     const contextName = searchParams.get("contextName")?.trim();
