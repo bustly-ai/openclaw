@@ -912,6 +912,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Hermes-style self-evolution controls. By default, OpenClaw runs a silent post-run review loop after every completed agent turn, revisits the just-finished turn, and can write durable memory or evolve reusable skills without sending a user-visible reply.",
   "agents.defaults.selfEvolution.enabled":
     "Force-disable or force-enable the self-evolution loop. Default behavior is enabled; set this to false only when you explicitly need to suppress automatic post-run review.",
+  "agents.defaults.selfEvolution.reviewModel":
+    "Dedicated model ref used for the silent post-run review/consolidation run. Defaults to bustly/chat.standard so the classifier does not reuse the main task model unless you explicitly override it.",
   "agents.defaults.selfEvolution.minToolCalls":
     "Reserved review-policy knob for future cost heuristics. In the current Hermes-style v1 flow, post-run review runs after every completed turn and the review turn itself decides whether to write memory.",
   "agents.defaults.selfEvolution.maxRecentMessages":

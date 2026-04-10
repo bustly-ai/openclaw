@@ -289,6 +289,8 @@ export type AgentCompactionMemoryFlushConfig = {
 export type AgentSelfEvolutionConfig = {
   /** Enable the v1+ post-run self-evolution loop (default: true; set false only to force-disable). */
   enabled?: boolean;
+  /** Dedicated model ref for the silent post-run review/consolidation run. */
+  reviewModel?: string;
   /** Minimum number of tool-result messages in the just-finished turn before review triggers. */
   minToolCalls?: number;
   /** Max recent transcript messages to inspect when deciding whether review should run. */

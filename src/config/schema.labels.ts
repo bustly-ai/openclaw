@@ -404,6 +404,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.memoryFlush.systemPrompt": "Compaction Memory Flush System Prompt",
   "agents.defaults.selfEvolution": "Self Evolution",
   "agents.defaults.selfEvolution.enabled": "Self Evolution Enabled",
+  "agents.defaults.selfEvolution.reviewModel": "Self Evolution Review Model",
   "agents.defaults.selfEvolution.minToolCalls": "Self Evolution Min Tool Calls",
   "agents.defaults.selfEvolution.maxRecentMessages": "Self Evolution Max Recent Messages",
   "agents.defaults.selfEvolution.allowInGroupChats": "Self Evolution Allow In Group Chats",

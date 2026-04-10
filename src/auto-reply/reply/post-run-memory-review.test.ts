@@ -1,9 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_POST_RUN_MEMORY_REVIEW_MODEL,
   DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS,
   enforceRuntimeRouting,
   resolvePostRunMemoryReviewSettings,
 } from "./post-run-memory-review.js";
+
+describe("resolvePostRunMemoryReviewSettings", () => {
+  it("defaults the review model to bustly standard", () => {
+    const settings = resolvePostRunMemoryReviewSettings({});
+    expect(settings?.reviewModel).toBe(DEFAULT_POST_RUN_MEMORY_REVIEW_MODEL);
+  });
+
+  it("accepts an explicit review model override", () => {
+    const settings = resolvePostRunMemoryReviewSettings({
+      agents: {
+        defaults: {
+          selfEvolution: {
+            reviewModel: "openai/gpt-5.2-mini",
+          },
+        },
+      },
+    });
+    expect(settings?.reviewModel).toBe("openai/gpt-5.2-mini");
+  });
+});
 
 describe("enforceRuntimeRouting", () => {
   it("promotes repeated procedural work to skill when a skill payload is present", () => {

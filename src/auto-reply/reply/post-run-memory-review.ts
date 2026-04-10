@@ -4,7 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { isCliProvider } from "../../agents/model-selection.js";
+import { isCliProvider, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
@@ -26,6 +26,7 @@ import { readSessionMessages } from "./post-compaction-audit.js";
 
 export const DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS = 5;
 export const DEFAULT_POST_RUN_MEMORY_REVIEW_MAX_RECENT_MESSAGES = 120;
+export const DEFAULT_POST_RUN_MEMORY_REVIEW_MODEL = "bustly/chat.standard";
 
 export const DEFAULT_POST_RUN_MEMORY_REVIEW_PROMPT = [
   "You are the consolidation classifier for a completed agent session.",
@@ -47,6 +48,7 @@ export const DEFAULT_POST_RUN_MEMORY_REVIEW_SYSTEM_PROMPT = [
 
 export type PostRunMemoryReviewSettings = {
   enabled: boolean;
+  reviewModel: string;
   minToolCalls: number;
   maxRecentMessages: number;
   allowInGroupChats: boolean;
@@ -142,6 +144,7 @@ export function resolvePostRunMemoryReviewSettings(
   }
   return {
     enabled,
+    reviewModel: raw?.reviewModel?.trim() || DEFAULT_POST_RUN_MEMORY_REVIEW_MODEL,
     minToolCalls:
       normalizeNonNegativeInt(raw?.minToolCalls) ?? DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS,
     maxRecentMessages:
@@ -153,6 +156,21 @@ export function resolvePostRunMemoryReviewSettings(
       raw?.systemPrompt?.trim() || DEFAULT_POST_RUN_MEMORY_REVIEW_SYSTEM_PROMPT,
     ),
   };
+}
+
+function resolveReviewModelOverride(params: {
+  settings: PostRunMemoryReviewSettings;
+  followupRun: FollowupRun;
+}) {
+  return (
+    resolveModelRefFromString({
+      raw: params.settings.reviewModel,
+      defaultProvider: params.followupRun.run.provider,
+    })?.ref ?? {
+      provider: params.followupRun.run.provider,
+      model: params.followupRun.run.model,
+    }
+  );
 }
 
 function extractCurrentTurnMessages(messages: TranscriptMessage[]): TranscriptMessage[] {
@@ -424,6 +442,10 @@ async function classifyConsolidation(params: {
 
   const result = await runWithModelFallback({
     ...resolveModelFallbackOptions(params.followupRun.run),
+    ...resolveReviewModelOverride({
+      settings: params.settings,
+      followupRun: params.followupRun,
+    }),
     run: (provider, model) => {
       const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
         run: params.followupRun.run,

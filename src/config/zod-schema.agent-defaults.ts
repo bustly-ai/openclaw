@@ -99,6 +99,7 @@ export const AgentDefaultsSchema = z
     selfEvolution: z
       .object({
         enabled: z.boolean().optional(),
+        reviewModel: z.string().optional(),
         minToolCalls: z.number().int().nonnegative().optional(),
         maxRecentMessages: z.number().int().positive().optional(),
         allowInGroupChats: z.boolean().optional(),
