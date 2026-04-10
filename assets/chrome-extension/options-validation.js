@@ -10,7 +10,12 @@ export function classifyRelayCheckResponse(res, port) {
   }
 
   if (res.status === 401) {
-    return { action: 'status', kind: 'error', message: 'Gateway token rejected. Check token and save again.' }
+    return {
+      action: 'status',
+      kind: 'error',
+      message:
+        'Relay returned HTTP 401. This usually means an old token-required relay build is running. Restart with the latest Bustly/OpenClaw relay.',
+    }
   }
 
   if (res.error) {
@@ -38,7 +43,7 @@ export function classifyRelayCheckResponse(res, port) {
     }
   }
 
-  return { action: 'status', kind: 'ok', message: `Relay reachable and authenticated at http://127.0.0.1:${port}/` }
+  return { action: 'status', kind: 'ok', message: `Relay reachable at http://127.0.0.1:${port}/` }
 }
 
 export function classifyRelayCheckException(err, port) {
@@ -52,6 +57,6 @@ export function classifyRelayCheckException(err, port) {
 
   return {
     kind: 'error',
-    message: `Relay not reachable/authenticated at http://127.0.0.1:${port}/. Start OpenClaw browser relay and verify token.`,
+    message: `Relay not reachable at http://127.0.0.1:${port}/. Start OpenClaw browser relay and verify port.`,
   }
 }

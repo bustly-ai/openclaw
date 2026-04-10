@@ -172,21 +172,29 @@ describe("mergeBustlyRuntimeHeaders", () => {
         optionHeaders: { "X-Trace-Id": "trace-1" },
         workspaceId: "workspace-123",
         runId: "run-123",
+        sessionId: "session-123",
       }),
     ).toEqual({
       Authorization: "Bearer test",
       "X-Trace-Id": "trace-1",
       "X-Workspace-Id": "workspace-123",
       "X-Run-Id": "run-123",
+      "X-Session-Id": "session-123",
     });
   });
 
-  it("keeps run id and removes workspace header when workspace id is missing", () => {
+  it("keeps run id and removes workspace/session headers when ids are missing", () => {
     expect(
       mergeBustlyRuntimeHeaders({
-        modelHeaders: { "X-Workspace-Id": "stale-model", "x-workspace-id": "stale-lower" },
+        modelHeaders: {
+          "X-Workspace-Id": "stale-model",
+          "x-workspace-id": "stale-lower",
+          "X-Session-Id": "stale-session",
+          "x-session-id": "stale-session-lower",
+        },
         workspaceId: "   ",
         runId: "run-456",
+        sessionId: "   ",
       }),
     ).toEqual({
       "X-Run-Id": "run-456",

@@ -172,6 +172,8 @@ interface ElectronAPI {
     workspaceId: string;
     agentId: string;
     label?: string;
+    promptExcerpt?: string;
+    sampleRouteKey?: string;
   }) => Promise<{ success: boolean; sessionKey?: string; error?: string }>;
   bustlyUpdateAgent: (params: {
     workspaceId: string;
@@ -204,6 +206,9 @@ interface ElectronAPI {
   onUpdateStatus: (callback: (data: { event: string }) => void) => () => void;
   onNativeFullscreenChange: (callback: (data: { isNativeFullscreen: boolean }) => void) => () => void;
   onDeepLink: (callback: (data: DeepLinkData) => void) => () => void;
+  onBustlySessionLabelUpdated: (
+    callback: (data: { agentId: string; sessionKey: string; label: string; updatedAt: number | null }) => void,
+  ) => () => void;
 }
 
 interface Window {

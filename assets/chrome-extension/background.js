@@ -54,12 +54,6 @@ async function getRelayPort() {
   return n
 }
 
-async function getGatewayToken() {
-  const stored = await chrome.storage.local.get(['gatewayToken'])
-  const token = String(stored.gatewayToken || '').trim()
-  return token || ''
-}
-
 function setBadge(tabId, kind) {
   const cfg = BADGE[kind]
   void chrome.action.setBadgeText({ tabId, text: cfg.text })
@@ -130,9 +124,8 @@ async function ensureRelayConnection() {
 
   relayConnectPromise = (async () => {
     const port = await getRelayPort()
-    const gatewayToken = await getGatewayToken()
     const httpBase = `http://127.0.0.1:${port}`
-    const wsUrl = await buildRelayWsUrl(port, gatewayToken)
+    const wsUrl = await buildRelayWsUrl(port)
 
     // Fast preflight: is the relay server up?
     try {
@@ -879,9 +872,8 @@ async function whenReady(fn) {
 // delegates token-validation requests here.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type !== 'relayCheck') return false
-  const { url, token } = msg
-  const headers = token ? { 'x-openclaw-relay-token': token } : {}
-  fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(2000) })
+  const { url } = msg
+  fetch(url, { method: 'GET', signal: AbortSignal.timeout(2000) })
     .then(async (res) => {
       const contentType = String(res.headers.get('content-type') || '')
       let json = null
