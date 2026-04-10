@@ -7,6 +7,7 @@ import {
   ArrowUp,
   File,
   Folder,
+  Gear,
   Image,
   Paperclip,
   Stop,
@@ -19,14 +20,13 @@ import { createGatewayInstanceId } from "../../lib/gateway-instance-id";
 import {
   buildChatRoute,
   deriveScenarioLabel,
-  resolveSessionIconComponent,
 } from "../../lib/session-icons";
 import {
   buildBustlyAgentDraftViewKey,
   buildBustlyWorkspaceAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../../shared/bustly-agent";
-import { resolveBustlyPresetUseCases, type BustlyPresetUseCase } from "../../../shared/bustly-preset-channels";
+import type { BustlyPresetUseCase } from "../../../shared/bustly-preset-channels";
 import { extractText, extractThinking } from "../../lib/chat-extract";
 import PortalTooltip from "../ui/PortalTooltip";
 import ChatModelPicker from "./ChatModelPicker";
@@ -43,6 +43,9 @@ import { collapseProcessedTurn, collapseStreamingEvents, resolveToolDisplay, for
 import type { TimelineArtifact, TimelineNode } from "./types";
 import { useAppState } from "../../providers/AppStateProvider";
 import { useGlobalLoader } from "../../providers/GlobalLoaderProvider";
+import AgentSettingsModal, { type AgentSettingsSkill } from "./AgentSettingsModal";
+import { isAgentAvatarFile } from "../../lib/agent-avatars";
+import { resolveAgentIconComponent, resolveAgentPresentation } from "../../lib/agent-presentation";
 
 type ChatRole = "user" | "assistant" | "thinking" | "system";
 
@@ -219,6 +222,25 @@ function resolveChatModelRef(level: ChatModelLevelId): string {
 
 function resolveBustlySampleRouteKey(level: ChatModelLevelId): string {
   return resolveChatModelRef(level).replace(/^bustly\//, "");
+}
+
+function normalizeSkillSelection(skills?: string[] | null): string[] | null {
+  if (!Array.isArray(skills)) {
+    return null;
+  }
+  return skills.map((skill) => skill.trim()).filter(Boolean).toSorted();
+}
+
+function areSkillSelectionsEqual(left?: string[] | null, right?: string[] | null): boolean {
+  const normalizedLeft = normalizeSkillSelection(left);
+  const normalizedRight = normalizeSkillSelection(right);
+  if (normalizedLeft === null || normalizedRight === null) {
+    return normalizedLeft === normalizedRight;
+  }
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return false;
+  }
+  return normalizedLeft.every((skill, index) => skill === normalizedRight[index]);
 }
 
 function nextId(prefix: string) {
@@ -778,12 +800,21 @@ export default function ChatPage() {
   const [previewZoom, setPreviewZoom] = useState(0.67);
   const [previewMinZoom, setPreviewMinZoom] = useState(0.67);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
+  const [currentAgentSummary, setCurrentAgentSummary] = useState<BustlyWorkspaceAgent | null>(null);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [isDraggingTimelineSelection, setIsDraggingTimelineSelection] = useState(false);
   const [subscriptionExpired, setSubscriptionExpired] = useState(false);
   const [subscriptionActionText, setSubscriptionActionText] = useState("Upgrade");
   const [canManageSubscription, setCanManageSubscription] = useState(false);
   const [workspaceStateLoading, setWorkspaceStateLoading] = useState(true);
+  const [isAgentSettingsModalOpen, setIsAgentSettingsModalOpen] = useState(false);
+  const [agentSettingsTab, setAgentSettingsTab] = useState<"identity" | "skills">("skills");
+  const [agentSettingsSaving, setAgentSettingsSaving] = useState(false);
+  const [availableSkills, setAvailableSkills] = useState<AgentSettingsSkill[]>([]);
+  const [draftAgentName, setDraftAgentName] = useState("");
+  const [draftAgentAvatarName, setDraftAgentAvatarName] = useState<string | null>(null);
+  const [draftAgentSkills, setDraftAgentSkills] = useState<string[] | null>(null);
+  const [avatarSelectionDirty, setAvatarSelectionDirty] = useState(false);
   const [modelLevel, setModelLevel] = useState<ChatModelLevelId>(() => {
     const stored = window.localStorage.getItem(CHAT_MODEL_LEVEL_STORAGE_KEY);
     if (stored === "standard" || stored === "advanced" || stored === "ultra") {
@@ -845,10 +876,21 @@ export default function ChatPage() {
     const searchParams = new URLSearchParams(location.search);
     return deriveScenarioLabel(currentSessionKey, searchParams.get("label"));
   }, [currentSessionKey, location.search]);
-  const currentUseCases = useMemo(
-    () => resolveBustlyPresetUseCases({ agentId: currentAgentId, sessionKey: currentSessionKey, workspaceId: activeWorkspaceId }),
-    [activeWorkspaceId, currentAgentId, currentSessionKey],
+  const currentAgentPresentation = useMemo(
+    () =>
+      resolveAgentPresentation({
+        workspaceId: activeWorkspaceId,
+        agentId: currentAgentId,
+        name: currentAgentSummary?.name || currentScenarioLabel,
+        icon: currentAgentSummary?.icon || currentScenarioIconId,
+      }),
+    [activeWorkspaceId, currentAgentId, currentAgentSummary?.icon, currentAgentSummary?.name, currentScenarioIconId, currentScenarioLabel],
   );
+  const currentUseCases = useMemo(
+    () => currentAgentPresentation.useCases,
+    [currentAgentPresentation.useCases],
+  );
+  const isOverviewPage = currentAgentId === defaultAgentId;
   const pageResolving = workspaceStateLoading || (Boolean(currentSessionKey) && loading);
   const isSessionRunning = Boolean(sending || activeRunId || compactingRunId || reconnectStatus);
   const canSendMessage =
@@ -1026,16 +1068,6 @@ export default function ChatPage() {
       window.removeEventListener("resize", updatePreviewBounds);
     };
   }, [previewImage]);
-  const CurrentScenarioIcon = useMemo(
-    () =>
-      resolveSessionIconComponent({
-        icon: currentScenarioIconId,
-        label: currentScenarioLabel,
-        sessionKey: currentSessionKey || currentAgentId,
-      }),
-    [currentAgentId, currentScenarioIconId, currentScenarioLabel, currentSessionKey],
-  );
-
   const loadGatewayStatus = useCallback(async () => {
     const status = await window.electronAPI.gatewayStatus();
     return status;
@@ -2168,6 +2200,88 @@ export default function ChatPage() {
   }, [hideGlobalLoading]);
 
   useEffect(() => {
+    if (!activeWorkspaceId || !currentAgentId) {
+      setCurrentAgentSummary(null);
+      return;
+    }
+    let disposed = false;
+    void window.electronAPI.bustlyListAgents(activeWorkspaceId).then((agents) => {
+      if (disposed) {
+        return;
+      }
+      setCurrentAgentSummary(agents.find((agent) => agent.agentId === currentAgentId) ?? null);
+    }).catch(() => {
+      if (!disposed) {
+        setCurrentAgentSummary(null);
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [activeWorkspaceId, currentAgentId, currentSessionKey]);
+
+  useEffect(() => {
+    if (!currentAgentId) {
+      return;
+    }
+    setDraftAgentName(currentAgentSummary?.name?.trim() || currentAgentPresentation.name);
+    setDraftAgentAvatarName(
+      isAgentAvatarFile(currentAgentSummary?.icon)
+        ? currentAgentSummary?.icon?.trim() || null
+        : currentAgentPresentation.avatarName,
+    );
+    setDraftAgentSkills(normalizeSkillSelection(currentAgentSummary?.skills));
+    setAvatarSelectionDirty(false);
+  }, [
+    currentAgentId,
+    currentAgentPresentation.avatarName,
+    currentAgentPresentation.name,
+    currentAgentSummary?.icon,
+    currentAgentSummary?.name,
+    currentAgentSummary?.skills,
+  ]);
+
+  useEffect(() => {
+    if (isOverviewPage) {
+      setIsAgentSettingsModalOpen(false);
+    }
+  }, [isOverviewPage]);
+
+  useEffect(() => {
+    if (!isAgentSettingsModalOpen || !clientRef.current) {
+      return;
+    }
+    let disposed = false;
+    void clientRef.current.request<{
+      skills?: Array<{
+        name: string;
+        description: string;
+        source: string;
+        eligible: boolean;
+      }>;
+    }>("skills.status", {}).then((report) => {
+      if (disposed) {
+        return;
+      }
+      setAvailableSkills(
+        (report.skills ?? []).map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+          source: skill.source.replace(/^openclaw-/, ""),
+          eligible: skill.eligible !== false,
+        })),
+      );
+    }).catch(() => {
+      if (!disposed) {
+        setAvailableSkills([]);
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [connected, isAgentSettingsModalOpen]);
+
+  useEffect(() => {
     if (!gatewayReady) {
       setConnected(false);
       setSessionLoading(currentSessionKeyRef.current, true);
@@ -2867,6 +2981,114 @@ export default function ChatPage() {
     await window.electronAPI.bustlyOpenWorkspacePricing(activeWorkspaceId);
   }, [activeWorkspaceId]);
 
+  const CurrentAgentIcon = useMemo(
+    () =>
+      resolveAgentIconComponent({
+        workspaceId: activeWorkspaceId,
+        agentId: currentAgentId,
+        name: currentAgentPresentation.name,
+        icon: currentAgentSummary?.icon || currentScenarioIconId,
+      }),
+    [activeWorkspaceId, currentAgentId, currentAgentPresentation.name, currentAgentSummary?.icon, currentScenarioIconId],
+  );
+
+  const enabledSkillsCount = useMemo(() => {
+    if (draftAgentSkills === null) {
+      return availableSkills.length;
+    }
+    return draftAgentSkills.length;
+  }, [availableSkills.length, draftAgentSkills]);
+
+  const isDraftSkillEnabled = useCallback((skillName: string) => {
+    return draftAgentSkills === null || draftAgentSkills.includes(skillName);
+  }, [draftAgentSkills]);
+
+  const handleToggleDraftSkill = useCallback((skillName: string) => {
+    const catalogNames = availableSkills.map((skill) => skill.name);
+    setDraftAgentSkills((current) => {
+      if (current === null) {
+        return catalogNames.filter((name) => name !== skillName);
+      }
+      const next = current.includes(skillName)
+        ? current.filter((name) => name !== skillName)
+        : [...current, skillName].toSorted();
+      return next.length === catalogNames.length ? null : next;
+    });
+  }, [availableSkills]);
+
+  const handleEnableAllDraftSkills = useCallback(() => {
+    setDraftAgentSkills(null);
+  }, []);
+
+  const handleDisableAllDraftSkills = useCallback(() => {
+    setDraftAgentSkills([]);
+  }, []);
+
+  const handleSaveAgentSettings = useCallback(async () => {
+    if (!activeWorkspaceId || !currentAgentId || agentSettingsSaving) {
+      return;
+    }
+    const trimmedName = draftAgentName.trim() || currentAgentPresentation.name;
+    const nameChanged = trimmedName !== (currentAgentSummary?.name?.trim() || currentAgentPresentation.name);
+    const baselineSkills = normalizeSkillSelection(currentAgentSummary?.skills);
+    const skillsChanged = !areSkillSelectionsEqual(draftAgentSkills, baselineSkills);
+    const nextAvatarName = avatarSelectionDirty ? draftAgentAvatarName?.trim() || null : undefined;
+    if (!nameChanged && !skillsChanged && nextAvatarName === undefined) {
+      setIsAgentSettingsModalOpen(false);
+      return;
+    }
+    setAgentSettingsSaving(true);
+    try {
+      const result = await window.electronAPI.bustlyUpdateAgent({
+        workspaceId: activeWorkspaceId,
+        agentId: currentAgentId,
+        ...(nameChanged ? { name: trimmedName } : {}),
+        ...(skillsChanged ? { skills: draftAgentSkills } : {}),
+        ...(nextAvatarName !== undefined ? { icon: nextAvatarName ?? undefined } : {}),
+      });
+      if (!result.success) {
+        setError(result.error ?? "Failed to save agent settings.");
+        return;
+      }
+      setCurrentAgentSummary((current) => current
+        ? {
+            ...current,
+            name: trimmedName,
+            ...(skillsChanged ? { skills: draftAgentSkills ?? undefined } : {}),
+            ...(nextAvatarName !== undefined ? { icon: nextAvatarName ?? current.icon } : {}),
+          }
+        : current,
+      );
+      if (!currentSessionKey) {
+        void navigate(
+          buildChatRoute({
+            agentId: currentAgentId,
+            label: trimmedName,
+            icon: currentAgentPresentation.iconId,
+          }),
+          { replace: true },
+        );
+      }
+      setIsAgentSettingsModalOpen(false);
+      notifySidebarTasksRefresh();
+    } finally {
+      setAgentSettingsSaving(false);
+    }
+  }, [
+    activeWorkspaceId,
+    agentSettingsSaving,
+    avatarSelectionDirty,
+    currentAgentId,
+    currentAgentPresentation.iconId,
+    currentAgentPresentation.name,
+    currentAgentSummary,
+    currentSessionKey,
+    draftAgentAvatarName,
+    draftAgentName,
+    draftAgentSkills,
+    navigate,
+  ]);
+
   const handleAttachmentFiles = useCallback(async (
     input: FileList | DataTransferItemList | null,
     clipboardData?: DataTransfer | null,
@@ -3227,6 +3449,21 @@ export default function ChatPage() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-white text-gray-900">
       <div className="sticky top-0 z-20 h-8 flex-none bg-white [-webkit-app-region:drag]" />
+      {!isOverviewPage ? (
+        <div className="relative z-10 flex h-16 shrink-0 items-center justify-end border-b border-[#E8EBF3] bg-white px-8">
+          <button
+            type="button"
+            onClick={() => {
+              setAgentSettingsTab("skills");
+              setIsAgentSettingsModalOpen(true);
+            }}
+            className="flex items-center gap-2 rounded-xl border border-[#E8EBF3] bg-white px-3 py-1.5 text-[13px] font-bold text-[#1A162F] shadow-sm transition-all hover:border-indigo-200 hover:bg-[#F8F9FC]"
+          >
+            <Gear size={16} weight="fill" className="text-[#666F8D]" />
+            Agent Settings
+          </button>
+        </div>
+      ) : null}
 
       <div className="relative flex-1 overflow-hidden">
         <div
@@ -3237,14 +3474,22 @@ export default function ChatPage() {
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 pt-8 pb-6">
             {timeline.length === 0 ? (
               <div className="flex min-h-[52vh] flex-col items-center justify-center py-8 text-center">
-                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-[#1A162F] shadow-lg shadow-[#1A162F]/5">
-                  <CurrentScenarioIcon size={28} weight="bold" />
+                <div className="mb-4 flex h-16 w-16 items-center justify-center text-[#1A162F]">
+                  {currentAgentPresentation.avatarSrc ? (
+                    <img
+                      src={currentAgentPresentation.avatarSrc}
+                      alt={currentAgentPresentation.name}
+                      className="h-16 w-16 object-contain"
+                    />
+                  ) : (
+                    <CurrentAgentIcon size={28} weight="bold" />
+                  )}
                 </div>
                 <h1 className="mb-2 text-2xl font-semibold tracking-tight text-[#1A162F]">
-                  {currentScenarioLabel}
+                  {currentAgentSummary?.name || currentScenarioLabel}
                 </h1>
                 <p className="max-w-[720px] text-base text-[#666F8D]">
-                  How can I help you today?
+                  {currentAgentPresentation.description}
                 </p>
               </div>
             ) : null}
@@ -3539,6 +3784,38 @@ export default function ChatPage() {
           </div>
         </div>
       </div>
+
+      <AgentSettingsModal
+        open={isAgentSettingsModalOpen && !isOverviewPage}
+        agentName={currentAgentPresentation.name}
+        agentAvatarSrc={resolveAgentPresentation({
+          workspaceId: activeWorkspaceId,
+          agentId: currentAgentId,
+          name: draftAgentName || currentAgentPresentation.name,
+          icon: avatarSelectionDirty ? draftAgentAvatarName : currentAgentSummary?.icon,
+        }).avatarSrc}
+        agentIcon={<CurrentAgentIcon size={24} weight="bold" />}
+        draftName={draftAgentName}
+        draftAvatarName={draftAgentAvatarName}
+        activeTab={agentSettingsTab}
+        saving={agentSettingsSaving}
+        skills={availableSkills}
+        enabledSkillsCount={enabledSkillsCount}
+        onClose={() => setIsAgentSettingsModalOpen(false)}
+        onSave={() => {
+          void handleSaveAgentSettings();
+        }}
+        onNameChange={setDraftAgentName}
+        onAvatarSelect={(avatarName) => {
+          setDraftAgentAvatarName(avatarName);
+          setAvatarSelectionDirty(true);
+        }}
+        onTabChange={setAgentSettingsTab}
+        onToggleSkill={handleToggleDraftSkill}
+        onEnableAll={handleEnableAllDraftSkills}
+        onDisableAll={handleDisableAllDraftSkills}
+        isSkillEnabled={isDraftSkillEnabled}
+      />
 
       {previewImage
         ? createPortal(

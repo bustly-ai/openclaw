@@ -90,7 +90,7 @@ describe("buildWorkspaceSkillStatus", () => {
       expect(skill?.missing.os).toEqual(["darwin"]);
     }
   });
-  it("marks bundled skills blocked by allowlist", async () => {
+  it("ignores legacy bundled allowlist gating in skill status", async () => {
     const entry = makeEntry({
       name: "peekaboo",
       source: "openclaw-bundled",
@@ -103,8 +103,8 @@ describe("buildWorkspaceSkillStatus", () => {
     const skill = report.skills.find((reportEntry) => reportEntry.name === "peekaboo");
 
     expect(skill).toBeDefined();
-    expect(skill?.blockedByAllowlist).toBe(true);
-    expect(skill?.eligible).toBe(false);
+    expect(skill?.blockedByAllowlist).toBe(false);
+    expect(skill?.eligible).toBe(true);
   });
 
   it("filters install options by OS", async () => {

@@ -131,6 +131,7 @@ export function applyAgentConfig(
     workspace?: string;
     agentDir?: string;
     model?: string;
+    skills?: string[] | null;
     skipBootstrap?: boolean;
   },
 ): OpenClawConfig {
@@ -145,6 +146,14 @@ export function applyAgentConfig(
     ...(params.workspace ? { workspace: params.workspace } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     ...(params.model ? { model: params.model } : {}),
+    ...(params.skills !== undefined
+      ? {
+          skills:
+            params.skills === null
+              ? undefined
+              : params.skills.map((skill) => skill.trim()).filter(Boolean),
+        }
+      : {}),
     ...(typeof params.skipBootstrap === "boolean" ? { skipBootstrap: params.skipBootstrap } : {}),
   };
   const nextList = [...list];

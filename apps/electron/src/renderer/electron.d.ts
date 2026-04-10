@@ -129,6 +129,7 @@ interface BustlyWorkspaceAgent {
   agentName: string;
   name: string;
   icon?: string;
+  skills?: string[];
   isMain: boolean;
   createdAt: number | null;
   updatedAt: number | null;
@@ -212,6 +213,7 @@ interface ElectronAPI {
     agentId: string;
     name?: string;
     icon?: string;
+    skills?: string[] | null;
   }) => Promise<{ success: boolean; error?: string }>;
   bustlyDeleteAgent: (params: {
     workspaceId: string;

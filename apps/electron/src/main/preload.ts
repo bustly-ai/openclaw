@@ -106,7 +106,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     sampleRouteKey?: string;
   }) =>
     ipcRenderer.invoke("bustly-create-agent-session", params),
-  bustlyUpdateAgent: (params: { workspaceId: string; agentId: string; name?: string; icon?: string }) =>
+  bustlyUpdateAgent: (params: { workspaceId: string; agentId: string; name?: string; icon?: string; skills?: string[] | null }) =>
     ipcRenderer.invoke("bustly-update-agent", params),
   bustlyDeleteAgent: (params: { workspaceId: string; agentId: string }) =>
     ipcRenderer.invoke("bustly-delete-agent", params),

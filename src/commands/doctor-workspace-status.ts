@@ -16,11 +16,7 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
   note(
     [
       `Eligible: ${skillsReport.skills.filter((s) => s.eligible).length}`,
-      `Missing requirements: ${
-        skillsReport.skills.filter((s) => !s.eligible && !s.disabled && !s.blockedByAllowlist)
-          .length
-      }`,
-      `Blocked by allowlist: ${skillsReport.skills.filter((s) => s.blockedByAllowlist).length}`,
+      `Missing requirements: ${skillsReport.skills.filter((s) => !s.eligible).length}`,
     ].join("\n"),
     "Skills status",
   );

@@ -56,4 +56,29 @@ describe("skills.update", () => {
     });
     expect(bumpSkillsSnapshotVersion).toHaveBeenCalledWith({ reason: "manual" });
   });
+
+  it("rejects legacy enabled toggles", async () => {
+    writtenConfig = null;
+
+    let ok: boolean | null = null;
+    let error: { code?: string; message?: string } | undefined;
+    await skillsHandlers["skills.update"]({
+      params: {
+        skillKey: "brave-search",
+        enabled: true,
+      },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: {} as never,
+      respond: (success, _result, err) => {
+        ok = success;
+        error = err;
+      },
+    });
+
+    expect(ok).toBe(false);
+    expect(writtenConfig).toBeNull();
+    expect(error?.message).toContain("invalid skills.update params");
+  });
 });

@@ -55,20 +55,14 @@ export async function setupSkills(
 ): Promise<OpenClawConfig> {
   const report = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
   const eligible = report.skills.filter((s) => s.eligible);
-  const unsupportedOs = report.skills.filter(
-    (s) => !s.disabled && !s.blockedByAllowlist && s.missing.os.length > 0,
-  );
-  const missing = report.skills.filter(
-    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist && s.missing.os.length === 0,
-  );
-  const blocked = report.skills.filter((s) => s.blockedByAllowlist);
+  const unsupportedOs = report.skills.filter((s) => !s.eligible && s.missing.os.length > 0);
+  const missing = report.skills.filter((s) => !s.eligible && s.missing.os.length === 0);
 
   await prompter.note(
     [
       `Eligible: ${eligible.length}`,
       `Missing requirements: ${missing.length}`,
       `Unsupported on this OS: ${unsupportedOs.length}`,
-      `Blocked by allowlist: ${blocked.length}`,
     ].join("\n"),
     "Skills status",
   );

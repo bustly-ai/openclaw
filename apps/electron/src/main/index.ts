@@ -105,6 +105,7 @@ type BustlyWorkspaceAgentSummary = {
   agentName: string;
   name: string;
   icon?: string;
+  skills?: string[];
   isMain: boolean;
   createdAt: number | null;
   updatedAt: number | null;
@@ -1505,6 +1506,7 @@ function listBustlyWorkspaceAgents(workspaceId: string): BustlyWorkspaceAgentSum
         agentName,
         name: displayName,
         icon: metadata.icon,
+        skills: Array.isArray(entry.skills) ? entry.skills.map((skill) => skill.trim()).filter(Boolean) : undefined,
         isMain: agentName === DEFAULT_BUSTLY_AGENT_NAME,
         createdAt,
         updatedAt: sessions[0]?.updatedAt ?? metadata.createdAt ?? null,
@@ -1600,6 +1602,7 @@ async function updateBustlyWorkspaceAgent(params: {
   agentId: string;
   displayName?: string;
   icon?: string;
+  skills?: string[] | null;
 }): Promise<void> {
   const configPath = resolveElectronConfigPath();
   if (!existsSync(configPath)) {
@@ -1618,6 +1621,12 @@ async function updateBustlyWorkspaceAgent(params: {
     nextConfig = applyAgentConfig(nextConfig, {
       agentId: params.agentId,
       name: nextName,
+    });
+  }
+  if (params.skills !== undefined) {
+    nextConfig = applyAgentConfig(nextConfig, {
+      agentId: params.agentId,
+      skills: params.skills,
     });
   }
   if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
@@ -4327,7 +4336,7 @@ function setupIpcHandlers(): void {
     "bustly-update-agent",
     async (
       _event,
-      params: { workspaceId: string; agentId: string; name?: string; icon?: string },
+      params: { workspaceId: string; agentId: string; name?: string; icon?: string; skills?: string[] | null },
     ) => {
       try {
         await updateBustlyWorkspaceAgent({
@@ -4335,6 +4344,7 @@ function setupIpcHandlers(): void {
           agentId: params.agentId,
           displayName: params.name,
           icon: params.icon,
+          skills: params.skills,
         });
         return { success: true };
       } catch (error) {

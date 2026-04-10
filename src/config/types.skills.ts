@@ -1,4 +1,5 @@
 export type SkillConfig = {
+  /** Deprecated: skill enablement is agent-scoped via `agents.list[].skills`. */
   enabled?: boolean;
   apiKey?: string;
   env?: Record<string, string>;
@@ -36,7 +37,7 @@ export type SkillsLimitsConfig = {
 };
 
 export type SkillsConfig = {
-  /** Optional bundled-skill allowlist (only affects bundled skills). */
+  /** Deprecated compatibility field. Bundled skill filtering is no longer applied at runtime. */
   allowBundled?: string[];
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;

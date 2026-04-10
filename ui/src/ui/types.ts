@@ -619,6 +619,7 @@ export type SkillStatusEntry = {
 };
 
 export type SkillStatusReport = {
+  scope?: "agent" | "global";
   workspaceDir: string;
   managedSkillsDir: string;
   skills: SkillStatusEntry[];

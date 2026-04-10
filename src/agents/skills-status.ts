@@ -3,13 +3,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import { CONFIG_DIR } from "../utils.js";
+import { listAgentWorkspaceDirs } from "./workspace-dirs.js";
 import {
   hasBinary,
-  isBundledSkillAllowed,
   isConfigPathTruthy,
   loadWorkspaceSkillEntries,
   resolveSkillInstallSpecs,
-  resolveBundledAllowlist,
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
   type SkillCommandRuntimeSpec,
@@ -53,6 +52,7 @@ export type SkillStatusEntry = {
 };
 
 export type SkillStatusReport = {
+  scope?: "agent" | "global";
   workspaceDir: string;
   managedSkillsDir: string;
   skills: SkillStatusEntry[];
@@ -196,9 +196,8 @@ function buildSkillStatus(
 ): SkillStatusEntry {
   const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
-  const disabled = skillConfig?.enabled === false;
-  const allowBundled = resolveBundledAllowlist(config);
-  const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
+  const disabled = false;
+  const blockedByAllowlist = false;
   const always = entry.metadata?.always === true;
   const isEnvSatisfied = (envName: string) =>
     Boolean(
@@ -221,7 +220,7 @@ function buildSkillStatus(
       isEnvSatisfied,
       isConfigSatisfied,
     });
-  const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
+  const eligible = requirementsSatisfied;
 
   return {
     name: entry.skill.name,
@@ -267,10 +266,69 @@ export function buildWorkspaceSkillStatus(
     });
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   return {
+    scope: "agent",
     workspaceDir,
     managedSkillsDir,
     skills: skillEntries.map((entry) =>
       buildSkillStatus(entry, opts?.config, prefs, opts?.eligibility, bundledContext.names),
+    ),
+  };
+}
+
+const GLOBAL_SKILL_SOURCE_PRIORITY: Record<string, number> = {
+  "openclaw-extra": 0,
+  "openclaw-bundled": 1,
+  "openclaw-managed": 2,
+  "agents-skills-personal": 3,
+  "agents-skills-project": 4,
+  "openclaw-workspace": 5,
+};
+
+function resolveGlobalSkillSourcePriority(entry: SkillEntry): number {
+  return GLOBAL_SKILL_SOURCE_PRIORITY[entry.skill.source] ?? 0;
+}
+
+function mergeGlobalSkillEntries(entrySets: SkillEntry[][]): SkillEntry[] {
+  const merged = new Map<string, { entry: SkillEntry; priority: number }>();
+  for (const entries of entrySets) {
+    for (const entry of entries) {
+      const key = entry.skill.name;
+      const priority = resolveGlobalSkillSourcePriority(entry);
+      const current = merged.get(key);
+      if (!current || priority > current.priority) {
+        merged.set(key, { entry, priority });
+      }
+    }
+  }
+  return [...merged.values()]
+    .map((item) => item.entry)
+    .sort((left, right) => left.skill.name.localeCompare(right.skill.name));
+}
+
+export function buildGlobalSkillStatus(opts?: {
+  config?: OpenClawConfig;
+  managedSkillsDir?: string;
+  eligibility?: SkillEligibilityContext;
+}): SkillStatusReport {
+  const config = opts?.config ?? {};
+  const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
+  const bundledContext = resolveBundledSkillsContext();
+  const workspaceDirs = listAgentWorkspaceDirs(config);
+  const entrySets = workspaceDirs.map((workspaceDir) =>
+    loadWorkspaceSkillEntries(workspaceDir, {
+      config,
+      managedSkillsDir,
+      bundledSkillsDir: bundledContext.dir,
+    }),
+  );
+  const skillEntries = mergeGlobalSkillEntries(entrySets);
+  const prefs = resolveSkillsInstallPreferences(config);
+  return {
+    scope: "global",
+    workspaceDir: managedSkillsDir,
+    managedSkillsDir,
+    skills: skillEntries.map((entry) =>
+      buildSkillStatus(entry, config, prefs, opts?.eligibility, bundledContext.names),
     ),
   };
 }

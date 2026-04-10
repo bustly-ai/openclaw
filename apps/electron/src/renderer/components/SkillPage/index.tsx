@@ -4,7 +4,6 @@ import { useNavigate } from "react-router-dom";
 import { MagnifyingGlass } from "@phosphor-icons/react";
 import { GatewayBrowserClient } from "../../lib/gateway-client";
 import { createGatewayInstanceId } from "../../lib/gateway-instance-id";
-import { buildBustlyWorkspaceAgentId } from "../../../shared/bustly-agent";
 import Skeleton from "../ui/Skeleton";
 import collapsedLogo from "../../assets/imgs/collapsed_logo_clean.svg";
 import uploadIcon from "../../assets/imgs/download_simple_bold.svg";
@@ -16,13 +15,11 @@ type SkillItemData = {
   name: string;
   description: string;
   icon: SkillIconComponent;
-  enabled: boolean;
   skillKey?: string;
   source?: string;
   filePath?: string;
   homepage?: string;
   primaryEnv?: string;
-  loading?: boolean;
 };
 
 type SkillStatusEntry = {
@@ -33,12 +30,11 @@ type SkillStatusEntry = {
   filePath: string;
   homepage?: string;
   primaryEnv?: string;
-  disabled: boolean;
-  blockedByAllowlist: boolean;
   eligible: boolean;
 };
 
 type SkillStatusReport = {
+  scope?: "agent" | "global";
   workspaceDir: string;
   managedSkillsDir: string;
   skills: SkillStatusEntry[];
@@ -70,28 +66,6 @@ function PlusIcon({ className }: { className?: string }) {
     <IconBase className={className}>
       <path d="M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" />
     </IconBase>
-  );
-}
-
-function SkillToggle(props: { enabled: boolean; disabled?: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={props.onClick}
-      disabled={props.disabled}
-      title={props.enabled ? "Disable skill" : "Enable skill"}
-      className={`relative inline-flex h-[22px] w-[38px] items-center rounded-full transition-all duration-200 ${
-        props.enabled
-          ? "bg-[#16112B] shadow-[inset_0_0_0_1px_rgba(22,17,43,0.02)]"
-          : "bg-[#D3D8E1] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.28)]"
-      } ${props.disabled ? "cursor-not-allowed opacity-60" : ""}`}
-    >
-      <span
-        className={`block h-[14px] w-[14px] rounded-full bg-white shadow-[0_1px_2px_rgba(15,23,42,0.18)] transition-transform duration-200 ${
-          props.enabled ? "translate-x-[21px]" : "translate-x-[4px]"
-        }`}
-      />
-    </button>
   );
 }
 
@@ -192,10 +166,10 @@ function GithubMarkIcon({ className }: { className?: string }) {
 }
 
 const INITIAL_SKILLS: SkillItemData[] = [
-  { id: 1, name: "Analyze provided image", description: "Extract insights from images.", icon: ImageIcon, enabled: true },
-  { id: 2, name: "Create Bustly openclaw demo page", description: "Generate Openclaw demo pages.", icon: CodeIcon, enabled: true },
-  { id: 3, name: "Add classic Snake game mode", description: "Add Snake game mode.", icon: GameControllerIcon, enabled: false },
-  { id: 4, name: "Generate weekly report", description: "Summarize weekly metrics.", icon: ChartBarIcon, enabled: true },
+  { id: 1, name: "Analyze provided image", description: "Extract insights from images.", icon: ImageIcon },
+  { id: 2, name: "Create Bustly openclaw demo page", description: "Generate Openclaw demo pages.", icon: CodeIcon },
+  { id: 3, name: "Add classic Snake game mode", description: "Add Snake game mode.", icon: GameControllerIcon },
+  { id: 4, name: "Generate weekly report", description: "Summarize weekly metrics.", icon: ChartBarIcon },
 ];
 
 function toSkillItem(skill: SkillStatusEntry, index: number): SkillItemData {
@@ -204,7 +178,6 @@ function toSkillItem(skill: SkillStatusEntry, index: number): SkillItemData {
     name: skill.name,
     description: skill.description,
     icon: INITIAL_SKILLS.find((item) => item.name === skill.name)?.icon ?? LightningIcon,
-    enabled: !skill.disabled && !skill.blockedByAllowlist,
     skillKey: skill.skillKey,
     source: skill.source,
     filePath: skill.filePath,
@@ -258,12 +231,12 @@ function ModalShell(props: {
 
 function SkillCard(props: {
   skill: SkillItemData;
-  onToggle: (id: SkillItemData["id"]) => void;
 }) {
   const Icon = props.skill.icon;
+  const showSource = Boolean(props.skill.source && props.skill.source !== "openclaw-bundled");
 
   return (
-    <div className="group flex h-[88px] items-center justify-between rounded-xl border border-gray-100 bg-white p-4 transition-all hover:shadow-sm">
+    <div className="group flex h-[104px] items-center justify-between rounded-xl border border-gray-100 bg-white p-4 transition-all hover:shadow-sm">
       <div className="flex min-w-0 flex-1 items-center gap-4">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#1A162F]/5 text-[#1A162F]">
           <Icon className="h-5 w-5" />
@@ -271,14 +244,15 @@ function SkillCard(props: {
         <div className="min-w-0 flex-1 pr-4">
           <h3 className="truncate text-sm font-bold text-[#1A162F]">{props.skill.name}</h3>
           <p className="truncate text-xs text-[#6B7280]">{props.skill.description}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[#666F8D]">
+            {showSource ? (
+              <span className="rounded-full bg-[#F3F5F8] px-2 py-1 font-semibold text-[#1A162F]">
+                {props.skill.source}
+              </span>
+            ) : null}
+            {props.skill.primaryEnv ? <span>Env: {props.skill.primaryEnv}</span> : null}
+          </div>
         </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-4">
-        <SkillToggle
-          enabled={props.skill.enabled}
-          disabled={props.skill.loading}
-          onClick={() => props.onToggle(props.skill.id)}
-        />
       </div>
     </div>
   );
@@ -593,15 +567,6 @@ export default function SkillPage() {
 
     const connectGateway = async () => {
       try {
-        const supabaseConfig = await window.electronAPI.bustlyGetSupabaseConfig();
-        if (!supabaseConfig) {
-          if (!disposed) {
-            setLoadingSkills(false);
-            setSkillsError("Bustly login required.");
-          }
-          return;
-        }
-        const agentId = buildBustlyWorkspaceAgentId(supabaseConfig.workspaceId);
         const status = await window.electronAPI.gatewayStatus();
         if (!status.running) {
           if (!disposed) {
@@ -631,7 +596,7 @@ export default function SkillPage() {
             }
             setSkillsError(null);
             void client
-              .request<SkillStatusReport>("skills.status", { agentId })
+              .request<SkillStatusReport>("skills.status", {})
               .then((report) => {
                 if (disposed) {
                   return;
@@ -683,13 +648,10 @@ export default function SkillPage() {
     return [...skills]
       .filter((skill) => skillMatchesQuery(skill, normalizedSearchQuery))
       .sort((left, right) => {
-      if (left.enabled !== right.enabled) {
-        return left.enabled ? -1 : 1;
-      }
-      return left.name.localeCompare(right.name, undefined, {
-        sensitivity: "base",
-        numeric: true,
-      });
+        return left.name.localeCompare(right.name, undefined, {
+          sensitivity: "base",
+          numeric: true,
+        });
       });
   }, [normalizedSearchQuery, skills]);
 
@@ -698,8 +660,8 @@ export default function SkillPage() {
       <div className="mx-auto min-h-full max-w-5xl px-6 pt-6 pb-10 font-sans">
         <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="mb-1 text-2xl font-bold text-[#1A162F]">Skills</h1>
-            <p className="text-sm text-[#6B7280]">Prepackaged and repeatable best practices &amp; tools for your agents.</p>
+            <h1 className="mb-1 text-2xl font-bold text-[#1A162F]">Skills Hub</h1>
+            <p className="text-sm text-[#6B7280]">Browse built-in, shared, and generated skills in one catalog.</p>
           </div>
 
           <div ref={dropdownRef} className="relative">
@@ -816,37 +778,7 @@ export default function SkillPage() {
             </div>
           ) : visibleSkillRows.length > 0 ? (
             visibleSkillRows.map((skill) => (
-              <SkillCard
-                key={skill.id}
-                skill={skill}
-                onToggle={(id) => {
-                  const target = skills.find((item) => item.id === id);
-                  if (!target?.skillKey || !clientRef.current) {
-                    return;
-                  }
-                  setSkills((previous) =>
-                    previous.map((item) => (item.id === id ? { ...item, loading: true } : item)),
-                  );
-                  void clientRef.current
-                    .request("skills.update", {
-                      skillKey: target.skillKey,
-                      enabled: !target.enabled,
-                    })
-                    .then(() => {
-                      setSkills((previous) =>
-                        previous.map((item) =>
-                          item.id === id ? { ...item, enabled: !item.enabled, loading: false } : item,
-                        ),
-                      );
-                    })
-                    .catch((error) => {
-                      setSkills((previous) =>
-                        previous.map((item) => (item.id === id ? { ...item, loading: false } : item)),
-                      );
-                      setSkillsError(error instanceof Error ? error.message : String(error));
-                    });
-                }}
-              />
+              <SkillCard key={skill.id} skill={skill} />
             ))
           ) : skills.length > 0 ? (
             <div className="col-span-full rounded-xl border border-dashed border-[#DCE2EC] bg-[#FAFBFD] py-12 text-center">

@@ -6,7 +6,7 @@ import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { buildWorkspaceSkillsPrompt } from "./skills.js";
 
 describe("buildWorkspaceSkillsPrompt", () => {
-  it("applies bundled allowlist without affecting workspace skills", async () => {
+  it("ignores legacy bundled allowlist gating for runtime skill prompts", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
     const bundledDir = path.join(workspaceDir, ".bundled");
     const bundledSkillDir = path.join(bundledDir, "peekaboo");
@@ -32,6 +32,6 @@ describe("buildWorkspaceSkillsPrompt", () => {
     });
 
     expect(prompt).toContain("Workspace version");
-    expect(prompt).not.toContain("peekaboo");
+    expect(prompt).toContain("Capture UI");
   });
 });
