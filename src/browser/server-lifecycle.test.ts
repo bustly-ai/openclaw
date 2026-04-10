@@ -118,6 +118,6 @@ describe("stopKnownBrowserProfiles", () => {
       onWarn,
     });
 
-    expect(onWarn).toHaveBeenCalledWith("openclaw browser stop failed: Error: oops");
+    expect(onWarn).toHaveBeenCalledWith("managed browser stop failed: Error: oops");
   });
 });

@@ -33,7 +33,7 @@ describe("relay guidance", () => {
         expect(message).toContain("chrome://extensions");
         expect(message).toContain("Load unpacked");
         expect(message).toContain("set relay port");
-        expect(message).toContain("openclaw browser extension install");
+        expect(message).toContain("browser extension installer command");
       },
     );
   });

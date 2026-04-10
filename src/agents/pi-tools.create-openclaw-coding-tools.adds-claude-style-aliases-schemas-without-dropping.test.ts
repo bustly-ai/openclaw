@@ -160,6 +160,11 @@ describe("createOpenClawCodingTools", () => {
     const browser = createBrowserTool();
     expect(browser.description).toMatch(/Chrome extension/i);
     expect(browser.description).toMatch(/profile="chrome"/i);
+    expect(browser.description).toMatch(/profile="default"/i);
+    expect(browser.description).toMatch(/STOP retry loops/i);
+    expect(browser.description).toMatch(/install\+enable checklist/i);
+    expect(browser.description).not.toMatch(/openclaw-managed browser/i);
+    expect(browser.description).not.toMatch(/openclaw browser/i);
   });
   it("keeps browser tool schema properties after normalization", () => {
     const browser = defaultTools.find((tool) => tool.name === "browser");

@@ -110,7 +110,7 @@ describe("server-context relay guidance", () => {
     } catch (err) {
       message = String(err);
     }
-    expect(message).toMatch(/extension is not connected/i);
+    expect(message).toMatch(/extension(?: session)? is not connected/i);
     expect(message).toMatch(/relay setup checklist/i);
   });
 
@@ -135,7 +135,7 @@ describe("server-context relay guidance", () => {
       message = String(err);
     }
     expect(message).toMatch(/not reachable/i);
-    expect(message).toMatch(/openclaw browser extension install/i);
+    expect(message).toMatch(/browser extension installer command/i);
     expect(mocks.ensureChromeExtensionRelayServer).toHaveBeenCalledTimes(1);
   });
 });

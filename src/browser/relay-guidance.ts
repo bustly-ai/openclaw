@@ -1,11 +1,8 @@
-import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
-import { resolveConfigPathCandidate } from "../config/paths.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 
 export const DEFAULT_RELAY_EXTENSION_DOWNLOAD_URL =
   "https://cdn.bustly.shop/static/browser-relay/bustly-browser-relay.zip";
-const FALLBACK_OPENCLAW_CONFIG_PATH = "~/.bustly/openclaw.json";
 
 const RELAY_DOWNLOAD_URL_ENV_KEYS = [
   "BUSTLY_BROWSER_RELAY_DOWNLOAD_URL",
@@ -51,14 +48,6 @@ export function resolveRelayExtensionDownloadUrl(): string | null {
   return DEFAULT_RELAY_EXTENSION_DOWNLOAD_URL;
 }
 
-function resolveOpenClawConfigPathHint(): string {
-  try {
-    return resolveConfigPathCandidate();
-  } catch {
-    return FALLBACK_OPENCLAW_CONFIG_PATH;
-  }
-}
-
 function parseRelayPort(cdpUrl: string): number | null {
   try {
     const parsed = new URL(cdpUrl);
@@ -76,12 +65,9 @@ function parseRelayPort(cdpUrl: string): number | null {
 
 function buildRelaySetupSteps(profile: ResolvedBrowserProfile): string[] {
   const downloadUrl = resolveRelayExtensionDownloadUrl();
-  const configPath = resolveOpenClawConfigPathHint();
   const relayPort = parseRelayPort(profile.cdpUrl);
   const relayEndpoint = profile.cdpUrl.replace(/\/$/, "");
   const relayPortHint = relayPort ? String(relayPort) : "(from profile cdpUrl)";
-  const statusCommand = formatCliCommand(`openclaw browser status --profile ${profile.name}`);
-  const installCommand = formatCliCommand("openclaw browser extension install");
 
   return [
     downloadUrl
@@ -89,12 +75,12 @@ function buildRelaySetupSteps(profile: ResolvedBrowserProfile): string[] {
       : "1) Install or update Bustly Browser Relay extension.",
     "2) Upload it to Chrome: open chrome://extensions, enable Developer mode, then click Load unpacked (or drag/drop the package) and enable the extension.",
     `3) In extension settings, set relay port to ${relayPortHint}, then click Save.`,
-    `4) If relay auto-load is available, it should read port defaults from ${configPath}.`,
+    "4) If relay auto-load is available, it should read relay port defaults from your Bustly config.",
     `5) Keep relay enabled (status should be Connected at ${relayEndpoint}).`,
     "6) Open the target website in your normal browser window and click the Bustly Browser Relay toolbar icon on that tab (badge ON).",
     "7) Retry the browser action after the tab is attached.",
-    `Debug CLI: ${statusCommand}`,
-    `Bundled installer (optional): ${installCommand}`,
+    "Debug CLI: run the browser status command for this profile.",
+    "Bundled installer (optional): run the browser extension installer command.",
   ];
 }
 
