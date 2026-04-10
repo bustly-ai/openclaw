@@ -3431,7 +3431,7 @@ export default function ChatPage() {
                     rows={1}
                     value={draft}
                     disabled={pageResolving || !connected || sending || subscriptionExpired}
-                    placeholder=""
+                    placeholder="What should we do next for your business?"
                     className="min-h-[44px] max-h-[200px] w-full resize-none border-none bg-transparent px-1 py-1 pr-14 text-base font-normal leading-6 text-text-main outline-none placeholder:text-text-sub/70 disabled:cursor-not-allowed disabled:text-[#8B93AA]"
                     onChange={(e) => setSessionDraft(currentViewKey, e.target.value)}
                     onCompositionStart={() => {
