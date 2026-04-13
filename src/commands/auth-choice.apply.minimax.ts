@@ -5,7 +5,6 @@ import {
   createAuthChoiceModelStateBridge,
   ensureApiKeyFromOptionEnvOrPrompt,
 } from "./auth-choice.apply-helpers.js";
-import { applyAuthChoicePluginProvider } from "./auth-choice.apply.plugin-provider.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxApiConfig,
@@ -80,25 +79,6 @@ export async function applyAuthChoiceMiniMax(
     });
     return { config: nextConfig, agentModelOverride };
   };
-  if (params.authChoice === "minimax-portal") {
-    // Let user choose between Global/CN endpoints
-    const endpoint = await params.prompter.select({
-      message: "Select MiniMax endpoint",
-      options: [
-        { value: "oauth", label: "Global", hint: "OAuth for international users" },
-        { value: "oauth-cn", label: "CN", hint: "OAuth for users in China" },
-      ],
-    });
-
-    return await applyAuthChoicePluginProvider(params, {
-      authChoice: "minimax-portal",
-      pluginId: "minimax-portal-auth",
-      providerId: "minimax-portal",
-      methodId: endpoint,
-      label: "MiniMax",
-    });
-  }
-
   if (
     params.authChoice === "minimax-cloud" ||
     params.authChoice === "minimax-api" ||

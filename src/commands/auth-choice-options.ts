@@ -51,7 +51,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
     value: "minimax",
     label: "MiniMax",
     hint: "M2.5 (recommended)",
-    choices: ["minimax-portal", "minimax-api", "minimax-api-key-cn", "minimax-api-lightning"],
+    choices: ["minimax-api", "minimax-api-key-cn", "minimax-api-lightning"],
   },
   {
     value: "moonshot",
@@ -62,8 +62,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "google",
     label: "Google",
-    hint: "Gemini API key + OAuth",
-    choices: ["gemini-api-key", "google-gemini-cli"],
+    hint: "Gemini API key",
+    choices: ["gemini-api-key"],
   },
   {
     value: "xai",
@@ -102,12 +102,6 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["kilocode-api-key"],
   },
   {
-    value: "qwen",
-    label: "Qwen",
-    hint: "OAuth",
-    choices: ["qwen-portal"],
-  },
-  {
     value: "zai",
     label: "Z.AI",
     hint: "GLM Coding Plan / Global / CN",
@@ -122,8 +116,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "copilot",
     label: "Copilot",
-    hint: "GitHub + local proxy",
-    choices: ["github-copilot", "copilot-proxy"],
+    hint: "GitHub device login",
+    choices: ["github-copilot"],
   },
   {
     value: "ai-gateway",
@@ -239,11 +233,6 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     hint: "Uses GitHub device flow",
   },
   { value: "gemini-api-key", label: "Google Gemini API key" },
-  {
-    value: "google-gemini-cli",
-    label: "Google Gemini CLI OAuth",
-    hint: "Uses the bundled Gemini CLI auth plugin",
-  },
   { value: "zai-api-key", label: "Z.AI API key" },
   {
     value: "zai-coding-global",
@@ -268,17 +257,6 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "xiaomi-api-key",
     label: "Xiaomi API key",
-  },
-  {
-    value: "minimax-portal",
-    label: "MiniMax OAuth",
-    hint: "Oauth plugin for MiniMax",
-  },
-  { value: "qwen-portal", label: "Qwen OAuth" },
-  {
-    value: "copilot-proxy",
-    label: "Copilot Proxy (local)",
-    hint: "Local proxy for VS Code Copilot models",
   },
   { value: "apiKey", label: "Anthropic API key" },
   {

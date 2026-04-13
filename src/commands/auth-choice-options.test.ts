@@ -35,7 +35,6 @@ describe("buildAuthChoiceOptions", () => {
       "cloudflare-ai-gateway-api-key",
       "synthetic-api-key",
       "chutes",
-      "qwen-portal",
       "xai-api-key",
       "mistral-api-key",
       "volcengine-api-key",

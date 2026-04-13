@@ -372,6 +372,12 @@ importers:
         specifier: ^6.4.1
         version: 6.4.1(@types/node@22.19.8)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.3)
 
+  extensions/memory-core:
+    dependencies:
+      openclaw:
+        specifier: '>=2026.1.26'
+        version: 2026.3.23(@napi-rs/canvas@0.1.97)(encoding@0.1.13)(node-llama-cpp@3.15.1(typescript@5.9.3))
+
   extensions/openclaw-weixin:
     dependencies:
       qrcode-terminal:
@@ -396,6 +402,8 @@ importers:
       vitest:
         specifier: ^3.1.0
         version: 3.2.4(@types/debug@4.1.12)(@types/node@25.3.2)(@vitest/browser@4.0.18(vite@7.3.1(@types/node@25.3.2)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2))(vitest@4.0.18))(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3)
+
+  extensions/slack: {}
 
   packages/clawdbot:
     dependencies:
