@@ -145,6 +145,23 @@ interface BustlyWorkspaceAgentSession {
   updatedAt: number | null;
 }
 
+interface BustlyGlobalSkillCatalogItem {
+  id: string;
+  name: string;
+  description: string;
+  source: string;
+  sourceLabel: string;
+  skillKey: string;
+  filePath: string;
+  homepage?: string;
+  primaryEnv?: string;
+  eligible: boolean;
+  bundled: boolean;
+  category: string;
+  installed: boolean;
+  canInstall: boolean;
+}
+
 interface ElectronAPI {
   // OpenClaw initialization
   openclawInit: (options?: PresetConfigOptions) => Promise<InitializationResult>;
@@ -197,6 +214,8 @@ interface ElectronAPI {
   ) => Promise<{ success: boolean; agentId?: string; error?: string }>;
   bustlyListAgents: (workspaceId?: string) => Promise<BustlyWorkspaceAgent[]>;
   bustlyListAgentSessions: (workspaceId: string, agentId: string) => Promise<BustlyWorkspaceAgentSession[]>;
+  bustlyListGlobalSkills: () => Promise<BustlyGlobalSkillCatalogItem[]>;
+  bustlyInstallGlobalSkill: (skillKey: string) => Promise<{ success: boolean; error?: string }>;
   bustlyCreateAgent: (params: {
     workspaceId: string;
     name: string;

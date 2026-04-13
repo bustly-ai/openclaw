@@ -159,7 +159,7 @@ export function createFollowupRunner(params: {
               agentDir: queued.run.agentDir,
               workspaceDir: queued.run.workspaceDir,
               config: queued.run.config,
-              skillsSnapshot: queued.run.skillsSnapshot,
+              skillFilter: queued.run.skillFilter,
               prompt: queued.prompt,
               extraSystemPrompt: queued.run.extraSystemPrompt,
               ownerNumbers: queued.run.ownerNumbers,

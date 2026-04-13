@@ -244,6 +244,16 @@ function areSkillSelectionsEqual(left?: string[] | null, right?: string[] | null
   return normalizedLeft.every((skill, index) => skill === normalizedRight[index]);
 }
 
+function resolvePersistedSkillSelection(
+  selection: string[] | null | undefined,
+  catalog: Array<{ name: string }>,
+): string[] {
+  if (selection === null || selection === undefined) {
+    return catalog.map((skill) => skill.name).toSorted();
+  }
+  return selection.map((skill) => skill.trim()).filter(Boolean).toSorted();
+}
+
 function nextId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -2331,7 +2341,9 @@ export default function ChatPage() {
     setAvailableSkillsError(null);
     setAvailableSkills([]);
     void fetchSkillCatalog({
+      agentId: currentAgentId,
       scope: `agent-settings-${currentAgentId}`,
+      surface: "agent",
     }).then((items) => {
       if (disposed) {
         return;
@@ -3102,6 +3114,7 @@ export default function ChatPage() {
     const identityMarkdownChanged = nextIdentityMarkdown !== baselineIdentityMarkdown;
     const baselineSkills = normalizeSkillSelection(currentAgentSummary?.skills);
     const skillsChanged = !areSkillSelectionsEqual(draftAgentSkills, baselineSkills);
+    const nextPersistedSkills = resolvePersistedSkillSelection(draftAgentSkills, availableSkills);
     const nextAvatarName = avatarSelectionDirty ? draftAgentAvatarName?.trim() || null : undefined;
     if (!nameChanged && !identityMarkdownChanged && !skillsChanged && nextAvatarName === undefined) {
       setIsAgentSettingsModalOpen(false);
@@ -3114,7 +3127,7 @@ export default function ChatPage() {
         agentId: currentAgentId,
         ...(nameChanged ? { name: trimmedName } : {}),
         ...(identityMarkdownChanged ? { identityMarkdown: nextIdentityMarkdown } : {}),
-        ...(skillsChanged ? { skills: draftAgentSkills } : {}),
+        ...(skillsChanged ? { skills: nextPersistedSkills } : {}),
         ...(nextAvatarName !== undefined ? { icon: nextAvatarName ?? undefined } : {}),
       });
       if (!result.success) {
@@ -3130,7 +3143,7 @@ export default function ChatPage() {
               ...current,
               name: trimmedName,
               ...(identityMarkdownChanged ? { identityMarkdown: nextIdentityMarkdown } : {}),
-              ...(skillsChanged ? { skills: draftAgentSkills ?? undefined } : {}),
+              ...(skillsChanged ? { skills: nextPersistedSkills } : {}),
               ...(nextAvatarName !== undefined ? { icon: nextAvatarName ?? current.icon } : {}),
             }
           : current,

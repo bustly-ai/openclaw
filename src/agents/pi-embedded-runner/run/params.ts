@@ -7,7 +7,7 @@ import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
-import type { SkillSnapshot } from "../../skills.js";
+import type { SkillSnapshot, WorkspaceSkillContext } from "../../skills.js";
 
 // Simplified tool definition for client-provided tools (OpenResponses hosted tools)
 export type ClientToolDefinition = {
@@ -62,7 +62,10 @@ export type RunEmbeddedPiAgentParams = {
   workspaceDir: string;
   agentDir?: string;
   config?: OpenClawConfig;
+  /** Legacy compatibility only; ignored at runtime. */
   skillsSnapshot?: SkillSnapshot;
+  skillContext?: WorkspaceSkillContext;
+  skillFilter?: string[];
   prompt: string;
   /** Continue the existing turn instead of appending a new user message. */
   retryWithoutNewUser?: boolean;

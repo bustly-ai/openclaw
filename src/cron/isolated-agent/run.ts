@@ -60,7 +60,6 @@ import {
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
 import { resolveCronSession } from "./session.js";
-import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
 
 export type RunCronAgentTurnResult = {
   /** Last non-empty agent text output (not truncated). */
@@ -349,23 +348,6 @@ export async function runCronIsolatedAgentTurn(params: {
       `${commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
   }
 
-  const existingSkillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
-  const skillsSnapshot = resolveCronSkillsSnapshot({
-    workspaceDir,
-    config: cfgWithAgentDefaults,
-    agentId,
-    existingSnapshot: existingSkillsSnapshot,
-    isFastTestEnv,
-  });
-  if (!isFastTestEnv && skillsSnapshot !== existingSkillsSnapshot) {
-    cronSession.sessionEntry = {
-      ...cronSession.sessionEntry,
-      updatedAt: Date.now(),
-      skillsSnapshot,
-    };
-    await persistSessionEntry();
-  }
-
   // Persist systemSent before the run, mirroring the inbound auto-reply behavior.
   cronSession.sessionEntry.systemSent = true;
   await persistSessionEntry();
@@ -439,7 +421,6 @@ export async function runCronIsolatedAgentTurn(params: {
           agentDir,
           workspaceDir,
           config: cfgWithAgentDefaults,
-          skillsSnapshot,
           prompt: commandBody,
           lane: params.lane ?? "cron",
           provider: providerOverride,

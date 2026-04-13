@@ -194,7 +194,7 @@ export default function AgentSettingsModal(props: AgentSettingsModalProps) {
                 </div>
               </div>
             ) : (
-              <div className="custom-scrollbar h-full overflow-y-auto px-6 py-6">
+              <div className="custom-scrollbar h-full overflow-y-auto bg-white">
                 <AgentSkillsPanel
                   items={props.skills}
                   loading={props.skillsLoading}

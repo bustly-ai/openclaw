@@ -111,6 +111,7 @@ export type SessionEntry = {
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
+  /** Legacy field kept for backward-compatible session decoding; no longer used at runtime. */
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
 };
@@ -122,9 +123,9 @@ export function mergeSessionEntry(
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now());
   if (!existing) {
-    return { ...patch, sessionId, updatedAt };
+    return { ...patch, sessionId, updatedAt, skillsSnapshot: undefined };
   }
-  return { ...existing, ...patch, sessionId, updatedAt };
+  return { ...existing, ...patch, sessionId, updatedAt, skillsSnapshot: undefined };
 }
 
 export function resolveFreshSessionTotalTokens(

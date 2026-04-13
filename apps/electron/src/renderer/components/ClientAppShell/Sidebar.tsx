@@ -1804,6 +1804,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     setCreateSkillsError(null);
     void fetchSkillCatalog({
       scope: `create-agent-${effectiveWorkspaceId}`,
+      surface: "agent",
     }).then((items) => {
       if (disposed) {
         return;
@@ -1891,9 +1892,9 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
         skills:
           createSkillCatalog.length === 0
             ? undefined
-            : selectedCreateSkills.length === createSkillCatalog.length
-              ? null
-              : selectedCreateSkills,
+            : (selectedCreateSkills.length === createSkillCatalog.length
+              ? createSkillCatalog.map((skill) => skill.name).toSorted()
+              : selectedCreateSkills),
       });
       if (!result.success) {
         setCreateError(result.error ?? "Failed to create agent.");

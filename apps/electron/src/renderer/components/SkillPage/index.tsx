@@ -313,7 +313,7 @@ export default function SkillPage() {
     if (withSpinner) {
       setLoadingSkills(true);
     }
-    const items = await fetchSkillCatalog({ scope: "skill-page" });
+    const items = await fetchSkillCatalog({ scope: "skill-page", surface: "hub" });
     if (!mountedRef.current) {
       return;
     }
@@ -346,8 +346,7 @@ export default function SkillPage() {
   }, [loadSkills]);
 
   const handleInstallSkill = useCallback(async (skill: SkillCatalogItem) => {
-    const installId = skill.installOptions[0]?.id;
-    if (!installId) {
+    if (!skill.canInstall) {
       return;
     }
 
@@ -357,7 +356,8 @@ export default function SkillPage() {
     try {
       await installSkillCatalogItem({
         skillName: skill.name,
-        installId,
+        skillKey: skill.skillKey,
+        installId: skill.installOptions[0]?.id,
         scope: `skill-install-${skill.skillKey || skill.name}`,
       });
       await loadSkills({ withSpinner: false });

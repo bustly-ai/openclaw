@@ -21,6 +21,7 @@ export type {
   SkillEntry,
   SkillInstallSpec,
   SkillSnapshot,
+  WorkspaceSkillContext,
   SkillsInstallPreferences,
 } from "./skills/types.js";
 export {
@@ -28,7 +29,9 @@ export {
   buildWorkspaceSkillsPrompt,
   buildWorkspaceSkillCommandSpecs,
   filterWorkspaceSkillEntries,
+  loadGlobalSkillEntries,
   loadWorkspaceSkillEntries,
+  resolveWorkspaceSkillContext,
   resolveSkillsPromptForRun,
   syncSkillsToWorkspace,
 } from "./skills/workspace.js";

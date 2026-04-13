@@ -96,6 +96,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   bustlyListAgents: (workspaceId?: string) => ipcRenderer.invoke("bustly-list-agents", workspaceId),
   bustlyListAgentSessions: (workspaceId: string, agentId: string) =>
     ipcRenderer.invoke("bustly-list-agent-sessions", workspaceId, agentId),
+  bustlyListGlobalSkills: () => ipcRenderer.invoke("bustly-list-global-skills"),
+  bustlyInstallGlobalSkill: (skillKey: string) => ipcRenderer.invoke("bustly-install-global-skill", skillKey),
   bustlyCreateAgent: (params: {
     workspaceId: string;
     name: string;

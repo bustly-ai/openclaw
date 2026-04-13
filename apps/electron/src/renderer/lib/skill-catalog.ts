@@ -45,6 +45,8 @@ export type SkillCatalogItem = {
   bundled: boolean;
   category: SkillCategory;
   installOptions: GatewaySkillInstallOption[];
+  installed: boolean;
+  canInstall: boolean;
 };
 
 type SupabaseSkillCategoryRow = {
@@ -283,6 +285,8 @@ export function toSkillCatalogItems(
             }))
             .filter((option) => option.id && option.label)
           : [],
+        installed: true,
+        canInstall: false,
       };
     })
     .toSorted((left, right) => {
@@ -431,7 +435,36 @@ export async function fetchSkillStatusReport(params?: {
 export async function fetchSkillCatalog(params?: {
   agentId?: string;
   scope?: string;
+  surface?: "agent" | "hub";
 }): Promise<SkillCatalogItem[]> {
+  if (params?.surface === "hub") {
+    const items = await window.electronAPI.bustlyListGlobalSkills();
+    return items
+      .map((item) => ({
+        id: item.id.trim(),
+        name: item.name.trim(),
+        description: item.description.trim(),
+        source: item.source.trim(),
+        sourceLabel: item.sourceLabel.trim(),
+        skillKey: item.skillKey.trim(),
+        filePath: item.filePath.trim(),
+        homepage: item.homepage?.trim() || undefined,
+        primaryEnv: item.primaryEnv?.trim() || undefined,
+        eligible: item.eligible === true,
+        bundled: item.bundled === true,
+        category: item.category.trim() || UNCATEGORIZED_CATEGORY_LABEL,
+        installOptions: [],
+        installed: item.installed === true,
+        canInstall: item.canInstall === true,
+      }))
+      .toSorted((left, right) => {
+        const categoryDelta = compareSkillCategories(left.category, right.category);
+        if (categoryDelta !== 0) {
+          return categoryDelta;
+        }
+        return compareSkillNames(left, right);
+      });
+  }
   const [report, categoryLookup] = await Promise.all([
     fetchSkillStatusReport(params),
     fetchSkillCategoryLookup(),
@@ -441,10 +474,18 @@ export async function fetchSkillCatalog(params?: {
 
 export async function installSkillCatalogItem(params: {
   skillName: string;
-  installId: string;
+  skillKey: string;
+  installId?: string;
   timeoutMs?: number;
   scope?: string;
 }): Promise<void> {
+  if (!params.installId) {
+    const result = await window.electronAPI.bustlyInstallGlobalSkill(params.skillKey);
+    if (!result.success) {
+      throw new Error(result.error ?? `Failed to install skill "${params.skillKey}".`);
+    }
+    return;
+  }
   await requestSkillGatewayMethod({
     method: "skills.install",
     payload: {

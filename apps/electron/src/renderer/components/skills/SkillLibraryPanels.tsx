@@ -141,11 +141,11 @@ function buildCategoryOptions(items: SkillCatalogItem[], options?: { includeReco
 }
 
 function isSkillInstallable(skill: SkillCatalogItem): boolean {
-  return !skill.eligible && skill.installOptions.length > 0;
+  return skill.canInstall;
 }
 
 function isSkillInstalledInHub(skill: SkillCatalogItem): boolean {
-  return skill.eligible || skill.installOptions.length === 0;
+  return skill.installed;
 }
 
 function SkillCategoryChips(props: {
@@ -305,7 +305,7 @@ function SkillHubCard(props: {
               </>
             )}
           </button>
-        ) : props.skill.eligible ? (
+        ) : props.skill.installed ? (
           <div className="flex h-8 items-center gap-1.5 rounded-lg px-3 text-[12px] font-bold text-[#8A93B2]">
             <CheckCircle size={14} weight="bold" />
             Installed
@@ -731,13 +731,13 @@ export function AgentSkillsPanel(props: AgentSkillsPanelProps) {
 
     if (showAddPane) {
       return (
-        <div className="relative flex min-h-0 flex-1 flex-col animate-in slide-in-from-right-8 fade-in duration-300">
-          <div className="shrink-0 px-1 pt-2 pb-2">
+        <div className="relative flex min-h-0 flex-1 flex-col bg-white animate-in slide-in-from-right-8 fade-in duration-300">
+          <div className="sticky top-0 z-30 shrink-0 bg-white px-6 pt-6 pb-4">
             <div className="mb-6 flex items-center gap-3">
               <button
                 type="button"
                 onClick={() => setShowAddPane(false)}
-                className="-ml-2 flex h-8 w-8 items-center justify-center rounded-lg text-[#8A93B2] transition-colors hover:bg-[#F4F5F8] hover:text-[#1A162F]"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8A93B2] transition-colors hover:bg-[#F4F5F8] hover:text-[#1A162F]"
               >
                 <ArrowLeft size={20} weight="bold" />
               </button>
@@ -760,9 +760,9 @@ export function AgentSkillsPanel(props: AgentSkillsPanelProps) {
             </div>
           </div>
 
-          <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-1 py-4 pb-24">
+          <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-6 pt-0 pb-24">
             {filteredAvailableItems.length > 0 ? (
-              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 pb-6 lg:grid-cols-2">
                 {filteredAvailableItems.map((skill) => (
                   <AddPaneSkillCard
                     key={skill.id}
@@ -803,7 +803,7 @@ export function AgentSkillsPanel(props: AgentSkillsPanelProps) {
           </div>
 
           {selectedIds.size > 0 ? (
-            <div className="absolute top-2 right-0 z-10 animate-in fade-in duration-200">
+            <div className="absolute top-6 right-6 z-10 animate-in fade-in duration-200">
               <button
                 type="button"
                 onClick={addSelectedSkills}
@@ -849,12 +849,12 @@ export function AgentSkillsPanel(props: AgentSkillsPanelProps) {
   })();
 
   if (showAddPane) {
-    return <div className="w-full px-0 pt-2 pb-20 font-sans">{content}</div>;
+    return <div className="w-full bg-white px-0 pb-20 font-sans">{content}</div>;
   }
 
   return (
-    <div className="w-full px-0 pt-2 pb-20 font-sans">
-      <div className="sticky top-0 z-30 bg-white pt-2">
+    <div className="w-full bg-white px-0 pb-20 font-sans">
+      <div className="sticky top-0 z-30 bg-white px-6 pt-6">
         <div className="mb-4 flex items-center justify-between gap-4">
           <div>
             <h3 className="text-[18px] font-bold text-[#1A162F]">{enabledCount} skills</h3>
@@ -885,7 +885,7 @@ export function AgentSkillsPanel(props: AgentSkillsPanelProps) {
         </div>
       </div>
 
-      {content}
+      <div className="px-6">{content}</div>
     </div>
   );
 }
