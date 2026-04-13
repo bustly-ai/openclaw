@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { loginOpenAICodex, loginAntigravity } from "@mariozechner/pi-ai";
 import { loadConfig } from "../../../../src/config/config.js";
 import * as BustlyOAuth from "./bustly-oauth.js";
+import { mainHttpFetch } from "./http-client.js";
 import { writeMainError, writeMainInfo, writeMainWarn } from "./logger.js";
 
 let oauthPromptResolver: ((value: string) => void) | null = null;
@@ -339,7 +340,9 @@ export async function exchangeToken(code: string): Promise<BustlyTokenApiRespons
   const apiEndpoint = `${apiBaseUrl.replace(/\/+$/, "")}/api/oauth/getToken`;
   writeMainInfo("[Bustly OAuth] Exchanging authorization code for access token");
 
-  const response = await fetch(apiEndpoint, {
+  const response = await mainHttpFetch(apiEndpoint, {
+    label: "Bustly OAuth Token Exchange",
+    timeoutMs: 30_000,
     method: "POST",
     headers: {
       "Content-Type": "application/json",

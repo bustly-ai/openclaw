@@ -91,6 +91,7 @@ import {
   loadBustlyRemoteAgentPresets,
   loadEnabledBustlyRemoteAgentPresets,
 } from "./bustly-agent-presets.js";
+import { initializeMainHttpClient } from "./http-client.js";
 import {
   ensureMainLogPath,
   setMainLogSink,
@@ -1420,6 +1421,7 @@ async function createBustlyWorkspaceAgent(params: {
   agentName: string;
   displayName?: string;
   icon?: string;
+  skills?: string[] | null;
 }): Promise<{ agentId: string; workspaceDir: string }> {
   const workspaceId = params.workspaceId.trim();
   if (!workspaceId) {
@@ -1449,6 +1451,7 @@ async function createBustlyWorkspaceAgent(params: {
     agentId,
     name: displayName,
     workspace: workspaceDir,
+    skills: params.skills,
   });
   const synchronizedConfig = applyBustlyWorkspaceCollaborationConfig({
     ...updated,
@@ -4275,22 +4278,26 @@ function setupIpcHandlers(): void {
     "bustly-create-agent",
     async (
       _event,
-      workspaceId: string,
-      name: string,
-      icon?: string,
-      workspaceName?: string,
+      params: {
+        workspaceId: string;
+        name: string;
+        icon?: string;
+        workspaceName?: string;
+        skills?: string[] | null;
+      },
     ) => {
       try {
-        const trimmedName = typeof name === "string" ? name.trim() : "";
+        const trimmedName = typeof params?.name === "string" ? params.name.trim() : "";
         if (!trimmedName) {
           return { success: false, error: "Agent name is required." };
         }
         const result = await createBustlyWorkspaceAgent({
-          workspaceId,
-          workspaceName,
+          workspaceId: params.workspaceId,
+          workspaceName: params.workspaceName,
           agentName: trimmedName,
           displayName: trimmedName,
-          icon,
+          icon: params.icon,
+          skills: params.skills,
         });
         return {
           success: true,
@@ -4745,6 +4752,11 @@ void app.whenReady().then(async () => {
     }
   };
   loadDotEnv();
+  try {
+    await initializeMainHttpClient();
+  } catch (error) {
+    writeMainError("[HTTP] Main HTTP client initialization failed:", error);
+  }
   if (await handlePendingInstallOnLaunch()) {
     return;
   }

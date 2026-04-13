@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { BustlyOAuthState } from "../bustly-types.js";
 import { resolveElectronIsolatedStateDir } from "../defaults.js";
+import { mainHttpFetch } from "../http-client.js";
 
 export type SupabaseUserMetadata = {
   avatar_url?: string;
@@ -103,7 +104,9 @@ export async function supabaseFetch(params: SupabaseFetchParams): Promise<Respon
     ...params.headers,
   };
 
-  return fetch(endpoint, {
+  return mainHttpFetch(endpoint, {
+    label: `Bustly Supabase ${params.method ?? "GET"} ${params.path}`,
+    timeoutMs: 30_000,
     method: params.method ?? "GET",
     headers,
     body: params.body,
@@ -123,7 +126,9 @@ export async function refreshSupabaseAuth(): Promise<SupabaseRefreshResult> {
   }
 
   const endpoint = `${supabaseUrl.replace(/\/+$/, "")}/auth/v1/token?grant_type=refresh_token`;
-  const response = await fetch(endpoint, {
+  const response = await mainHttpFetch(endpoint, {
+    label: "Bustly Supabase Refresh",
+    timeoutMs: 30_000,
     method: "POST",
     headers: {
       Accept: "application/json",
