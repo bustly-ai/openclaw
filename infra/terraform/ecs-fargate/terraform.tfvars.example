@@ -1,0 +1,13 @@
+aws_region   = "ap-southeast-1"
+project_name = "openclaw"
+environment  = "staging"
+
+# Optional: set after ACM cert is ready
+# acm_certificate_arn = "arn:aws:acm:ap-southeast-1:123456789012:certificate/xxxx"
+
+# Optional: tighten source CIDR in production
+allowed_ingress_cidrs = ["0.0.0.0/0"]
+
+tags = {
+  Owner = "bustly"
+}

@@ -1,0 +1,2254 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bustly Cloud Web Shell Test</title>
+    <style>
+      :root {
+        --bg: #eff0f4;
+        --sidebar: #e7e8ee;
+        --panel: #f6f7fb;
+        --card: #ffffff;
+        --border: #dde1eb;
+        --text-main: #1a1632;
+        --text-sub: #6f7895;
+        --text-muted: #8d95ad;
+        --accent: #1a1632;
+        --accent-soft: #dedfe8;
+        --chip: #f2f3f7;
+        --ok: #0f8a5c;
+        --warn: #b07800;
+        --error: #b63f4a;
+        --shadow-soft: 0 10px 24px rgba(23, 24, 38, 0.07);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+
+      body {
+        font-family: "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+        color: var(--text-main);
+        background:
+          radial-gradient(circle at 10% 10%, rgba(114, 127, 185, 0.08), transparent 36%),
+          radial-gradient(circle at 90% 90%, rgba(109, 147, 125, 0.08), transparent 32%),
+          var(--bg);
+      }
+
+      .shell {
+        height: 100vh;
+        display: grid;
+        grid-template-columns: 320px minmax(720px, 1fr) 0;
+      }
+
+      .sidebar {
+        background: var(--sidebar);
+        border-right: 1px solid #d5d9e3;
+        display: grid;
+        grid-template-rows: auto auto auto 1fr auto;
+        min-height: 0;
+      }
+
+      .traffic {
+        display: flex;
+        gap: 10px;
+        padding: 14px 20px 4px;
+      }
+
+      .dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+      }
+
+      .dot.red {
+        background: #fb6057;
+      }
+
+      .dot.yellow {
+        background: #fdbc2f;
+      }
+
+      .dot.green {
+        background: #2acb42;
+      }
+
+      .brand {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 20px 6px;
+      }
+
+      .brand-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 40px;
+      }
+
+      .brand-name {
+        font-size: 39px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+
+      .icon-btn {
+        border: 0;
+        background: transparent;
+        color: #737b95;
+        cursor: pointer;
+        border-radius: 10px;
+        min-width: 32px;
+        min-height: 32px;
+        padding: 6px;
+      }
+
+      .icon-btn:hover {
+        background: rgba(28, 31, 51, 0.08);
+      }
+
+      .workspace-card {
+        margin: 10px 12px 4px;
+        border: 1px solid #d6dae6;
+        background: #f9f9fc;
+        border-radius: 16px;
+        padding: 8px;
+        display: grid;
+        gap: 8px;
+        position: relative;
+      }
+
+      .workspace-pill {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 10px;
+        align-items: center;
+        padding: 8px 10px;
+        border-radius: 12px;
+        cursor: pointer;
+      }
+
+      .workspace-menu {
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        top: 64px;
+        border: 1px solid #d5d9e5;
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 14px 24px rgba(26, 29, 48, 0.16);
+        z-index: 8;
+        max-height: 220px;
+        overflow: auto;
+        padding: 6px;
+        display: grid;
+        gap: 4px;
+      }
+
+      .workspace-menu-item {
+        border: 0;
+        background: transparent;
+        border-radius: 9px;
+        text-align: left;
+        padding: 8px 9px;
+        font-size: 12px;
+        color: #324163;
+        cursor: pointer;
+      }
+
+      .workspace-menu-item:hover {
+        background: #f2f4fa;
+      }
+
+      .workspace-menu-item.active {
+        background: #e9edf8;
+        font-weight: 700;
+      }
+
+      .workspace-menu-empty {
+        font-size: 12px;
+        color: #7481a4;
+        padding: 8px 9px;
+      }
+
+      .workspace-avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        background: #e2e3eb;
+        display: grid;
+        place-items: center;
+        font-size: 17px;
+        font-weight: 700;
+      }
+
+      .workspace-name {
+        min-width: 0;
+        font-size: 28px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .workspace-controls {
+        display: grid;
+        gap: 6px;
+      }
+
+      .workspace-controls input {
+        width: 100%;
+        font-size: 13px;
+        border-radius: 10px;
+        border: 1px solid #d5dae8;
+        background: #fff;
+        padding: 8px 9px;
+      }
+
+      .workspace-controls-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+
+      .btn {
+        border: 1px solid transparent;
+        border-radius: 10px;
+        background: #fff;
+        color: var(--text-main);
+        font-size: 12px;
+        font-weight: 600;
+        padding: 7px 10px;
+        cursor: pointer;
+      }
+
+      .btn:hover {
+        filter: brightness(0.98);
+      }
+
+      .btn.primary {
+        background: var(--accent);
+        color: #fff;
+      }
+
+      .btn.secondary {
+        border-color: #d0d5e3;
+      }
+
+      .btn.danger {
+        color: var(--error);
+        border-color: rgba(182, 63, 74, 0.36);
+        background: #fff;
+      }
+
+      .agent-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 12px 4px;
+      }
+
+      .agent-head span {
+        font-size: 29px;
+        font-weight: 600;
+        color: #7b84a3;
+      }
+
+      .agent-list {
+        margin: 0;
+        padding: 8px 10px 10px;
+        list-style: none;
+        overflow: auto;
+        display: grid;
+        align-content: start;
+        gap: 4px;
+      }
+
+      .agent-item {
+        border: 0;
+        background: transparent;
+        width: 100%;
+        text-align: left;
+        border-radius: 18px;
+        padding: 12px 14px;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: 10px;
+        color: #5f6d8f;
+        font-size: 30px;
+        cursor: pointer;
+      }
+
+      .agent-item.active {
+        background: #d7d8e1;
+        color: #22203e;
+        font-weight: 600;
+      }
+
+      .agent-item-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .session-box {
+        border-top: 1px solid #d5d9e2;
+        padding: 8px 10px 10px;
+        display: grid;
+        gap: 6px;
+      }
+
+      .session-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        color: #7b84a3;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .session-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 4px;
+        max-height: 140px;
+        overflow: auto;
+      }
+
+      .session-item {
+        border: 0;
+        border-radius: 11px;
+        background: transparent;
+        text-align: left;
+        color: #5f6d8f;
+        padding: 8px 10px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      .session-item:hover {
+        background: rgba(27, 31, 51, 0.08);
+      }
+
+      .session-item.active {
+        background: #dbe0ef;
+        color: #23223d;
+        font-weight: 700;
+      }
+
+      .sidebar-bottom {
+        border-top: 1px solid #d5d9e2;
+        padding: 10px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .skills-row,
+      .profile-row {
+        border-radius: 14px;
+        padding: 10px 12px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: #4c5a80;
+      }
+
+      .skills-row:hover,
+      .profile-row:hover {
+        background: rgba(27, 31, 51, 0.06);
+      }
+
+      .profile-avatar {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: #e4e8f2;
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+      }
+
+      .profile-meta {
+        min-width: 0;
+      }
+
+      .profile-name {
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .profile-email {
+        font-size: 12px;
+        color: #6d7898;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .main {
+        display: grid;
+        grid-template-rows: auto 1fr auto auto;
+        min-height: 0;
+        background: #f3f4f8;
+      }
+
+      .main-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 14px 22px 6px;
+      }
+
+      .conn-pill {
+        border-radius: 999px;
+        padding: 7px 12px;
+        font-size: 12px;
+        border: 1px solid transparent;
+        background: #eaecf3;
+        color: #616b88;
+      }
+
+      .conn-pill.ok {
+        background: rgba(15, 138, 92, 0.12);
+        border-color: rgba(15, 138, 92, 0.3);
+        color: var(--ok);
+      }
+
+      .run-pill {
+        border-radius: 999px;
+        padding: 7px 12px;
+        font-size: 12px;
+        border: 1px solid #d4d9e7;
+        color: #62708f;
+        background: #fff;
+      }
+
+      .hero {
+        display: grid;
+        align-content: center;
+        justify-items: center;
+        text-align: center;
+        gap: 14px;
+        padding: 10px 24px 24px;
+      }
+
+      .hero-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 18px;
+        background: #f9f9fd;
+        border: 1px solid #eceef5;
+        box-shadow: 0 8px 16px rgba(31, 37, 66, 0.08);
+        display: grid;
+        place-items: center;
+        font-size: 24px;
+      }
+
+      .hero-title {
+        margin: 0;
+        font-size: 46px;
+        letter-spacing: -0.02em;
+      }
+
+      .hero-sub {
+        margin: 0;
+        color: #6d7798;
+        font-size: 43px;
+      }
+
+      .timeline {
+        display: none;
+        padding: 10px 24px 18px;
+        overflow: auto;
+        align-content: start;
+        gap: 10px;
+      }
+
+      .timeline.show {
+        display: grid;
+      }
+
+      .bubble {
+        max-width: min(82%, 900px);
+        border-radius: 16px;
+        padding: 10px 12px;
+        font-size: 13px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+        border: 1px solid transparent;
+      }
+
+      .bubble.user {
+        margin-left: auto;
+        background: #1c1936;
+        color: #f5f7ff;
+      }
+
+      .bubble.assistant {
+        background: #fff;
+        border-color: #d6dcec;
+      }
+
+      .bubble.system {
+        background: #fff7e6;
+        border-color: #ebd08a;
+      }
+
+      .bubble-meta {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        opacity: 0.72;
+      }
+
+      .use-cases {
+        padding: 0 24px 10px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(150px, 1fr));
+        gap: 10px;
+      }
+
+      .use-case-btn {
+        border: 1px solid #d7dbe8;
+        background: #f8f9fc;
+        border-radius: 999px;
+        padding: 12px 18px;
+        font-size: 14px;
+        font-weight: 600;
+        color: #26233f;
+        text-align: left;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        cursor: pointer;
+      }
+
+      .composer-wrap {
+        padding: 0 24px 18px;
+      }
+
+      .composer {
+        border: 1px solid #d7dbe7;
+        border-radius: 30px;
+        background: #f7f8fb;
+        box-shadow: var(--shadow-soft);
+        padding: 16px 18px 12px;
+        display: grid;
+        gap: 14px;
+      }
+
+      .composer textarea {
+        border: 0;
+        background: transparent;
+        font-size: 17px;
+        color: #24304d;
+        min-height: 92px;
+        resize: vertical;
+        font-family: inherit;
+      }
+
+      .composer textarea:focus {
+        outline: none;
+      }
+
+      .composer textarea::placeholder {
+        color: #8a93af;
+      }
+
+      .composer-foot {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .composer-tools {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        color: #4d5779;
+      }
+
+      .tool-chip {
+        border: 1px solid #d3d8e6;
+        background: #fff;
+        border-radius: 999px;
+        padding: 7px 12px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .send-btn {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        border: 0;
+        background: #e4e7f0;
+        color: #7f89a6;
+        cursor: pointer;
+      }
+
+      .send-btn.active {
+        background: #1a1632;
+        color: #fff;
+      }
+
+      .send-btn:disabled {
+        cursor: not-allowed;
+        background: #eceff5;
+        color: #a3abc1;
+      }
+
+      .dev {
+        width: 0;
+        border-left: 0;
+        background: #f9fafc;
+        overflow: hidden;
+        transition: width 180ms ease;
+      }
+
+      .dev.open {
+        width: 430px;
+        border-left: 1px solid #d7dce8;
+      }
+
+      .dev-inner {
+        height: 100%;
+        padding: 12px;
+        overflow: auto;
+        display: grid;
+        align-content: start;
+        gap: 10px;
+      }
+
+      .dev-card {
+        border: 1px solid #d8dce7;
+        border-radius: 14px;
+        background: #fff;
+        padding: 10px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .dev-title {
+        margin: 0;
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #697499;
+      }
+
+      .dev-grid {
+        display: grid;
+        gap: 6px;
+      }
+
+      .dev-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+
+      .dev input,
+      .dev select,
+      .dev textarea {
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid #d3d9e8;
+        background: #fff;
+        padding: 8px 9px;
+        font-size: 12px;
+        font-family: inherit;
+      }
+
+      .dev textarea {
+        min-height: 86px;
+        resize: vertical;
+      }
+
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      .log,
+      .result {
+        margin: 0;
+        border: 1px solid #d5dbe7;
+        border-radius: 10px;
+        background: #0f1525;
+        color: #d7e4ce;
+        padding: 10px;
+        font-size: 12px;
+        max-height: 280px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .result {
+        background: #10172a;
+      }
+
+      .hint {
+        font-size: 12px;
+        color: #687497;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      @media (max-width: 1450px) {
+        .shell {
+          grid-template-columns: 300px minmax(0, 1fr);
+        }
+
+        .dev {
+          position: fixed;
+          right: 0;
+          top: 0;
+          height: 100vh;
+          z-index: 30;
+          box-shadow: -8px 0 24px rgba(17, 22, 40, 0.14);
+        }
+
+        .hero-title {
+          font-size: 38px;
+        }
+
+        .hero-sub {
+          font-size: 30px;
+        }
+      }
+
+      @media (max-width: 980px) {
+        .shell {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          min-height: 45vh;
+          border-right: 0;
+          border-bottom: 1px solid #d5dae6;
+        }
+
+        .main {
+          min-height: 55vh;
+        }
+
+        .use-cases {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="traffic">
+          <span class="dot red"></span>
+          <span class="dot yellow"></span>
+          <span class="dot green"></span>
+        </div>
+
+        <div class="brand">
+          <div class="brand-left">
+            <span>🌀</span>
+            <span class="brand-name">Bustly</span>
+          </div>
+          <button id="toggleDevBtn" class="icon-btn" title="Open Dev Panel">☰</button>
+        </div>
+
+        <section class="workspace-card">
+          <div class="workspace-pill" id="workspacePill">
+            <div class="workspace-avatar" id="workspaceAvatar">WS</div>
+            <div class="workspace-name" id="workspaceLabel">Workspace</div>
+            <button id="refreshWorkspaceBtn" class="icon-btn" title="Refresh Workspace">▾</button>
+          </div>
+          <div id="workspaceMenu" class="workspace-menu hidden"></div>
+          <div class="workspace-controls">
+            <input id="workspaceId" placeholder="workspaceId" />
+            <input id="workspaceName" placeholder="workspaceName (optional)" />
+            <div class="workspace-controls-row">
+              <button id="getActiveWorkspaceBtn" class="btn secondary">Get Active</button>
+              <button id="setActiveWorkspaceBtn" class="btn primary">Set Active</button>
+            </div>
+          </div>
+        </section>
+
+        <div class="agent-head">
+          <span>Agents</span>
+          <button id="createAgentBtn" class="icon-btn" title="Create Agent">＋</button>
+        </div>
+
+        <ul id="agentNav" class="agent-list"></ul>
+
+        <section class="session-box">
+          <div class="session-head">
+            <span>Sessions</span>
+            <button id="createSessionBtn" class="icon-btn" title="Create Session">＋</button>
+          </div>
+          <ul id="sessionNav" class="session-list"></ul>
+        </section>
+
+        <div class="sidebar-bottom">
+          <div class="skills-row">
+            <span>⚡</span>
+            <strong>Skills</strong>
+          </div>
+          <div class="profile-row">
+            <div class="profile-avatar" id="profileAvatar">U</div>
+            <div class="profile-meta">
+              <div id="profileName" class="profile-name">User</div>
+              <div id="profileEmail" class="profile-email">-</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div class="main-top">
+          <div style="display: flex; gap: 8px; align-items: center">
+            <div id="connPill" class="conn-pill">Disconnected</div>
+            <button id="quickConnectBtn" class="btn secondary">Connect</button>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center">
+            <div id="sessionBadge" class="run-pill">session: none</div>
+            <div id="runBadge" class="run-pill">run: idle</div>
+            <button id="reloadHistoryBtn" class="btn secondary">Reload</button>
+          </div>
+        </div>
+
+        <section id="hero" class="hero">
+          <div class="hero-icon">🤖</div>
+          <h1 id="heroTitle" class="hero-title">Overview</h1>
+          <p class="hero-sub">How can I help you today?</p>
+        </section>
+
+        <section id="timeline" class="timeline"></section>
+
+        <div class="use-cases" id="useCaseBar"></div>
+
+        <div class="composer-wrap">
+          <div class="composer">
+            <textarea id="chatMessage" placeholder="What should we do next for your business?"></textarea>
+            <div class="composer-foot">
+              <div class="composer-tools">
+                <button id="attachBtn" class="icon-btn" title="Attachment">📎</button>
+                <span class="tool-chip" id="modelChip">Bustly Standard</span>
+              </div>
+              <button id="sendBtn" class="send-btn" title="Send">↑</button>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <aside id="devPanel" class="dev">
+        <div class="dev-inner">
+          <section class="dev-card">
+            <h3 class="dev-title">Gateway Connect</h3>
+            <div class="dev-grid">
+              <input id="wsUrl" value="ws://127.0.0.1:18999" />
+              <input id="token" placeholder="gateway token (required in token mode)" />
+              <input id="password" type="password" placeholder="gateway password (optional)" />
+              <div class="dev-row">
+                <button id="connectBtn" class="btn primary">Connect</button>
+                <button id="disconnectBtn" class="btn secondary">Disconnect</button>
+              </div>
+              <div class="hint" id="workspaceHint">active: -</div>
+              <div class="hint">device identity: auto-sign (requires localhost/HTTPS secure context)</div>
+            </div>
+          </section>
+
+          <section class="dev-card">
+            <h3 class="dev-title">OAuth</h3>
+            <div class="dev-grid">
+              <input id="oauthTraceId" placeholder="loginTraceId" />
+              <div class="dev-row">
+                <button id="refreshAuthBtn" class="btn secondary">Refresh Auth</button>
+                <button id="oauthLoginBtn" class="btn primary">Start OAuth</button>
+              </div>
+              <div class="dev-row">
+                <button id="oauthPollBtn" class="btn secondary">Poll OAuth</button>
+                <button id="oauthLogoutBtn" class="btn danger">Logout</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="dev-card">
+            <h3 class="dev-title">Agent / Session</h3>
+            <div class="dev-grid">
+              <input id="agentName" placeholder="create/update agent name" />
+              <input id="agentIcon" placeholder="agent icon (optional)" />
+              <div class="dev-row">
+                <button id="listAgentsBtn" class="btn secondary">List Agents</button>
+                <button id="updateAgentBtn" class="btn secondary">Update Agent</button>
+              </div>
+              <div class="dev-row">
+                <button id="deleteAgentBtn" class="btn danger">Delete Agent</button>
+                <button id="createSessionBtnDev" class="btn primary">Create Session</button>
+              </div>
+              <input id="sessionLabel" placeholder="session label (optional)" />
+              <button id="listSessionsBtn" class="btn secondary">List Sessions</button>
+            </div>
+          </section>
+
+          <section class="dev-card">
+            <h3 class="dev-title">Links & Runtime</h3>
+            <div class="dev-grid">
+              <select id="linkKind">
+                <option value="settings">settings</option>
+                <option value="workspace-settings">workspace-settings</option>
+                <option value="workspace-invite">workspace-invite</option>
+                <option value="workspace-manage">workspace-manage</option>
+                <option value="workspace-pricing">workspace-pricing</option>
+                <option value="workspace-create">workspace-create</option>
+              </select>
+              <div class="dev-row">
+                <button id="resolveLinkBtn" class="btn secondary">Resolve Link</button>
+                <button id="openResolvedLinkBtn" class="btn secondary">Open Link</button>
+              </div>
+              <a id="resolvedLink" class="hint" href="#" target="_blank" rel="noopener noreferrer">-</a>
+              <input id="reportOutputDir" placeholder="/tmp/bustly-reports" />
+              <button id="reportIssueBtn" class="btn secondary">Export Issue Report</button>
+              <div class="hint" id="reportHint">archive: -</div>
+            </div>
+          </section>
+
+          <section class="dev-card">
+            <h3 class="dev-title">Manual RPC</h3>
+            <div class="dev-grid">
+              <input id="manualMethod" class="mono" value="health" />
+              <textarea id="manualParams" class="mono" placeholder='{"sessionKey":"..."}'></textarea>
+              <button id="manualCallBtn" class="btn secondary">Call Method</button>
+            </div>
+          </section>
+
+          <section class="dev-card">
+            <h3 class="dev-title">Result</h3>
+            <pre id="resultBox" class="result mono">{}</pre>
+          </section>
+
+          <section class="dev-card">
+            <h3 class="dev-title">Logs</h3>
+            <pre id="logBox" class="log mono"></pre>
+          </section>
+        </div>
+      </aside>
+    </div>
+
+    <script>
+      class GatewayRpcError extends Error {
+        constructor(code, message, details) {
+          super(message || "Gateway request failed");
+          this.name = "GatewayRpcError";
+          this.code = code || "gateway_error";
+          this.details = details;
+        }
+      }
+
+      const DEVICE_IDENTITY_STORAGE_KEY = "bustly.cloud.deviceIdentity.v1";
+
+      function base64UrlEncode(bytes) {
+        let binary = "";
+        for (const byte of bytes) {
+          binary += String.fromCharCode(byte);
+        }
+        return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+      }
+
+      function base64UrlDecode(value) {
+        const normalized = String(value || "")
+          .replaceAll("-", "+")
+          .replaceAll("_", "/");
+        const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+        const binary = atob(padded);
+        const output = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) {
+          output[i] = binary.charCodeAt(i);
+        }
+        return output;
+      }
+
+      function bytesToHex(bytes) {
+        return Array.from(bytes)
+          .map((value) => value.toString(16).padStart(2, "0"))
+          .join("");
+      }
+
+      async function fingerprintPublicKey(publicKeyRaw) {
+        const digest = await crypto.subtle.digest("SHA-256", publicKeyRaw.slice().buffer);
+        return bytesToHex(new Uint8Array(digest));
+      }
+
+      function buildDeviceAuthPayload(params) {
+        const scopes = Array.isArray(params.scopes) ? params.scopes.join(",") : "";
+        const token = params.token == null ? "" : String(params.token);
+        return [
+          "v2",
+          params.deviceId,
+          params.clientId,
+          params.clientMode,
+          params.role,
+          scopes,
+          String(params.signedAtMs),
+          token,
+          params.nonce || "",
+        ].join("|");
+      }
+
+      async function loadOrCreateDeviceIdentity() {
+        if (!window.isSecureContext || !crypto || !crypto.subtle) {
+          throw new Error("Secure context required for device identity (use localhost or HTTPS)");
+        }
+
+        try {
+          const raw = localStorage.getItem(DEVICE_IDENTITY_STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (
+              parsed &&
+              parsed.version === 1 &&
+              typeof parsed.deviceId === "string" &&
+              typeof parsed.publicKey === "string" &&
+              typeof parsed.privateKey === "string"
+            ) {
+              const derivedId = await fingerprintPublicKey(base64UrlDecode(parsed.publicKey));
+              if (derivedId !== parsed.deviceId) {
+                const repaired = {
+                  ...parsed,
+                  deviceId: derivedId,
+                };
+                localStorage.setItem(DEVICE_IDENTITY_STORAGE_KEY, JSON.stringify(repaired));
+                return repaired;
+              }
+              return parsed;
+            }
+          }
+        } catch {
+          // regenerate below
+        }
+
+        const keyPair = await crypto.subtle.generateKey(
+          { name: "Ed25519" },
+          true,
+          ["sign", "verify"],
+        );
+        const publicKeyRaw = new Uint8Array(await crypto.subtle.exportKey("raw", keyPair.publicKey));
+        const privateKeyPkcs8 = new Uint8Array(
+          await crypto.subtle.exportKey("pkcs8", keyPair.privateKey),
+        );
+        const identity = {
+          version: 1,
+          deviceId: await fingerprintPublicKey(publicKeyRaw),
+          publicKey: base64UrlEncode(publicKeyRaw),
+          privateKey: base64UrlEncode(privateKeyPkcs8),
+          createdAtMs: Date.now(),
+        };
+        localStorage.setItem(DEVICE_IDENTITY_STORAGE_KEY, JSON.stringify(identity));
+        return identity;
+      }
+
+      async function signDevicePayload(privateKeyBase64Url, payload) {
+        const privateKey = await crypto.subtle.importKey(
+          "pkcs8",
+          base64UrlDecode(privateKeyBase64Url),
+          { name: "Ed25519" },
+          false,
+          ["sign"],
+        );
+        const encoded = new TextEncoder().encode(payload);
+        const signature = new Uint8Array(await crypto.subtle.sign("Ed25519", privateKey, encoded));
+        return base64UrlEncode(signature);
+      }
+
+      class GatewayWsClient {
+        constructor(options) {
+          this.options = options;
+          this.ws = null;
+          this.pending = new Map();
+          this.connected = false;
+          this.connectSent = false;
+          this.connectNonce = "";
+          this.connectTimer = null;
+          this.pendingConnectResolve = null;
+          this.pendingConnectReject = null;
+        }
+
+        async connect({ url, token, password }) {
+          await this.disconnect();
+          this.options.onLog(`connecting: ${url}`);
+
+          return await new Promise((resolve, reject) => {
+            this.pendingConnectResolve = resolve;
+            this.pendingConnectReject = reject;
+            this.ws = new WebSocket(url);
+            this.connected = false;
+            this.connectSent = false;
+            this.connectNonce = "";
+            this.token = token || "";
+            this.password = password || "";
+
+            this.ws.addEventListener("open", () => {
+              this.options.onLog("ws open");
+              this.connectTimer = window.setTimeout(() => {
+                void this.sendConnect();
+              }, 500);
+            });
+
+            this.ws.addEventListener("message", (event) => {
+              this.handleMessage(String(event.data || ""));
+            });
+
+            this.ws.addEventListener("close", (event) => {
+              this.options.onLog(`ws close code=${event.code} reason=${event.reason || ""}`);
+              this.failPending(new Error(`socket closed (${event.code})`));
+              this.connected = false;
+              this.options.onStateChange(false);
+              if (this.pendingConnectReject) {
+                this.pendingConnectReject(new Error(`connect failed: socket closed (${event.code})`));
+                this.pendingConnectReject = null;
+                this.pendingConnectResolve = null;
+              }
+              this.clearConnectTimer();
+              this.ws = null;
+            });
+
+            this.ws.addEventListener("error", () => {
+              this.options.onLog("ws error");
+            });
+          });
+        }
+
+        async disconnect() {
+          this.clearConnectTimer();
+          this.connected = false;
+          this.options.onStateChange(false);
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.close(1000, "client disconnect");
+          }
+          this.ws = null;
+          this.failPending(new Error("client disconnected"));
+        }
+
+        clearConnectTimer() {
+          if (this.connectTimer) {
+            window.clearTimeout(this.connectTimer);
+            this.connectTimer = null;
+          }
+        }
+
+        failPending(error) {
+          for (const req of this.pending.values()) {
+            req.reject(error);
+          }
+          this.pending.clear();
+        }
+
+        async sendConnect() {
+          if (this.connectSent) {
+            return;
+          }
+          this.connectSent = true;
+          this.clearConnectTimer();
+
+          try {
+            const role = "operator";
+            const scopes = [
+              "operator.admin",
+              "operator.read",
+              "operator.write",
+              "operator.approvals",
+              "operator.pairing",
+            ];
+            const clientId = "gateway-client";
+            const clientMode = "ui";
+            const authToken = this.token || "";
+            const auth =
+              authToken || this.password
+                ? {
+                    token: authToken || undefined,
+                    password: this.password || undefined,
+                  }
+                : undefined;
+
+            const identity = await loadOrCreateDeviceIdentity();
+            const signedAtMs = Date.now();
+            const nonce = this.connectNonce || "";
+            const devicePayload = buildDeviceAuthPayload({
+              deviceId: identity.deviceId,
+              clientId,
+              clientMode,
+              role,
+              scopes,
+              signedAtMs,
+              token: authToken || null,
+              nonce,
+            });
+            const signature = await signDevicePayload(identity.privateKey, devicePayload);
+
+            const payload = await this.requestRaw("connect", {
+              minProtocol: 3,
+              maxProtocol: 3,
+              client: {
+                id: clientId,
+                version: "dev",
+                platform: navigator.platform || "web",
+                mode: clientMode,
+              },
+              role,
+              scopes,
+              device: {
+                id: identity.deviceId,
+                publicKey: identity.publicKey,
+                signature,
+                signedAt: signedAtMs,
+                nonce,
+              },
+              caps: ["tool-events"],
+              auth,
+              userAgent: navigator.userAgent,
+              locale: navigator.language,
+            });
+            this.connected = true;
+            this.options.onStateChange(true);
+            this.options.onHello(payload);
+            this.options.onLog("connect ok");
+            if (this.pendingConnectResolve) {
+              this.pendingConnectResolve(payload);
+              this.pendingConnectResolve = null;
+              this.pendingConnectReject = null;
+            }
+          } catch (error) {
+            if (this.pendingConnectReject) {
+              this.pendingConnectReject(error);
+              this.pendingConnectReject = null;
+              this.pendingConnectResolve = null;
+            }
+            this.options.onLog(`connect failed: ${error.message || String(error)}`);
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+              this.ws.close(4008, "connect failed");
+            }
+          }
+        }
+
+        handleMessage(raw) {
+          let frame;
+          try {
+            frame = JSON.parse(raw);
+          } catch {
+            return;
+          }
+
+          if (frame.type === "event") {
+            if (frame.event === "connect.challenge") {
+              this.connectNonce = (frame.payload && frame.payload.nonce) || "";
+              this.options.onLog(`connect.challenge nonce=${this.connectNonce ? "yes" : "no"}`);
+              void this.sendConnect();
+              return;
+            }
+            this.options.onEvent(frame);
+            return;
+          }
+
+          if (frame.type === "res") {
+            const pending = this.pending.get(frame.id);
+            if (!pending) {
+              return;
+            }
+            this.pending.delete(frame.id);
+            if (frame.ok) {
+              pending.resolve(frame.payload);
+            } else {
+              pending.reject(
+                new GatewayRpcError(frame.error && frame.error.code, frame.error && frame.error.message, frame.error && frame.error.details),
+              );
+            }
+          }
+        }
+
+        async request(method, params = {}) {
+          if (!this.connected) {
+            throw new Error("gateway not connected");
+          }
+          return await this.requestRaw(method, params);
+        }
+
+        async requestRaw(method, params = {}) {
+          if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            throw new Error("socket not open");
+          }
+          const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+          const frame = { type: "req", id, method, params };
+          return await new Promise((resolve, reject) => {
+            this.pending.set(id, { resolve, reject });
+            this.ws.send(JSON.stringify(frame));
+          });
+        }
+      }
+
+      const PRESET_USE_CASES = {
+        overview: ["Daily Pulse", "Anomaly Detection", "Executive Hub"],
+        finance: ["Revenue Quality", "Discount Leakage", "Health Signals"],
+        customers: ["Customer Mix", "Retention Opps", "High-Value Customers"],
+        "store ops": ["Fulfillment Risk", "Inventory Risk", "Product Issues"],
+        marketing: ["Campaign Diagnosis", "Budget Guidance", "Funnel Analysis"],
+      };
+
+      const USE_CASE_PROMPTS = {
+        "Daily Pulse": "Surface the most important business changes of the day across revenue, orders, customers, and risk signals.",
+        "Anomaly Detection": "Detect cross-channel anomalies and rank the issues that need attention first, such as refund spikes, stockout risk, or order backlog.",
+        "Executive Hub": "Act as the command center that routes users from a high-level business summary into the right specialized channel for deeper analysis.",
+        "Revenue Quality": "Evaluate business performance beyond top-line sales by focusing on net sales, margin quality, and revenue composition.",
+        "Discount Leakage": "Quantify how discounts and refunds are eroding revenue and trace the impact back to products, campaigns, or customer groups.",
+        "Health Signals": "Turn financial metrics into clear business signals, such as rising discount dependency or concentrated refund pressure.",
+        "Customer Mix": "Show whether growth is driven by healthy repeat demand or by one-time acquisition.",
+        "Retention Opps": "Identify at-risk customer cohorts and uncover segments that are most worth re-engaging.",
+        "High-Value Customers": "Reveal which customer segments contribute the most long-term value, repeat revenue, and profitability.",
+        "Fulfillment Risk": "Highlight overdue, unfulfilled, or exception orders so operators can act before delays impact customer experience.",
+        "Inventory Risk": "Detect low-stock and high-velocity SKUs that are likely to stock out in the next 7-14 days.",
+        "Product Issues": "Surface products with abnormal sales drops, high return rates, or unusual discount pressure.",
+        "Campaign Diagnosis": "Identify which campaigns and acquisition channels are driving efficient growth versus wasting budget.",
+        "Budget Guidance": "Recommend where to cut spend, where to scale, and which campaigns need immediate optimization.",
+        "Funnel Analysis": "Pinpoint where demand is leaking across the funnel, from traffic to click, conversion, and checkout.",
+      };
+
+      const state = {
+        client: null,
+        connected: false,
+        hello: null,
+        loggedIn: null,
+        user: null,
+        activeWorkspace: null,
+        workspaceHistory: [],
+        workspaceMenuOpen: false,
+        agents: [],
+        sessions: [],
+        selectedAgentId: "",
+        selectedSessionKey: "",
+        lastRunId: "",
+        resolvedLink: "",
+        devOpen: false,
+      };
+
+      const refs = {
+        devPanel: document.getElementById("devPanel"),
+        toggleDevBtn: document.getElementById("toggleDevBtn"),
+        connPill: document.getElementById("connPill"),
+        quickConnectBtn: document.getElementById("quickConnectBtn"),
+        runBadge: document.getElementById("runBadge"),
+        sessionBadge: document.getElementById("sessionBadge"),
+
+        workspaceAvatar: document.getElementById("workspaceAvatar"),
+        workspaceLabel: document.getElementById("workspaceLabel"),
+        workspaceHint: document.getElementById("workspaceHint"),
+        workspacePill: document.getElementById("workspacePill"),
+        workspaceMenu: document.getElementById("workspaceMenu"),
+        workspaceId: document.getElementById("workspaceId"),
+        workspaceName: document.getElementById("workspaceName"),
+
+        profileAvatar: document.getElementById("profileAvatar"),
+        profileName: document.getElementById("profileName"),
+        profileEmail: document.getElementById("profileEmail"),
+
+        hero: document.getElementById("hero"),
+        heroTitle: document.getElementById("heroTitle"),
+        timeline: document.getElementById("timeline"),
+        useCaseBar: document.getElementById("useCaseBar"),
+        chatMessage: document.getElementById("chatMessage"),
+        modelChip: document.getElementById("modelChip"),
+        sendBtn: document.getElementById("sendBtn"),
+
+        agentNav: document.getElementById("agentNav"),
+        sessionNav: document.getElementById("sessionNav"),
+
+        wsUrl: document.getElementById("wsUrl"),
+        token: document.getElementById("token"),
+        password: document.getElementById("password"),
+        oauthTraceId: document.getElementById("oauthTraceId"),
+
+        agentName: document.getElementById("agentName"),
+        agentIcon: document.getElementById("agentIcon"),
+        sessionLabel: document.getElementById("sessionLabel"),
+        linkKind: document.getElementById("linkKind"),
+        resolvedLink: document.getElementById("resolvedLink"),
+        reportOutputDir: document.getElementById("reportOutputDir"),
+        reportHint: document.getElementById("reportHint"),
+
+        manualMethod: document.getElementById("manualMethod"),
+        manualParams: document.getElementById("manualParams"),
+        resultBox: document.getElementById("resultBox"),
+        logBox: document.getElementById("logBox"),
+      };
+
+      function stamp() {
+        return new Date().toLocaleTimeString("zh-CN", { hour12: false });
+      }
+
+      function log(message) {
+        const line = `[${stamp()}] ${message}`;
+        refs.logBox.textContent = `${line}\n${refs.logBox.textContent}`.slice(0, 30000);
+      }
+
+      function setResult(payload) {
+        refs.resultBox.textContent = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+      }
+
+      function setConnState(connected) {
+        state.connected = connected;
+        refs.connPill.className = `conn-pill ${connected ? "ok" : ""}`;
+        refs.connPill.textContent = connected ? "Connected" : "Disconnected";
+        refs.quickConnectBtn.classList.toggle("hidden", connected);
+        updateSendButtonState();
+      }
+
+      function setRunState(type, text) {
+        refs.runBadge.textContent = text;
+        refs.runBadge.style.color = type === "error" ? "var(--error)" : type === "warn" ? "var(--warn)" : "#62708f";
+      }
+
+      function setSessionBadge(value) {
+        refs.sessionBadge.textContent = `session: ${value || "none"}`;
+      }
+
+      function updateSendButtonState() {
+        const hasText = refs.chatMessage.value.trim().length > 0;
+        const enabled = Boolean(hasText);
+        refs.sendBtn.disabled = !enabled;
+        refs.sendBtn.classList.toggle("active", enabled);
+      }
+
+      function ensureConnectedForChat() {
+        if (state.connected && state.client) {
+          return true;
+        }
+        setRunState("warn", "run: connect required");
+        log("chat blocked: gateway disconnected. Click Connect (top-left) first.");
+        toggleDevPanel(true);
+        return false;
+      }
+
+      function escapeHtml(input) {
+        return String(input)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;")
+          .replaceAll("\n", "<br>");
+      }
+
+      function normalizeText(entry) {
+        if (typeof entry === "string") {
+          return entry;
+        }
+        if (!entry || typeof entry !== "object") {
+          return "";
+        }
+        const source = entry.message && typeof entry.message === "object" ? entry.message : entry;
+        if (typeof source.text === "string") {
+          return source.text;
+        }
+        if (typeof source.message === "string") {
+          return source.message;
+        }
+        if (typeof source.content === "string") {
+          return source.content;
+        }
+        if (Array.isArray(source.content)) {
+          return source.content
+            .map((part) => {
+              if (typeof part === "string") {
+                return part;
+              }
+              if (!part || typeof part !== "object") {
+                return "";
+              }
+              if (typeof part.text === "string") {
+                return part.text;
+              }
+              if (typeof part.delta === "string") {
+                return part.delta;
+              }
+              return "";
+            })
+            .filter(Boolean)
+            .join("\n");
+        }
+        return JSON.stringify(source, null, 2);
+      }
+
+      function normalizeHistoryPayload(payload) {
+        const list = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload && payload.messages)
+            ? payload.messages
+            : [];
+        return list.map((entry, idx) => {
+          const source = entry && typeof entry === "object" && entry.message && typeof entry.message === "object" ? entry.message : entry;
+          const role =
+            (source && typeof source.role === "string" && source.role) ||
+            (entry && typeof entry.role === "string" && entry.role) ||
+            "assistant";
+          const createdAt =
+            (source && (source.createdAt || source.ts || source.timestamp)) ||
+            (entry && (entry.createdAt || entry.ts || entry.timestamp)) ||
+            null;
+          return {
+            id: `${idx}-${Math.random().toString(36).slice(2, 7)}`,
+            role,
+            text: normalizeText(source || entry),
+            createdAt,
+          };
+        });
+      }
+
+      function selectedAgent() {
+        return state.agents.find((a) => a.agentId === state.selectedAgentId) || null;
+      }
+
+      function normalizeAgentKey(agent) {
+        const name = String(agent?.name || agent?.agentName || "").trim().toLowerCase();
+        if (name.includes("overview")) return "overview";
+        if (name.includes("finance")) return "finance";
+        if (name.includes("customer")) return "customers";
+        if (name.includes("store")) return "store ops";
+        if (name.includes("marketing")) return "marketing";
+        const id = String(agent?.agentId || "").toLowerCase();
+        if (id.endsWith("-overview")) return "overview";
+        if (id.endsWith("-finance")) return "finance";
+        if (id.endsWith("-customers")) return "customers";
+        if (id.endsWith("-store-ops")) return "store ops";
+        if (id.endsWith("-marketing")) return "marketing";
+        return "overview";
+      }
+
+      function renderUseCases() {
+        refs.useCaseBar.innerHTML = "";
+        const key = normalizeAgentKey(selectedAgent());
+        const useCases = PRESET_USE_CASES[key] || PRESET_USE_CASES.overview;
+        for (const label of useCases) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "use-case-btn";
+          btn.innerHTML = `${escapeHtml(label)} <span>↗</span>`;
+          btn.addEventListener("click", () => {
+            const text = USE_CASE_PROMPTS[label] || label;
+            refs.chatMessage.value = text;
+            refs.chatMessage.focus();
+          });
+          refs.useCaseBar.appendChild(btn);
+        }
+      }
+
+      function renderHeroTitle() {
+        const agent = selectedAgent();
+        refs.heroTitle.textContent = agent?.name || agent?.agentName || "Overview";
+      }
+
+      function renderTimeline(items) {
+        refs.timeline.innerHTML = "";
+        const hasMessages = Array.isArray(items) && items.length > 0;
+        refs.hero.classList.toggle("hidden", hasMessages);
+        refs.timeline.classList.toggle("show", hasMessages);
+
+        if (!hasMessages) {
+          return;
+        }
+
+        for (const item of items) {
+          const roleLower = String(item.role || "assistant").toLowerCase();
+          const role = roleLower === "user" ? "user" : roleLower === "assistant" ? "assistant" : "system";
+          const bubble = document.createElement("div");
+          bubble.className = `bubble ${role}`;
+          const createdAt = item.createdAt ? new Date(item.createdAt).toLocaleString("zh-CN") : "";
+          bubble.innerHTML = `<span class="bubble-meta">${role}${createdAt ? ` · ${createdAt}` : ""}</span>${escapeHtml(item.text || "")}`;
+          refs.timeline.appendChild(bubble);
+        }
+
+        refs.timeline.scrollTop = refs.timeline.scrollHeight;
+      }
+
+      function renderWorkspace() {
+        const workspaceId = state.activeWorkspace?.workspaceId || refs.workspaceId.value || "";
+        const label = refs.workspaceName.value.trim() || workspaceId || "Workspace";
+        refs.workspaceLabel.textContent = label;
+        refs.workspaceAvatar.textContent = label.slice(0, 2).toUpperCase();
+        refs.workspaceHint.textContent = `active: ${workspaceId || "-"} / ${state.activeWorkspace?.agentId || "-"}`;
+      }
+
+      function upsertWorkspaceHistory(workspaceId, workspaceName) {
+        const id = String(workspaceId || "").trim();
+        if (!id) {
+          return;
+        }
+        const name = String(workspaceName || "").trim();
+        const existingIndex = state.workspaceHistory.findIndex((entry) => entry.workspaceId === id);
+        const nextEntry = { workspaceId: id, workspaceName: name };
+        if (existingIndex >= 0) {
+          state.workspaceHistory.splice(existingIndex, 1);
+        }
+        state.workspaceHistory.unshift(nextEntry);
+        state.workspaceHistory = state.workspaceHistory.slice(0, 12);
+        persistWorkspaceHistory();
+        renderWorkspaceMenu();
+      }
+
+      function renderWorkspaceMenu() {
+        refs.workspaceMenu.innerHTML = "";
+        if (!state.workspaceHistory.length) {
+          const empty = document.createElement("div");
+          empty.className = "workspace-menu-empty";
+          empty.textContent = "No workspace history";
+          refs.workspaceMenu.appendChild(empty);
+          return;
+        }
+        const currentId = (state.activeWorkspace?.workspaceId || refs.workspaceId.value || "").trim();
+        for (const item of state.workspaceHistory) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `workspace-menu-item ${currentId && currentId === item.workspaceId ? "active" : ""}`;
+          const title = item.workspaceName || item.workspaceId;
+          button.textContent = title;
+          button.title = `${title} (${item.workspaceId})`;
+          button.addEventListener("click", () => {
+            refs.workspaceId.value = item.workspaceId;
+            if (item.workspaceName) {
+              refs.workspaceName.value = item.workspaceName;
+            }
+            toggleWorkspaceMenu(false);
+            void withGuard("workspace.set-active", async () => {
+              await setActiveWorkspace();
+              await loadAgents();
+              await loadSessions();
+            });
+          });
+          refs.workspaceMenu.appendChild(button);
+        }
+      }
+
+      function toggleWorkspaceMenu(forceOpen) {
+        state.workspaceMenuOpen = typeof forceOpen === "boolean" ? forceOpen : !state.workspaceMenuOpen;
+        refs.workspaceMenu.classList.toggle("hidden", !state.workspaceMenuOpen);
+      }
+
+      function renderProfile() {
+        const email = state.user?.userEmail || "-";
+        const name = state.user?.userName || (email && email !== "-" ? email.split("@")[0] : "User");
+        refs.profileName.textContent = name;
+        refs.profileEmail.textContent = email;
+        refs.profileAvatar.textContent = (name || "U").slice(0, 1).toUpperCase();
+      }
+
+      function renderAgents() {
+        refs.agentNav.innerHTML = "";
+        if (!state.agents.length) {
+          const empty = document.createElement("li");
+          empty.className = "hint";
+          empty.textContent = "No agents";
+          refs.agentNav.appendChild(empty);
+          return;
+        }
+
+        if (!state.selectedAgentId) {
+          state.selectedAgentId = state.agents[0].agentId;
+        }
+
+        for (const agent of state.agents) {
+          const li = document.createElement("li");
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `agent-item ${state.selectedAgentId === agent.agentId ? "active" : ""}`;
+          const icon = agent.icon || "🤖";
+          button.innerHTML = `<span>${escapeHtml(icon)}</span><span class="agent-item-name">${escapeHtml(agent.name || agent.agentName || agent.agentId)}</span><span></span>`;
+          button.addEventListener("click", () => {
+            state.selectedAgentId = agent.agentId;
+            state.selectedSessionKey = "";
+            renderAgents();
+            renderHeroTitle();
+            renderUseCases();
+            renderSessions();
+            void withGuard("sessions.list", loadSessions);
+          });
+          li.appendChild(button);
+          refs.agentNav.appendChild(li);
+        }
+
+        renderHeroTitle();
+        renderUseCases();
+      }
+
+      function renderSessions() {
+        refs.sessionNav.innerHTML = "";
+        if (!state.sessions.length) {
+          const empty = document.createElement("li");
+          empty.className = "hint";
+          empty.textContent = "No sessions";
+          refs.sessionNav.appendChild(empty);
+          return;
+        }
+
+        if (!state.selectedSessionKey) {
+          state.selectedSessionKey = state.sessions[0].sessionKey || state.sessions[0].id || "";
+        }
+
+        for (const session of state.sessions) {
+          const sessionKey = session.sessionKey || session.id || "";
+          const item = document.createElement("li");
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `session-item ${state.selectedSessionKey === sessionKey ? "active" : ""}`;
+          button.textContent = session.name || session.label || sessionKey;
+          button.title = sessionKey;
+          button.addEventListener("click", () => {
+            state.selectedSessionKey = sessionKey;
+            setSessionBadge(sessionKey);
+            renderSessions();
+            void withGuard("chat.history", reloadHistory);
+          });
+          item.appendChild(button);
+          refs.sessionNav.appendChild(item);
+        }
+      }
+
+      function toggleDevPanel(forceOpen) {
+        state.devOpen = typeof forceOpen === "boolean" ? forceOpen : !state.devOpen;
+        refs.devPanel.classList.toggle("open", state.devOpen);
+      }
+
+      async function rpc(method, params = {}) {
+        if (!state.client) {
+          throw new Error("client not initialized");
+        }
+        log(`rpc -> ${method}`);
+        const result = await state.client.request(method, params);
+        setResult({ method, params, result });
+        log(`rpc <- ${method} ok`);
+        return result;
+      }
+
+      async function refreshAuth() {
+        const status = await rpc("oauth.is-logged-in", {});
+        state.loggedIn = Boolean(status && status.loggedIn);
+        const userInfo = await rpc("oauth.get-user-info", {});
+        state.user = userInfo && userInfo.user ? userInfo.user : null;
+        if (state.user?.workspaceId) {
+          if (!refs.workspaceId.value.trim()) {
+            refs.workspaceId.value = state.user.workspaceId;
+          }
+          upsertWorkspaceHistory(state.user.workspaceId, state.user.workspaceName || "");
+        }
+        renderProfile();
+      }
+
+      async function getActiveWorkspace() {
+        const active = await rpc("bustly.workspace.get-active", {});
+        state.activeWorkspace = active;
+        refs.workspaceId.value = active.workspaceId || refs.workspaceId.value;
+        if (!refs.workspaceName.value.trim()) {
+          refs.workspaceName.value = active.workspaceName || refs.workspaceName.value;
+        }
+        upsertWorkspaceHistory(active.workspaceId, active.workspaceName || refs.workspaceName.value);
+        renderWorkspace();
+      }
+
+      async function setActiveWorkspace() {
+        const workspaceId = refs.workspaceId.value.trim();
+        const workspaceName = refs.workspaceName.value.trim();
+        if (!workspaceId) {
+          throw new Error("workspaceId is required");
+        }
+        const active = await rpc("bustly.workspace.set-active", {
+          workspaceId,
+          workspaceName: workspaceName || undefined,
+        });
+        state.activeWorkspace = active;
+        upsertWorkspaceHistory(active.workspaceId || workspaceId, workspaceName || active.workspaceName || "");
+        toggleWorkspaceMenu(false);
+        renderWorkspace();
+      }
+
+      async function loadAgents() {
+        const workspaceId = refs.workspaceId.value.trim() || state.activeWorkspace?.workspaceId || "";
+        if (!workspaceId) {
+          throw new Error("workspaceId is required before listing agents");
+        }
+        const agents = await rpc("bustly.agents.list", { workspaceId });
+        state.agents = Array.isArray(agents) ? agents : [];
+        const hasSelected = state.agents.some((item) => item.agentId === state.selectedAgentId);
+        if ((!state.selectedAgentId || !hasSelected) && state.agents.length) {
+          state.selectedAgentId = state.agents[0].agentId;
+        }
+        renderAgents();
+        if (!state.agents.length) {
+          state.sessions = [];
+          state.selectedSessionKey = "";
+          setSessionBadge("");
+          renderSessions();
+          renderTimeline([]);
+        }
+      }
+
+      async function createAgent() {
+        const workspaceId = refs.workspaceId.value.trim();
+        const name = refs.agentName.value.trim();
+        const icon = refs.agentIcon.value.trim();
+        if (!workspaceId || !name) {
+          throw new Error("workspaceId and agent name are required");
+        }
+        await rpc("bustly.agents.create", { workspaceId, name, icon: icon || undefined });
+        await loadAgents();
+        await loadSessions();
+      }
+
+      async function updateAgent() {
+        const workspaceId = refs.workspaceId.value.trim();
+        const agentId = state.selectedAgentId;
+        const name = refs.agentName.value.trim();
+        const icon = refs.agentIcon.value.trim();
+        if (!workspaceId || !agentId) {
+          throw new Error("workspaceId and selected agent are required");
+        }
+        await rpc("bustly.agents.update", {
+          workspaceId,
+          agentId,
+          name: name || undefined,
+          icon: icon || undefined,
+        });
+        await loadAgents();
+      }
+
+      async function deleteAgent() {
+        const workspaceId = refs.workspaceId.value.trim();
+        const agentId = state.selectedAgentId;
+        if (!workspaceId || !agentId) {
+          throw new Error("workspaceId and selected agent are required");
+        }
+        await rpc("bustly.agents.delete", { workspaceId, agentId });
+        state.selectedAgentId = "";
+        state.selectedSessionKey = "";
+        state.sessions = [];
+        setSessionBadge("");
+        renderSessions();
+        renderTimeline([]);
+        await loadAgents();
+      }
+
+      async function loadSessions() {
+        const workspaceId = refs.workspaceId.value.trim();
+        const agentId = state.selectedAgentId;
+        if (!workspaceId || !agentId) {
+          state.sessions = [];
+          state.selectedSessionKey = "";
+          setSessionBadge("");
+          renderSessions();
+          renderTimeline([]);
+          return;
+        }
+        const sessions = await rpc("bustly.sessions.list", { workspaceId, agentId });
+        state.sessions = Array.isArray(sessions) ? sessions : [];
+        if (!state.selectedSessionKey && state.sessions.length) {
+          state.selectedSessionKey = state.sessions[0].sessionKey || state.sessions[0].id || "";
+        }
+        setSessionBadge(state.selectedSessionKey);
+        renderSessions();
+        await reloadHistory();
+      }
+
+      async function createSession() {
+        const workspaceId = refs.workspaceId.value.trim();
+        const agentId = state.selectedAgentId;
+        const label = refs.sessionLabel.value.trim();
+        if (!workspaceId || !agentId) {
+          throw new Error("workspaceId and agentId are required");
+        }
+        const created = await rpc("bustly.sessions.create", {
+          workspaceId,
+          agentId,
+          label: label || undefined,
+        });
+        state.selectedSessionKey = created.sessionKey;
+        setSessionBadge(state.selectedSessionKey);
+        await loadSessions();
+        renderSessions();
+      }
+
+      async function ensureSessionReady() {
+        if (state.selectedSessionKey) {
+          return state.selectedSessionKey;
+        }
+        await createSession();
+        return state.selectedSessionKey;
+      }
+
+      async function reloadHistory() {
+        const sessionKey = state.selectedSessionKey;
+        if (!sessionKey) {
+          renderTimeline([]);
+          return;
+        }
+        const history = await rpc("chat.history", { sessionKey, limit: 60 });
+        renderTimeline(normalizeHistoryPayload(history));
+      }
+
+      async function sendChat(messageOverride) {
+        if (!ensureConnectedForChat()) {
+          return;
+        }
+        const sessionKey = await ensureSessionReady();
+        const message = (messageOverride || refs.chatMessage.value || "").trim();
+        if (!message) {
+          throw new Error("message is required");
+        }
+
+        const idempotencyKey = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        setRunState("warn", "run: sending");
+
+        const sendResult = await rpc("chat.send", {
+          sessionKey,
+          message,
+          idempotencyKey,
+        });
+
+        refs.chatMessage.value = "";
+        updateSendButtonState();
+
+        const runId = sendResult?.runId || idempotencyKey;
+        state.lastRunId = runId;
+        setRunState("idle", `run: ${runId}`);
+
+        await rpc("agent.wait", { runId, timeoutMs: 120000 });
+        setRunState("ok", "run: finished");
+        await reloadHistory();
+      }
+
+      async function resolveLink() {
+        const result = await rpc("bustly.links.resolve", {
+          kind: refs.linkKind.value,
+          workspaceId: refs.workspaceId.value.trim() || undefined,
+        });
+        const url = result?.url || "";
+        state.resolvedLink = url;
+        refs.resolvedLink.textContent = url || "-";
+        refs.resolvedLink.href = url || "#";
+      }
+
+      async function reportIssue() {
+        const result = await rpc("bustly.runtime.report-issue", {
+          outputDir: refs.reportOutputDir.value.trim() || undefined,
+        });
+        refs.reportHint.textContent = `archive: ${result?.archivePath || "-"}`;
+      }
+
+      async function withGuard(taskName, fn) {
+        try {
+          await fn();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          log(`${taskName} failed: ${message}`);
+          setResult({ task: taskName, error: message, detail: error?.details || undefined });
+          const lower = String(message || "").toLowerCase();
+          if (
+            lower.includes("gateway not connected") ||
+            lower.includes("client not initialized") ||
+            lower.includes("socket not open")
+          ) {
+            setRunState("warn", "run: connect required");
+            toggleDevPanel(true);
+            return;
+          }
+          if (taskName.startsWith("connect")) {
+            setRunState("error", "run: connect failed");
+            refs.workspaceHint.textContent = `active: connect failed (${message})`;
+            toggleDevPanel(true);
+            return;
+          }
+          if (taskName.startsWith("chat.") || taskName.startsWith("chat")) {
+            setRunState("error", "run: error");
+          }
+        }
+      }
+
+      async function bootstrapAfterConnect() {
+        await withGuard("refreshAuth", refreshAuth);
+        await withGuard("getActiveWorkspace", getActiveWorkspace);
+        await withGuard("loadAgents", loadAgents);
+        await withGuard("loadSessions", loadSessions);
+      }
+
+      async function connectGateway() {
+        setRunState("warn", "run: connecting");
+        state.client = new GatewayWsClient({
+          onLog: log,
+          onStateChange: setConnState,
+          onHello: (payload) => {
+            state.hello = payload;
+            setResult({ hello: payload });
+          },
+          onEvent: (event) => {
+            if (event.event === "chat") {
+              const payload = event.payload || {};
+              log(`event chat run=${payload.runId || "-"} state=${payload.state || "event"}`);
+            } else {
+              log(`event ${event.event}`);
+            }
+          },
+        });
+
+        persistLocalSettings();
+        await state.client.connect({
+          url: refs.wsUrl.value.trim(),
+          token: refs.token.value.trim(),
+          password: refs.password.value.trim(),
+        });
+        await bootstrapAfterConnect();
+        setRunState("ok", "run: connected");
+      }
+
+      async function disconnectGateway() {
+        if (state.client) {
+          await state.client.disconnect();
+        }
+        setConnState(false);
+      }
+
+      function restoreLocalSettings() {
+        try {
+          const wsUrl = localStorage.getItem("bustly.cloud.wsUrl");
+          const token = localStorage.getItem("bustly.cloud.token");
+          if (wsUrl) refs.wsUrl.value = wsUrl;
+          if (token) refs.token.value = token;
+        } catch {
+          // ignore
+        }
+      }
+
+      function restoreWorkspaceHistory() {
+        try {
+          const raw = localStorage.getItem("bustly.cloud.workspaceHistory");
+          if (!raw) {
+            state.workspaceHistory = [];
+            return;
+          }
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) {
+            state.workspaceHistory = [];
+            return;
+          }
+          state.workspaceHistory = parsed
+            .map((item) => ({
+              workspaceId: String(item?.workspaceId || "").trim(),
+              workspaceName: String(item?.workspaceName || "").trim(),
+            }))
+            .filter((item) => item.workspaceId)
+            .slice(0, 12);
+        } catch {
+          state.workspaceHistory = [];
+        }
+      }
+
+      function persistLocalSettings() {
+        try {
+          localStorage.setItem("bustly.cloud.wsUrl", refs.wsUrl.value.trim());
+          localStorage.setItem("bustly.cloud.token", refs.token.value.trim());
+        } catch {
+          // ignore
+        }
+      }
+
+      function persistWorkspaceHistory() {
+        try {
+          localStorage.setItem("bustly.cloud.workspaceHistory", JSON.stringify(state.workspaceHistory));
+        } catch {
+          // ignore
+        }
+      }
+
+      function bindEvents() {
+        refs.toggleDevBtn.addEventListener("click", () => toggleDevPanel());
+        refs.workspacePill.addEventListener("click", () => {
+          toggleWorkspaceMenu();
+        });
+        document.getElementById("refreshWorkspaceBtn").addEventListener("click", (event) => {
+          event.stopPropagation();
+          toggleWorkspaceMenu();
+        });
+        refs.workspaceMenu.addEventListener("click", (event) => {
+          event.stopPropagation();
+        });
+        document.addEventListener("click", (event) => {
+          if (!state.workspaceMenuOpen) {
+            return;
+          }
+          const target = event.target;
+          if (!(target instanceof Node)) {
+            return;
+          }
+          if (!refs.workspaceMenu.contains(target) && !refs.workspacePill.contains(target)) {
+            toggleWorkspaceMenu(false);
+          }
+        });
+
+        document.getElementById("connectBtn").addEventListener("click", () =>
+          withGuard("connect", connectGateway),
+        );
+        refs.quickConnectBtn.addEventListener("click", () =>
+          withGuard("connect.quick", async () => {
+            if (!refs.token.value.trim() && !refs.password.value.trim()) {
+              toggleDevPanel(true);
+              setRunState("warn", "run: token required");
+              throw new Error("gateway token/password required");
+            }
+            await connectGateway();
+          }),
+        );
+
+        document.getElementById("disconnectBtn").addEventListener("click", () =>
+          withGuard("disconnect", disconnectGateway),
+        );
+
+        document.getElementById("refreshAuthBtn").addEventListener("click", () => withGuard("refreshAuth", refreshAuth));
+        document.getElementById("oauthLoginBtn").addEventListener("click", () =>
+          withGuard("oauth.login", async () => {
+            const params = {};
+            if (window.location.origin && window.location.origin.startsWith("http")) {
+              params.publicOrigin = window.location.origin;
+            }
+            const result = await rpc("oauth.login", params);
+            if (result.loginTraceId) {
+              refs.oauthTraceId.value = result.loginTraceId;
+            }
+            if (result.loginUrl) {
+              window.open(result.loginUrl, "_blank", "noopener");
+            }
+          }),
+        );
+
+        document.getElementById("oauthPollBtn").addEventListener("click", () =>
+          withGuard("oauth.poll", async () => {
+            const loginTraceId = refs.oauthTraceId.value.trim();
+            if (!loginTraceId) {
+              throw new Error("oauth trace id is required");
+            }
+            const result = await rpc("oauth.poll", { loginTraceId });
+            if (result.pending === false) {
+              await refreshAuth();
+            }
+          }),
+        );
+
+        document.getElementById("oauthLogoutBtn").addEventListener("click", () => withGuard("oauth.logout", () => rpc("oauth.logout", {})));
+
+        document.getElementById("getActiveWorkspaceBtn").addEventListener("click", () => withGuard("workspace.get-active", getActiveWorkspace));
+        document.getElementById("setActiveWorkspaceBtn").addEventListener("click", () =>
+          withGuard("workspace.set-active", async () => {
+            await setActiveWorkspace();
+            await loadAgents();
+            await loadSessions();
+          }),
+        );
+
+        document.getElementById("createAgentBtn").addEventListener("click", () =>
+          withGuard("agents.create.quick", async () => {
+            if (!refs.agentName.value.trim()) {
+              const quickName = window.prompt("Agent name", "New Agent");
+              if (!quickName) {
+                return;
+              }
+              refs.agentName.value = quickName;
+            }
+            await createAgent();
+          }),
+        );
+
+        document.getElementById("listAgentsBtn").addEventListener("click", () => withGuard("agents.list", loadAgents));
+        document.getElementById("updateAgentBtn").addEventListener("click", () => withGuard("agents.update", updateAgent));
+        document.getElementById("deleteAgentBtn").addEventListener("click", () => withGuard("agents.delete", deleteAgent));
+
+        document.getElementById("listSessionsBtn").addEventListener("click", () => withGuard("sessions.list", loadSessions));
+        document.getElementById("createSessionBtn").addEventListener("click", () => withGuard("sessions.create", createSession));
+        document.getElementById("createSessionBtnDev").addEventListener("click", () => withGuard("sessions.create", createSession));
+
+        document.getElementById("reloadHistoryBtn").addEventListener("click", () => withGuard("chat.history", reloadHistory));
+
+        refs.chatMessage.addEventListener("input", () => {
+          updateSendButtonState();
+        });
+
+        refs.chatMessage.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            void withGuard("chat.send", () => sendChat());
+          }
+        });
+
+        refs.sendBtn.addEventListener("click", () => withGuard("chat.send", () => sendChat()));
+
+        document.getElementById("resolveLinkBtn").addEventListener("click", () => withGuard("links.resolve", resolveLink));
+        document.getElementById("openResolvedLinkBtn").addEventListener("click", () => {
+          if (state.resolvedLink) {
+            window.open(state.resolvedLink, "_blank", "noopener");
+          }
+        });
+        document.getElementById("reportIssueBtn").addEventListener("click", () => withGuard("runtime.report-issue", reportIssue));
+
+        document.getElementById("manualCallBtn").addEventListener("click", () =>
+          withGuard("manualRpc", async () => {
+            const method = refs.manualMethod.value.trim();
+            if (!method) {
+              throw new Error("method is required");
+            }
+            let params = {};
+            if (refs.manualParams.value.trim()) {
+              params = JSON.parse(refs.manualParams.value);
+            }
+            await rpc(method, params);
+          }),
+        );
+
+        refs.useCaseBar.addEventListener("click", (event) => {
+          const target = event.target.closest("button.use-case-btn");
+          if (!target) {
+            return;
+          }
+          const label = target.textContent.replace("↗", "").trim();
+          const prompt = USE_CASE_PROMPTS[label] || label;
+          void withGuard("chat.send.usecase", () => sendChat(prompt));
+        });
+      }
+
+      restoreLocalSettings();
+      restoreWorkspaceHistory();
+      toggleDevPanel(false);
+      toggleWorkspaceMenu(false);
+      setConnState(false);
+      setRunState("idle", "run: idle");
+      setSessionBadge("");
+      updateSendButtonState();
+      renderWorkspace();
+      renderWorkspaceMenu();
+      renderProfile();
+      renderAgents();
+      renderSessions();
+      renderUseCases();
+      renderTimeline([]);
+      bindEvents();
+      log("cloud web shell ready");
+    </script>
+  </body>
+</html>

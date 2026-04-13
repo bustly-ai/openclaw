@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { GatewayAuthMode, GatewayTailscaleMode } from "../../config/config.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
+import { ensureBustlyCloudReady } from "../../bustly/workspace-runtime.js";
 import {
   CONFIG_PATH,
   loadConfig,
@@ -50,6 +51,7 @@ type GatewayRunOpts = {
   rawStreamPath?: unknown;
   dev?: boolean;
   reset?: boolean;
+  cloud?: boolean;
 };
 
 const gatewayLog = createSubsystemLogger("gateway");
@@ -70,6 +72,7 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
   "allowUnconfigured",
   "dev",
   "reset",
+  "cloud",
   "force",
   "verbose",
   "claudeCliLogs",
@@ -101,6 +104,11 @@ function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): Gate
 async function runGatewayCommand(opts: GatewayRunOpts) {
   const isDevProfile = process.env.OPENCLAW_PROFILE?.trim().toLowerCase() === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
+  if (opts.cloud && devMode) {
+    defaultRuntime.error("Cannot use --cloud with --dev.");
+    defaultRuntime.exit(1);
+    return;
+  }
   if (opts.reset && !devMode) {
     defaultRuntime.error("Use --reset with --dev.");
     defaultRuntime.exit(1);
@@ -137,6 +145,14 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
   if (devMode) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
+  }
+  if (opts.cloud) {
+    const cloudBinding = await ensureBustlyCloudReady({
+      userAgent: "openclaw-cloud",
+    });
+    gatewayLog.info(
+      `cloud mode preflight ready workspaceId=${cloudBinding.workspaceId} agentId=${cloudBinding.agentId} workspaceDir=${cloudBinding.workspaceDir}`,
+    );
   }
 
   const cfg = loadConfig();
@@ -375,6 +391,11 @@ export function addGatewayRunCommand(cmd: Command): Command {
     .option(
       "--allow-unconfigured",
       "Allow gateway start without gateway.mode=local in config",
+      false,
+    )
+    .option(
+      "--cloud",
+      "Enable Bustly cloud mode preflight (OAuth workspace + provider/config + bootstrap sync)",
       false,
     )
     .option("--dev", "Create a dev config + workspace if missing (no BOOTSTRAP.md)", false)

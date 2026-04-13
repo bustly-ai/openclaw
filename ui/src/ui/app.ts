@@ -938,7 +938,8 @@ export class OpenClawApp extends LitElement {
     this.configActiveSubsection = null;
   }
 
-  handleBustlyOpenSettings() {
+  async handleBustlyOpenSettings() {
+    this.bustlyUserMenuOpen = false;
     const electronAPI = (
       window as unknown as {
         electronAPI?: { bustlyOpenSettings?: () => Promise<{ success: boolean; error?: string }> };
@@ -948,7 +949,28 @@ export class OpenClawApp extends LitElement {
       void electronAPI.bustlyOpenSettings();
       return;
     }
-    console.warn("[Bustly Auth] Settings link unavailable outside Electron.");
+    if (!this.client) {
+      console.warn("[Bustly Auth] Settings link unavailable outside Electron.");
+      return;
+    }
+    try {
+      const result = await this.client.request<{
+        kind: string;
+        url: string;
+      }>("bustly.links.resolve", {
+        kind: "settings",
+      });
+      const url = typeof result.url === "string" ? result.url.trim() : "";
+      if (!url) {
+        throw new Error("missing settings URL");
+      }
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      console.warn(
+        "[Bustly Auth] Settings link unavailable:",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 
   async handleBustlyReonboard() {

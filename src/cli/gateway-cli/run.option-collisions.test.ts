@@ -14,11 +14,16 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
   escalatedToSigkill: false,
 }));
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
+const ensureBustlyCloudReady = vi.fn(async () => ({
+  workspaceId: "workspace-1",
+  agentId: "bustly-workspace-1-overview",
+  workspaceDir: "/tmp/workspaces/workspace-1/agents/overview",
+}));
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { defaultRuntime, resetRuntimeCapture, runtimeErrors } = createCliRuntimeCapture();
 
 vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
@@ -87,6 +92,10 @@ vi.mock("./dev.js", () => ({
   ensureDevGatewayConfig: (opts?: unknown) => ensureDevGatewayConfig(opts),
 }));
 
+vi.mock("../../bustly/workspace-runtime.js", () => ({
+  ensureBustlyCloudReady: (opts?: unknown) => ensureBustlyCloudReady(opts),
+}));
+
 vi.mock("./run-loop.js", () => ({
   runGatewayLoop: (params: { start: () => Promise<unknown> }) => runGatewayLoop(params),
 }));
@@ -105,6 +114,7 @@ describe("gateway run option collisions", () => {
     setVerbose.mockClear();
     forceFreePortAndWait.mockClear();
     ensureDevGatewayConfig.mockClear();
+    ensureBustlyCloudReady.mockClear();
     runGatewayLoop.mockClear();
   });
 
@@ -151,5 +161,45 @@ describe("gateway run option collisions", () => {
         bind: "loopback",
       }),
     );
+  });
+
+  it("runs bustly cloud preflight before startup when --cloud is enabled", async () => {
+    await runGatewayCli(["gateway", "run", "--cloud", "--allow-unconfigured"]);
+
+    expect(ensureBustlyCloudReady).toHaveBeenCalledWith({
+      userAgent: "openclaw-cloud",
+    });
+    expect(startGatewayServer).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects --cloud with --dev", async () => {
+    await expect(runGatewayCli(["gateway", "run", "--cloud", "--dev"])).rejects.toThrow(
+      "__exit__:1",
+    );
+    expect(runtimeErrors.some((entry) => entry.includes("Cannot use --cloud with --dev."))).toBe(
+      true,
+    );
+    expect(ensureBustlyCloudReady).not.toHaveBeenCalled();
+    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+    expect(startGatewayServer).not.toHaveBeenCalled();
+  });
+
+  it("runs bustly cloud preflight for top-level gateway command", async () => {
+    await runGatewayCli(["gateway", "--cloud", "--allow-unconfigured"]);
+
+    expect(ensureBustlyCloudReady).toHaveBeenCalledWith({
+      userAgent: "openclaw-cloud",
+    });
+    expect(startGatewayServer).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects top-level gateway --cloud with --dev", async () => {
+    await expect(runGatewayCli(["gateway", "--cloud", "--dev"])).rejects.toThrow("__exit__:1");
+    expect(runtimeErrors.some((entry) => entry.includes("Cannot use --cloud with --dev."))).toBe(
+      true,
+    );
+    expect(ensureBustlyCloudReady).not.toHaveBeenCalled();
+    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+    expect(startGatewayServer).not.toHaveBeenCalled();
   });
 });

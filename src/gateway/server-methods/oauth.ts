@@ -166,6 +166,54 @@ export const oauthPoll: GatewayRequestHandler = async ({
 };
 
 /**
+ * Cancel pending OAuth login flow.
+ */
+export const oauthCancel: GatewayRequestHandler = async ({
+  params,
+  respond,
+}: Pick<GatewayRequestHandlerOptions, "params" | "respond">) => {
+  try {
+    const loginTraceId = typeof params?.loginTraceId === "string" ? params.loginTraceId.trim() : "";
+    if (loginTraceId) {
+      pendingOAuthLogins.delete(loginTraceId);
+      const state = BustlyOAuth.readBustlyOAuthState();
+      if (state?.loginTraceId === loginTraceId) {
+        BustlyOAuth.updateBustlyOAuthState({
+          loginTraceId: undefined,
+          authCode: undefined,
+          expiresAt: undefined,
+        });
+      }
+    } else {
+      pendingOAuthLogins.clear();
+      const state = BustlyOAuth.readBustlyOAuthState();
+      if (state?.loginTraceId || state?.authCode || state?.expiresAt) {
+        BustlyOAuth.updateBustlyOAuthState({
+          loginTraceId: undefined,
+          authCode: undefined,
+          expiresAt: undefined,
+        });
+      }
+    }
+
+    respond(
+      true,
+      {
+        canceled: true,
+        loginTraceId: loginTraceId || null,
+      },
+      undefined,
+    );
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    respond(false, undefined, {
+      code: "OAUTH_ERROR",
+      message: `Failed to cancel login: ${errorMsg}`,
+    });
+  }
+};
+
+/**
  * Check if user is logged in to Bustly
  */
 export const oauthIsLoggedIn: GatewayRequestHandler = async ({
@@ -222,6 +270,7 @@ export const oauthLogout: GatewayRequestHandler = async ({
 export const oauthHandlers = {
   "oauth.login": oauthLogin,
   "oauth.poll": oauthPoll,
+  "oauth.cancel": oauthCancel,
   "oauth.is-logged-in": oauthIsLoggedIn,
   "oauth.get-user-info": oauthGetUserInfo,
   "oauth.logout": oauthLogout,

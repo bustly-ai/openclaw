@@ -55,6 +55,14 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "tools.catalog",
     "agents.list",
     "agent.identity.get",
+    "bustly.supabase.get-config",
+    "bustly.agents.list",
+    "bustly.sessions.list",
+    "bustly.links.resolve",
+    "bustly.runtime.health",
+    "bustly.workspace.get-active",
+    "oauth.is-logged-in",
+    "oauth.get-user-info",
     "skills.status",
     "voicewake.get",
     "sessions.list",
@@ -89,6 +97,17 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "tts.setProvider",
     "voicewake.set",
     "node.invoke",
+    "bustly.agents.create",
+    "bustly.agents.update",
+    "bustly.agents.delete",
+    "bustly.sessions.create",
+    "bustly.runtime.report-issue",
+    "bustly.runtime.manifest.apply",
+    "bustly.workspace.set-active",
+    "oauth.login",
+    "oauth.poll",
+    "oauth.cancel",
+    "oauth.logout",
     "chat.send",
     "chat.retry",
     "chat.abort",
@@ -120,7 +139,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   ],
 };
 
-const ADMIN_METHOD_PREFIXES = ["exec.approvals.", "config.", "wizard.", "update."] as const;
+const ADMIN_METHOD_PREFIXES = ["exec.approvals.", "config.", "wizard.", "update.", "oauth."] as const;
 
 const METHOD_SCOPE_BY_NAME = new Map<string, OperatorScope>(
   Object.entries(METHOD_SCOPE_GROUPS).flatMap(([scope, methods]) =>

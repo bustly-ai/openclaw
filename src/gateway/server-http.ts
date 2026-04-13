@@ -9,6 +9,7 @@ import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
 import * as BustlyOAuth from "../bustly-oauth.js";
+import { synchronizeBustlyWorkspaceContext } from "../bustly/workspace-runtime.js";
 import {
   A2UI_PATH,
   CANVAS_HOST_PATH,
@@ -101,6 +102,16 @@ type BustlyTokenApiResponse = {
       };
       supabase_session?: {
         access_token?: string;
+        refresh_token?: string;
+        expires_in?: number;
+        expires_at?: number;
+        token_type?: string;
+        user?: {
+          user_metadata?: {
+            avatar_url?: string;
+            picture?: string;
+          };
+        };
       };
     };
   };
@@ -221,7 +232,8 @@ async function handleBustlyOAuthCallbackHttpRequest(
   try {
     BustlyOAuth.setBustlyAuthCode(code);
     const apiResponse = await exchangeBustlyAuthCode(code);
-    const supabaseAccessToken = apiResponse.data.extras?.supabase_session?.access_token ?? "";
+    const supabaseSession = apiResponse.data.extras?.supabase_session;
+    const supabaseAccessToken = supabaseSession?.access_token ?? "";
     if (!supabaseAccessToken) {
       throw new Error("Missing Supabase access token in API response");
     }
@@ -241,7 +253,15 @@ async function handleBustlyOAuthCallbackHttpRequest(
         userId: apiResponse.data.userId,
         userName: apiResponse.data.userName,
         userEmail: apiResponse.data.userEmail,
+        userAvatarUrl:
+          supabaseSession?.user?.user_metadata?.avatar_url?.trim()
+          || supabaseSession?.user?.user_metadata?.picture?.trim()
+          || undefined,
         userAccessToken: supabaseAccessToken,
+        userRefreshToken: supabaseSession?.refresh_token,
+        sessionExpiresIn: supabaseSession?.expires_in,
+        sessionExpiresAt: supabaseSession?.expires_at,
+        sessionTokenType: supabaseSession?.token_type,
         workspaceId: apiResponse.data.workspaceId,
         skills: filteredSkills,
       },
@@ -252,6 +272,18 @@ async function handleBustlyOAuthCallbackHttpRequest(
           }
         : undefined,
     });
+    try {
+      await synchronizeBustlyWorkspaceContext({
+        workspaceId: apiResponse.data.workspaceId,
+        allowCreateConfig: true,
+        userAgent: "openclaw-cloud",
+      });
+    } catch (syncError) {
+      console.warn(
+        "[BustlyOAuth] Gateway callback runtime sync failed:",
+        syncError instanceof Error ? syncError.message : String(syncError),
+      );
+    }
 
     console.log("[BustlyOAuth] Login completed via gateway HTTP callback");
     sendBustlyOAuthHtml(res, {

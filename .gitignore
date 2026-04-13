@@ -43,6 +43,8 @@ apps/macos/.swiftpm/
 apps/shared/MoltbotKit/.swiftpm/
 apps/shared/OpenClawKit/.swiftpm/
 Core/
+!extensions/openclaw-lark/src/core/
+!extensions/openclaw-lark/src/core/**
 apps/ios/*.xcodeproj/
 apps/ios/*.xcworkspace/
 apps/ios/.swiftpm/
@@ -117,6 +119,12 @@ skills/.bustly-default-enabled.json
 
 # Local env backups
 apps/electron/.env*.bak-*
+apps/electron/.env.test.backup.*
+
+# Terraform local state and plugin cache
+infra/terraform/**/.terraform/
+infra/terraform/**/*.tfstate
+infra/terraform/**/*.tfstate.*
 
 # Eclipse
 **/.project

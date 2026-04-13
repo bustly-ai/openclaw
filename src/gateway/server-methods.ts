@@ -7,6 +7,10 @@ import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { browserHandlers } from "./server-methods/browser.js";
+import { bustlyAgentsHandlers } from "./server-methods/bustly-agents.js";
+import { bustlyLinksHandlers } from "./server-methods/bustly-links.js";
+import { bustlyRuntimeHandlers } from "./server-methods/bustly-runtime.js";
+import { bustlyWorkspaceHandlers } from "./server-methods/bustly-workspace.js";
 import { channelsHandlers } from "./server-methods/channels.js";
 import { chatHandlers } from "./server-methods/chat.js";
 import { configHandlers } from "./server-methods/config.js";
@@ -93,6 +97,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...agentHandlers,
   ...agentsHandlers,
   ...browserHandlers,
+  ...bustlyAgentsHandlers,
+  ...bustlyLinksHandlers,
+  ...bustlyRuntimeHandlers,
+  ...bustlyWorkspaceHandlers,
   ...oauthHandlers,
 };
 

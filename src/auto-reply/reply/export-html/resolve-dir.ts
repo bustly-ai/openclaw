@@ -20,6 +20,13 @@ const REQUIRED_EXPORT_HTML_FILES = [
 
 let cachedExportHtmlDir: string | undefined;
 
+function readProcessResourcesPath(): string | undefined {
+  const maybeProcess = process as NodeJS.Process & { resourcesPath?: unknown };
+  return typeof maybeProcess.resourcesPath === "string"
+    ? maybeProcess.resourcesPath
+    : undefined;
+}
+
 function looksLikeExportHtmlDir(dir: string): boolean {
   return REQUIRED_EXPORT_HTML_FILES.every((file) => fs.existsSync(path.join(dir, file)));
 }
@@ -44,7 +51,7 @@ export function resolveExportHtmlDir(
   const moduleDir = path.dirname(fileURLToPath(moduleUrl));
   const cwd = opts.cwd ?? process.cwd();
   const argv1 = opts.argv1 ?? process.argv[1];
-  const resourcesPath = opts.resourcesPath ?? process.resourcesPath;
+  const resourcesPath = opts.resourcesPath ?? readProcessResourcesPath();
   const packageRoot = resolveOpenClawPackageRootSync({ moduleUrl, cwd, argv1 });
   const candidates = new Set<string>();
 
