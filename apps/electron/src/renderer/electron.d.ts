@@ -128,6 +128,8 @@ interface BustlyWorkspaceAgent {
   agentId: string;
   agentName: string;
   name: string;
+  description?: string;
+  identityMarkdown?: string;
   icon?: string;
   skills?: string[];
   isMain: boolean;
@@ -195,12 +197,14 @@ interface ElectronAPI {
   ) => Promise<{ success: boolean; agentId?: string; error?: string }>;
   bustlyListAgents: (workspaceId?: string) => Promise<BustlyWorkspaceAgent[]>;
   bustlyListAgentSessions: (workspaceId: string, agentId: string) => Promise<BustlyWorkspaceAgentSession[]>;
-  bustlyCreateAgent: (
-    workspaceId: string,
-    name: string,
-    icon?: string,
-    workspaceName?: string,
-  ) => Promise<{ success: boolean; agentId?: string; error?: string }>;
+  bustlyCreateAgent: (params: {
+    workspaceId: string;
+    name: string;
+    description?: string;
+    icon?: string;
+    workspaceName?: string;
+    skills?: string[] | null;
+  }) => Promise<{ success: boolean; agentId?: string; error?: string }>;
   bustlyCreateAgentSession: (params: {
     workspaceId: string;
     agentId: string;
@@ -212,6 +216,7 @@ interface ElectronAPI {
     workspaceId: string;
     agentId: string;
     name?: string;
+    identityMarkdown?: string;
     icon?: string;
     skills?: string[] | null;
   }) => Promise<{ success: boolean; error?: string }>;

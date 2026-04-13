@@ -10,6 +10,7 @@ type ResolveAgentPresentationParams = {
   workspaceId?: string | null;
   agentId?: string | null;
   name?: string | null;
+  description?: string | null;
   icon?: string | null;
 };
 
@@ -31,7 +32,7 @@ export function resolveAgentPresentation(params: ResolveAgentPresentationParams)
   const avatarName = isAgentAvatarFile(params.icon) ? params.icon?.trim() || null : preset?.avatar ?? null;
   const avatarSrc = explicitAvatarSrc ?? getAgentAvatarSrc(preset?.avatar);
   const name = params.name?.trim() || preset?.label || "Agent";
-  const description = preset?.description?.trim() || "How can I help you today?";
+  const description = params.description?.trim() || preset?.description?.trim() || "How can I help you today?";
   const iconId = (
     preset?.icon ||
     (!isAgentAvatarFile(params.icon) ? params.icon?.trim() : null) ||

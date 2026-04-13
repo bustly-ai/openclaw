@@ -46,6 +46,7 @@ import { useGlobalLoader } from "../../providers/GlobalLoaderProvider";
 import AgentSettingsModal, { type AgentSettingsSkill } from "./AgentSettingsModal";
 import { isAgentAvatarFile } from "../../lib/agent-avatars";
 import { resolveAgentIconComponent, resolveAgentPresentation } from "../../lib/agent-presentation";
+import { fetchSkillCatalog } from "../../lib/skill-catalog";
 
 type ChatRole = "user" | "assistant" | "thinking" | "system";
 
@@ -839,7 +840,10 @@ export default function ChatPage() {
   const [agentSettingsTab, setAgentSettingsTab] = useState<"identity" | "skills">("skills");
   const [agentSettingsSaving, setAgentSettingsSaving] = useState(false);
   const [availableSkills, setAvailableSkills] = useState<AgentSettingsSkill[]>([]);
+  const [availableSkillsLoading, setAvailableSkillsLoading] = useState(false);
+  const [availableSkillsError, setAvailableSkillsError] = useState<string | null>(null);
   const [draftAgentName, setDraftAgentName] = useState("");
+  const [draftAgentIdentityMarkdown, setDraftAgentIdentityMarkdown] = useState("");
   const [draftAgentAvatarName, setDraftAgentAvatarName] = useState<string | null>(null);
   const [draftAgentSkills, setDraftAgentSkills] = useState<string[] | null>(null);
   const [avatarSelectionDirty, setAvatarSelectionDirty] = useState(false);
@@ -910,9 +914,18 @@ export default function ChatPage() {
         workspaceId: activeWorkspaceId,
         agentId: currentAgentId,
         name: currentAgentSummary?.name || currentScenarioLabel,
+        description: currentAgentSummary?.description,
         icon: currentAgentSummary?.icon || currentScenarioIconId,
       }),
-    [activeWorkspaceId, currentAgentId, currentAgentSummary?.icon, currentAgentSummary?.name, currentScenarioIconId, currentScenarioLabel],
+    [
+      activeWorkspaceId,
+      currentAgentId,
+      currentAgentSummary?.description,
+      currentAgentSummary?.icon,
+      currentAgentSummary?.name,
+      currentScenarioIconId,
+      currentScenarioLabel,
+    ],
   );
   const currentUseCases = useMemo(
     () => currentAgentPresentation.useCases,
@@ -2279,6 +2292,11 @@ export default function ChatPage() {
       return;
     }
     setDraftAgentName(currentAgentSummary?.name?.trim() || currentAgentPresentation.name);
+    setDraftAgentIdentityMarkdown(
+      currentAgentSummary?.identityMarkdown?.trim()
+        || currentAgentSummary?.description?.trim()
+        || currentAgentPresentation.description,
+    );
     setDraftAgentAvatarName(
       isAgentAvatarFile(currentAgentSummary?.icon)
         ? currentAgentSummary?.icon?.trim() || null
@@ -2288,8 +2306,11 @@ export default function ChatPage() {
     setAvatarSelectionDirty(false);
   }, [
     currentAgentId,
+    currentAgentPresentation.description,
     currentAgentPresentation.avatarName,
     currentAgentPresentation.name,
+    currentAgentSummary?.description,
+    currentAgentSummary?.identityMarkdown,
     currentAgentSummary?.icon,
     currentAgentSummary?.name,
     currentAgentSummary?.skills,
@@ -2302,38 +2323,35 @@ export default function ChatPage() {
   }, [isOverviewPage]);
 
   useEffect(() => {
-    if (!isAgentSettingsModalOpen || !clientRef.current) {
+    if (!isAgentSettingsModalOpen || !currentAgentId) {
       return;
     }
     let disposed = false;
-    void clientRef.current.request<{
-      skills?: Array<{
-        name: string;
-        description: string;
-        source: string;
-        eligible: boolean;
-      }>;
-    }>("skills.status", {}).then((report) => {
+    setAvailableSkillsLoading(true);
+    setAvailableSkillsError(null);
+    setAvailableSkills([]);
+    void fetchSkillCatalog({
+      scope: `agent-settings-${currentAgentId}`,
+    }).then((items) => {
       if (disposed) {
         return;
       }
-      setAvailableSkills(
-        (report.skills ?? []).map((skill) => ({
-          name: skill.name,
-          description: skill.description,
-          source: skill.source.replace(/^openclaw-/, ""),
-          eligible: skill.eligible !== false,
-        })),
-      );
-    }).catch(() => {
+      setAvailableSkills(items);
+    }).catch((error) => {
+      if (disposed) {
+        return;
+      }
+      setAvailableSkills([]);
+      setAvailableSkillsError(error instanceof Error ? error.message : String(error));
+    }).finally(() => {
       if (!disposed) {
-        setAvailableSkills([]);
+        setAvailableSkillsLoading(false);
       }
     });
     return () => {
       disposed = true;
     };
-  }, [connected, isAgentSettingsModalOpen]);
+  }, [currentAgentId, isAgentSettingsModalOpen]);
 
   useEffect(() => {
     if (!gatewayReady) {
@@ -3070,24 +3088,22 @@ export default function ChatPage() {
     });
   }, [availableSkills]);
 
-  const handleEnableAllDraftSkills = useCallback(() => {
-    setDraftAgentSkills(null);
-  }, []);
-
-  const handleDisableAllDraftSkills = useCallback(() => {
-    setDraftAgentSkills([]);
-  }, []);
-
   const handleSaveAgentSettings = useCallback(async () => {
     if (!activeWorkspaceId || !currentAgentId || agentSettingsSaving) {
       return;
     }
     const trimmedName = draftAgentName.trim() || currentAgentPresentation.name;
     const nameChanged = trimmedName !== (currentAgentSummary?.name?.trim() || currentAgentPresentation.name);
+    const baselineIdentityMarkdown =
+      currentAgentSummary?.identityMarkdown?.trim()
+      || currentAgentSummary?.description?.trim()
+      || currentAgentPresentation.description;
+    const nextIdentityMarkdown = draftAgentIdentityMarkdown.trim();
+    const identityMarkdownChanged = nextIdentityMarkdown !== baselineIdentityMarkdown;
     const baselineSkills = normalizeSkillSelection(currentAgentSummary?.skills);
     const skillsChanged = !areSkillSelectionsEqual(draftAgentSkills, baselineSkills);
     const nextAvatarName = avatarSelectionDirty ? draftAgentAvatarName?.trim() || null : undefined;
-    if (!nameChanged && !skillsChanged && nextAvatarName === undefined) {
+    if (!nameChanged && !identityMarkdownChanged && !skillsChanged && nextAvatarName === undefined) {
       setIsAgentSettingsModalOpen(false);
       return;
     }
@@ -3097,6 +3113,7 @@ export default function ChatPage() {
         workspaceId: activeWorkspaceId,
         agentId: currentAgentId,
         ...(nameChanged ? { name: trimmedName } : {}),
+        ...(identityMarkdownChanged ? { identityMarkdown: nextIdentityMarkdown } : {}),
         ...(skillsChanged ? { skills: draftAgentSkills } : {}),
         ...(nextAvatarName !== undefined ? { icon: nextAvatarName ?? undefined } : {}),
       });
@@ -3104,15 +3121,21 @@ export default function ChatPage() {
         setError(result.error ?? "Failed to save agent settings.");
         return;
       }
-      setCurrentAgentSummary((current) => current
-        ? {
-            ...current,
-            name: trimmedName,
-            ...(skillsChanged ? { skills: draftAgentSkills ?? undefined } : {}),
-            ...(nextAvatarName !== undefined ? { icon: nextAvatarName ?? current.icon } : {}),
-          }
-        : current,
-      );
+      const refreshedAgents = await window.electronAPI.bustlyListAgents(activeWorkspaceId).catch(() => null);
+      if (Array.isArray(refreshedAgents)) {
+        setCurrentAgentSummary(refreshedAgents.find((agent) => agent.agentId === currentAgentId) ?? null);
+      } else {
+        setCurrentAgentSummary((current) => current
+          ? {
+              ...current,
+              name: trimmedName,
+              ...(identityMarkdownChanged ? { identityMarkdown: nextIdentityMarkdown } : {}),
+              ...(skillsChanged ? { skills: draftAgentSkills ?? undefined } : {}),
+              ...(nextAvatarName !== undefined ? { icon: nextAvatarName ?? current.icon } : {}),
+            }
+          : current,
+        );
+      }
       if (!currentSessionKey) {
         void navigate(
           buildChatRoute({
@@ -3134,10 +3157,12 @@ export default function ChatPage() {
     avatarSelectionDirty,
     currentAgentId,
     currentAgentPresentation.iconId,
+    currentAgentPresentation.description,
     currentAgentPresentation.name,
     currentAgentSummary,
     currentSessionKey,
     draftAgentAvatarName,
+    draftAgentIdentityMarkdown,
     draftAgentName,
     draftAgentSkills,
     navigate,
@@ -3847,13 +3872,17 @@ export default function ChatPage() {
           workspaceId: activeWorkspaceId,
           agentId: currentAgentId,
           name: draftAgentName || currentAgentPresentation.name,
+          description: currentAgentSummary?.description || currentAgentPresentation.description,
           icon: avatarSelectionDirty ? draftAgentAvatarName : currentAgentSummary?.icon,
         }).avatarSrc}
         agentIcon={<CurrentAgentIcon size={24} weight="bold" />}
         draftName={draftAgentName}
+        draftIdentityMarkdown={draftAgentIdentityMarkdown}
         draftAvatarName={draftAgentAvatarName}
         activeTab={agentSettingsTab}
         saving={agentSettingsSaving}
+        skillsLoading={availableSkillsLoading}
+        skillsError={availableSkillsError}
         skills={availableSkills}
         enabledSkillsCount={enabledSkillsCount}
         onClose={() => setIsAgentSettingsModalOpen(false)}
@@ -3861,14 +3890,13 @@ export default function ChatPage() {
           void handleSaveAgentSettings();
         }}
         onNameChange={setDraftAgentName}
+        onIdentityMarkdownChange={setDraftAgentIdentityMarkdown}
         onAvatarSelect={(avatarName) => {
           setDraftAgentAvatarName(avatarName);
           setAvatarSelectionDirty(true);
         }}
         onTabChange={setAgentSettingsTab}
         onToggleSkill={handleToggleDraftSkill}
-        onEnableAll={handleEnableAllDraftSkills}
-        onDisableAll={handleDisableAllDraftSkills}
         isSkillEnabled={isDraftSkillEnabled}
       />
 

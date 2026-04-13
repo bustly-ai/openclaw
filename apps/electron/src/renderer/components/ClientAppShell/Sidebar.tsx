@@ -35,6 +35,11 @@ import {
 } from "../../lib/agent-avatars";
 import { resolveAgentPresentation } from "../../lib/agent-presentation";
 import { listWorkspaceSummaries, type WorkspaceSummary } from "../../lib/bustly-supabase";
+import {
+  fetchSkillCatalog,
+  recommendSkillNames,
+  type SkillCatalogItem,
+} from "../../lib/skill-catalog";
 import { useAppState } from "../../providers/AppStateProvider";
 import { useGlobalLoader } from "../../providers/GlobalLoaderProvider";
 import {
@@ -42,6 +47,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../../shared/bustly-agent";
 import UpdatePrompt from "../Updater/UpdatePrompt";
+import { CreateAgentSkillsStep } from "../skills/SkillLibraryPanels";
 import Skeleton from "../ui/Skeleton";
 import PortalTooltip from "../ui/PortalTooltip";
 
@@ -72,6 +78,7 @@ type SidebarSession = {
 
 const SIDEBAR_TASKS_REFRESH_EVENT = "openclaw:sidebar-refresh-tasks";
 const SIDEBAR_TASK_RUN_STATE_EVENT = "openclaw:sidebar-task-run-state";
+const CREATE_AGENT_VIBES = ["Professional", "Friendly", "Creative", "Concise", "Casual", "Expert"] as const;
 
 function notifySidebarTasksRefresh() {
   window.dispatchEvent(new Event(SIDEBAR_TASKS_REFRESH_EVENT));
@@ -178,6 +185,10 @@ function SidebarModal(props: {
   children: ReactNode;
   onClose: () => void;
   widthClassName?: string;
+  panelClassName?: string;
+  bodyClassName?: string;
+  headerClassName?: string;
+  flush?: boolean;
 }) {
   useEffect(() => {
     if (!props.open) {
@@ -203,10 +214,16 @@ function SidebarModal(props: {
       onClick={props.onClose}
     >
       <div
-        className={`w-full rounded-3xl border border-gray-200 bg-white p-5 shadow-2xl ${props.widthClassName ?? "max-w-sm"}`}
+        className={`w-full rounded-3xl border border-gray-200 bg-white shadow-2xl ${props.widthClassName ?? "max-w-sm"} ${props.panelClassName ?? ""}`}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between gap-3">
+        <div
+          className={`flex items-center justify-between gap-3 ${
+            props.flush
+              ? "border-b border-[#E8EBF3] px-6 py-5"
+              : "mb-4 px-5 pt-5"
+          } ${props.headerClassName ?? ""}`}
+        >
           <h2 className="text-lg font-semibold text-[#1A162F]">{props.title}</h2>
           <button
             type="button"
@@ -216,7 +233,9 @@ function SidebarModal(props: {
             <CloseIcon className="h-4 w-4" />
           </button>
         </div>
-        {props.children}
+        <div className={`${props.flush ? "" : "px-5 pb-5"} ${props.bodyClassName ?? ""}`}>
+          {props.children}
+        </div>
       </div>
     </div>,
     document.body,
@@ -1199,6 +1218,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isPreparingIssueReport, setIsPreparingIssueReport] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createAgentStep, setCreateAgentStep] = useState<"info" | "skills">("info");
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [iconModalOpen, setIconModalOpen] = useState(false);
@@ -1207,6 +1227,13 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [renameSaving, setRenameSaving] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [draftScenarioName, setDraftScenarioName] = useState("");
+  const [draftScenarioDescription, setDraftScenarioDescription] = useState("");
+  const [draftScenarioVibe, setDraftScenarioVibe] = useState<(typeof CREATE_AGENT_VIBES)[number]>("Professional");
+  const [createSkillCatalog, setCreateSkillCatalog] = useState<SkillCatalogItem[]>([]);
+  const [createSkillsLoading, setCreateSkillsLoading] = useState(false);
+  const [createSkillsError, setCreateSkillsError] = useState<string | null>(null);
+  const [selectedCreateSkills, setSelectedCreateSkills] = useState<string[]>([]);
+  const [hasSeededCreateSkills, setHasSeededCreateSkills] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedIcon, setSelectedIcon] = useState(DEFAULT_AGENT_AVATAR);
   const [iconPickerMode, setIconPickerMode] = useState<"create" | "edit">("edit");
@@ -1730,11 +1757,23 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   };
 
   const selectedTask = recentTasks.find((entry) => entry.id === selectedTaskId) ?? null;
-  const openCreateModal = () => {
+  const resetCreateModalState = useCallback(() => {
+    setCreateAgentStep("info");
     setDraftScenarioName("");
+    setDraftScenarioDescription("");
+    setDraftScenarioVibe("Professional");
     setSelectedIcon(DEFAULT_AGENT_AVATAR);
-    setIconPickerMode("create");
     setCreateError(null);
+    setCreateSkillCatalog([]);
+    setCreateSkillsLoading(false);
+    setCreateSkillsError(null);
+    setSelectedCreateSkills([]);
+    setHasSeededCreateSkills(false);
+  }, []);
+
+  const openCreateModal = () => {
+    resetCreateModalState();
+    setIconPickerMode("create");
     setCreateModalOpen(true);
   };
 
@@ -1744,6 +1783,73 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     setRenameError(null);
     setRenameModalOpen(true);
   };
+
+  const toggleCreateSkill = useCallback((skillName: string) => {
+    setHasSeededCreateSkills(true);
+    setSelectedCreateSkills((current) => (
+      current.includes(skillName)
+        ? current.filter((entry) => entry !== skillName)
+        : [...current, skillName].toSorted((left, right) =>
+            left.localeCompare(right, undefined, { sensitivity: "base", numeric: true }),
+          )
+    ));
+  }, []);
+
+  useEffect(() => {
+    if (!createModalOpen || !effectiveWorkspaceId) {
+      return;
+    }
+    let disposed = false;
+    setCreateSkillsLoading(true);
+    setCreateSkillsError(null);
+    void fetchSkillCatalog({
+      scope: `create-agent-${effectiveWorkspaceId}`,
+    }).then((items) => {
+      if (disposed) {
+        return;
+      }
+      setCreateSkillCatalog(items);
+    }).catch((error) => {
+      if (disposed) {
+        return;
+      }
+      setCreateSkillCatalog([]);
+      setCreateSkillsError(error instanceof Error ? error.message : String(error));
+    }).finally(() => {
+      if (!disposed) {
+        setCreateSkillsLoading(false);
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [createModalOpen, effectiveWorkspaceId]);
+
+  useEffect(() => {
+    if (
+      !createModalOpen ||
+      createAgentStep !== "skills" ||
+      hasSeededCreateSkills ||
+      createSkillsLoading ||
+      createSkillCatalog.length === 0
+    ) {
+      return;
+    }
+    setSelectedCreateSkills(recommendSkillNames(createSkillCatalog, {
+      roleText: draftScenarioDescription,
+      vibe: draftScenarioVibe,
+      limit: 4,
+    }));
+    setHasSeededCreateSkills(true);
+  }, [
+    createAgentStep,
+    createModalOpen,
+    createSkillCatalog,
+    createSkillsLoading,
+    draftScenarioDescription,
+    draftScenarioVibe,
+    hasSeededCreateSkills,
+  ]);
 
   const openIconModal = (task?: SidebarTask) => {
     if (task) {
@@ -1776,12 +1882,19 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     setCreateError(null);
     try {
       const workspace = workspaces.find((entry) => entry.id === effectiveWorkspaceId);
-      const result = await window.electronAPI.bustlyCreateAgent(
-        effectiveWorkspaceId,
+      const result = await window.electronAPI.bustlyCreateAgent({
+        workspaceId: effectiveWorkspaceId,
         name,
-        selectedIcon,
-        workspace?.name,
-      );
+        description: draftScenarioDescription.trim(),
+        icon: selectedIcon,
+        workspaceName: workspace?.name,
+        skills:
+          createSkillCatalog.length === 0
+            ? undefined
+            : selectedCreateSkills.length === createSkillCatalog.length
+              ? null
+              : selectedCreateSkills,
+      });
       if (!result.success) {
         setCreateError(result.error ?? "Failed to create agent.");
         return;
@@ -1803,8 +1916,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
         return mainTask ? [mainTask, nextTask, ...otherTasks] : [nextTask, ...otherTasks];
       });
       setSessionsByAgent((prev) => ({ ...prev, [nextAgentId]: [] }));
-      setDraftScenarioName("");
-      setSelectedIcon(DEFAULT_AGENT_AVATAR);
+      resetCreateModalState();
       setCreateModalOpen(false);
       notifySidebarTasksRefresh();
       void navigate(buildChatRoute({ agentId: nextAgentId, label: name, icon: selectedIcon }));
@@ -2300,68 +2412,146 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
 
       <SidebarModal
         open={createModalOpen}
-        title="Create agent"
+        title="Create Agent"
+        widthClassName="max-w-3xl"
+        panelClassName="flex h-[calc(100vh-80px)] max-h-[860px] flex-col overflow-hidden"
+        bodyClassName="flex min-h-0 flex-1 flex-col"
+        flush
         onClose={() => {
+          resetCreateModalState();
           setCreateModalOpen(false);
-          setDraftScenarioName("");
-          setSelectedIcon(DEFAULT_AGENT_AVATAR);
-          setCreateError(null);
         }}
       >
-        <div className="space-y-5">
-          <div className="space-y-3">
-            <label className="mb-2 block text-sm font-medium text-[#1A162F]">Agent name</label>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => openIconModal()}
-                className="flex h-12 w-12 shrink-0 items-center justify-center bg-transparent text-[#1A162F] transition-transform hover:scale-[1.02]"
-                aria-label="Choose avatar"
-                title="Choose avatar"
-              >
-                {getAgentAvatarSrc(selectedIcon) ? (
-                  <img src={getAgentAvatarSrc(selectedIcon) ?? undefined} alt="avatar" className="h-12 w-12 object-contain" />
-                ) : (
-                  createElement(getSessionIconComponent(selectedIcon), { size: 20, weight: "bold" })
-                )}
-              </button>
-              <input
-                autoFocus
-                type="text"
-                value={draftScenarioName}
-                onChange={(event) => setDraftScenarioName(event.target.value)}
-                placeholder="e.g. Supplier finder"
-                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm font-normal transition-all focus:border-[#1A162F] focus:outline-none focus:ring-2 focus:ring-[#1A162F]/5"
-              />
+        {createAgentStep === "info" ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              setCreateError(null);
+              setHasSeededCreateSkills(false);
+              setSelectedCreateSkills([]);
+              setCreateAgentStep("skills");
+            }}
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            <div className="shrink-0 px-6 pb-6 pt-6">
+              <h2 className="text-[22px] font-bold text-[#1A162F]">Hire a Digital Employee</h2>
             </div>
-          </div>
-          {createError ? <p className="text-sm text-red-600">{createError}</p> : null}
-          <div className="flex justify-end gap-3">
-            <button
-              type="button"
-              className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100"
-              disabled={createSaving}
-              onClick={() => {
-                setCreateModalOpen(false);
-                setDraftScenarioName("");
-                setSelectedIcon(DEFAULT_AGENT_AVATAR);
-                setCreateError(null);
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="rounded-lg bg-[#1A162F] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#27223F] disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={createSaving || !draftScenarioName.trim()}
-              onClick={() => {
+
+            <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+              <div className="space-y-5">
+                <div>
+                  <label className="mb-2 block text-[13px] font-bold text-[#1A162F]">Agent name</label>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => openIconModal()}
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[#E8EBF3] bg-[#F4F5F8] text-[#1A162F] transition-transform hover:scale-[1.02]"
+                      aria-label="Choose avatar"
+                      title="Choose avatar"
+                    >
+                      {getAgentAvatarSrc(selectedIcon) ? (
+                        <img
+                          src={getAgentAvatarSrc(selectedIcon) ?? undefined}
+                          alt="avatar"
+                          className="h-full w-full rounded-full object-cover"
+                        />
+                      ) : (
+                        createElement(getSessionIconComponent(selectedIcon), { size: 20, weight: "bold" })
+                      )}
+                    </button>
+                    <input
+                      autoFocus
+                      type="text"
+                      value={draftScenarioName}
+                      onChange={(event) => setDraftScenarioName(event.target.value)}
+                      placeholder="e.g. Supplier finder"
+                      className="flex-1 rounded-xl border border-[#E8EBF3] bg-white px-4 py-2.5 text-[13px] font-medium text-[#1A162F] placeholder:font-normal placeholder:text-[#8A93B2] focus:border-[#1A162F] focus:outline-none focus:ring-1 focus:ring-[#1A162F]"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-[13px] font-bold text-[#1A162F]">Role & Responsibilities</label>
+                  <textarea
+                    rows={5}
+                    value={draftScenarioDescription}
+                    onChange={(event) => setDraftScenarioDescription(event.target.value)}
+                    placeholder="Describe what this digital employee is hired to do..."
+                    className="min-h-[120px] w-full resize-none rounded-xl border border-[#E8EBF3] bg-white px-4 py-3 text-[13px] font-medium leading-relaxed text-[#1A162F] placeholder:font-normal placeholder:text-[#8A93B2] focus:border-[#1A162F] focus:outline-none focus:ring-1 focus:ring-[#1A162F]"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-[13px] font-bold text-[#1A162F]">Work style & Tone</label>
+                  <div className="flex flex-wrap gap-2">
+                    {CREATE_AGENT_VIBES.map((vibe) => (
+                      <button
+                        key={vibe}
+                        type="button"
+                        onClick={() => setDraftScenarioVibe(vibe)}
+                        className={`rounded-full border px-4 py-1.5 text-[13px] font-medium transition-all ${
+                          draftScenarioVibe === vibe
+                            ? "border-[#1A162F] bg-[#1A162F] text-white"
+                            : "border-[#E8EBF3] bg-white text-[#666F8D] hover:border-[#C8D0E2] hover:text-[#1A162F]"
+                        }`}
+                      >
+                        {vibe}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {createError ? <p className="text-sm text-red-600">{createError}</p> : null}
+              </div>
+            </div>
+
+            <div className="shrink-0 border-t border-[#E8EBF3] bg-white px-6 py-4">
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  className="h-10 rounded-xl px-4 py-2 text-[13px] font-medium text-[#666F8D] transition-colors hover:bg-[#F4F5F8]"
+                  disabled={createSaving}
+                  onClick={() => {
+                    resetCreateModalState();
+                    setCreateModalOpen(false);
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="h-10 rounded-xl bg-[#1A162F] px-4 py-2 text-[13px] font-bold text-white transition-colors hover:bg-[#27223F] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!draftScenarioName.trim() || !draftScenarioDescription.trim()}
+                >
+                  Next step
+                </button>
+              </div>
+            </div>
+          </form>
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="shrink-0 px-6 pb-6 pt-6">
+              <h2 className="text-[22px] font-bold text-[#1A162F]">Assign Skills</h2>
+            </div>
+            <CreateAgentSkillsStep
+              items={createSkillCatalog}
+              loading={createSkillsLoading}
+              error={createError ?? createSkillsError}
+              selectedSkillNames={selectedCreateSkills}
+              recommendedSkillNames={recommendSkillNames(createSkillCatalog, {
+                roleText: draftScenarioDescription,
+                vibe: draftScenarioVibe,
+                limit: 4,
+              })}
+              saving={createSaving}
+              onToggleSkill={toggleCreateSkill}
+              onBack={() => setCreateAgentStep("info")}
+              onCreate={() => {
                 void handleCreateScenario();
               }}
-            >
-              {createSaving ? "Creating..." : "Create agent"}
-            </button>
+            />
           </div>
-        </div>
+        )}
       </SidebarModal>
 
       <SidebarModal

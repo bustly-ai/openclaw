@@ -1,212 +1,26 @@
 import { createPortal } from "react-dom";
-import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { MagnifyingGlass } from "@phosphor-icons/react";
-import { GatewayBrowserClient } from "../../lib/gateway-client";
-import { createGatewayInstanceId } from "../../lib/gateway-instance-id";
-import Skeleton from "../ui/Skeleton";
+import {
+  ArrowsCounterClockwise,
+  File,
+  FileZip,
+  FolderSimple,
+  GithubLogo,
+  X,
+} from "@phosphor-icons/react";
 import collapsedLogo from "../../assets/imgs/collapsed_logo_clean.svg";
-import uploadIcon from "../../assets/imgs/download_simple_bold.svg";
+import { fetchSkillCatalog, installSkillCatalogItem, type SkillCatalogItem } from "../../lib/skill-catalog";
+import { WorkspaceSkillsPanel } from "../skills/SkillLibraryPanels";
 
-type SkillIconComponent = (props: { className?: string }) => ReactNode;
+const BUILD_WITH_BUSTLY_PROMPT =
+  "/skill-creator Help me create a skill together. First ask me what the skill should do.";
 
-type SkillItemData = {
-  id: number | string;
+type PendingChatContext = {
+  path: string;
   name: string;
-  description: string;
-  icon: SkillIconComponent;
-  skillKey?: string;
-  source?: string;
-  filePath?: string;
-  homepage?: string;
-  primaryEnv?: string;
+  kind: "file" | "directory";
 };
-
-type SkillStatusEntry = {
-  name: string;
-  description: string;
-  source: string;
-  skillKey: string;
-  filePath: string;
-  homepage?: string;
-  primaryEnv?: string;
-  eligible: boolean;
-};
-
-type SkillStatusReport = {
-  scope?: "agent" | "global";
-  workspaceDir: string;
-  managedSkillsDir: string;
-  skills: SkillStatusEntry[];
-};
-
-function IconBase(props: {
-  className?: string;
-  viewBox?: string;
-  children: ReactNode;
-  fill?: string;
-  stroke?: string;
-  strokeWidth?: number | string;
-}) {
-  return (
-    <svg
-      viewBox={props.viewBox ?? "0 0 256 256"}
-      fill={props.fill ?? "currentColor"}
-      stroke={props.stroke}
-      strokeWidth={props.strokeWidth}
-      className={props.className}
-    >
-      {props.children}
-    </svg>
-  );
-}
-
-function PlusIcon({ className }: { className?: string }) {
-  return (
-    <IconBase className={className}>
-      <path d="M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" />
-    </IconBase>
-  );
-}
-
-function XIcon({ className }: { className?: string }) {
-  return (
-    <IconBase className={className}>
-      <path d="M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z" />
-    </IconBase>
-  );
-}
-
-function ChatsIcon({ className }: { className?: string }) {
-  return (
-    <IconBase className={className}>
-      <path d="M216,80H184V48a16,16,0,0,0-16-16H40A16,16,0,0,0,24,48V176a8,8,0,0,0,13,6.22L72,154V184a16,16,0,0,0,16,16h93.59L219,230.22a8,8,0,0,0,5,1.78,8,8,0,0,0,8-8V96A16,16,0,0,0,216,80ZM66.55,137.78,40,159.25V48H168v88H71.58A8,8,0,0,0,66.55,137.78ZM216,207.25l-26.55-21.47a8,8,0,0,0-5-1.78H88V152h80a16,16,0,0,0,16-16V96h32Z" />
-    </IconBase>
-  );
-}
-
-function ArrowsCounterClockwiseIcon({ className }: { className?: string }) {
-  return (
-    <IconBase className={className}>
-      <path d="M88,104H40a8,8,0,0,1-8-8V48a8,8,0,0,1,16,0V76.69L62.63,62.06A95.43,95.43,0,0,1,130,33.94h.53a95.36,95.36,0,0,1,67.07,27.33,8,8,0,0,1-11.18,11.44,79.52,79.52,0,0,0-55.89-22.77h-.45A79.56,79.56,0,0,0,73.94,73.37L59.31,88H88a8,8,0,0,1,0,16Zm128,48H168a8,8,0,0,0,0,16h28.69l-14.63,14.63a79.56,79.56,0,0,1-56.13,23.43h-.45a79.52,79.52,0,0,1-55.89-22.77,8,8,0,1,0-11.18,11.44,95.36,95.36,0,0,0,67.07,27.33H126a95.43,95.43,0,0,0,67.36-28.12L208,179.31V208a8,8,0,0,0,16,0V160A8,8,0,0,0,216,152Z" />
-    </IconBase>
-  );
-}
-
-function FileZipIcon({ className }: { className?: string }) {
-  return (
-    <IconBase className={className}>
-      <path d="M184,144H168a8,8,0,0,0-8,8v56a8,8,0,0,0,16,0v-8h8a28,28,0,0,0,0-56Zm0,40h-8V160h8a12,12,0,0,1,0,24Zm-48-32v56a8,8,0,0,1-16,0V152a8,8,0,0,1,16,0ZM96,208a8,8,0,0,1-8,8H56a8,8,0,0,1-7-12l25.16-44H56a8,8,0,0,1,0-16H88a8,8,0,0,1,7,12L69.79,200H88A8,8,0,0,1,96,208ZM213.66,82.34l-56-56A8,8,0,0,0,152,24H56A16,16,0,0,0,40,40v72a8,8,0,0,0,16,0V40h88V88a8,8,0,0,0,8,8h48v16a8,8,0,0,0,16,0V88A8,8,0,0,0,213.66,82.34ZM160,80V51.31L188.69,80Z" />
-    </IconBase>
-  );
-}
-
-function FolderIcon({ className }: { className?: string }) {
-  return (
-    <IconBase className={className}>
-      <path d="M216,72H131.31L104,44.69A15.86,15.86,0,0,0,92.69,40H40A16,16,0,0,0,24,56V200.62A15.4,15.4,0,0,0,39.38,216H216.89A15.13,15.13,0,0,0,232,200.89V88A16,16,0,0,0,216,72ZM40,56H92.69l16,16H40ZM216,200H40V88H216Z" />
-    </IconBase>
-  );
-}
-
-function FileIcon({ className }: { className?: string }) {
-  return (
-    <IconBase className={className}>
-      <path d="M213.66,82.34l-56-56A8,8,0,0,0,152,24H56A16,16,0,0,0,40,40V216a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V88A8,8,0,0,0,213.66,82.34ZM160,51.31,188.69,80H160ZM200,216H56V40h88V88a8,8,0,0,0,8,8h48V216Z" />
-    </IconBase>
-  );
-}
-
-function LightningIcon({ className }: { className?: string }) {
-  return (
-    <IconBase className={className}>
-      <path d="M215.79,118.17a8,8,0,0,0-5-5.66L153.18,90.9l14.66-73.33a8,8,0,0,0-13.69-7l-112,120a8,8,0,0,0,3,13l57.63,21.61L88.16,238.43a8,8,0,0,0,13.69,7l112-120A8,8,0,0,0,215.79,118.17ZM109.37,214l10.47-52.38a8,8,0,0,0-5-9.06L62,132.71l84.62-90.66L136.16,94.43a8,8,0,0,0,5,9.06l52.8,19.8Z" />
-    </IconBase>
-  );
-}
-
-function ImageIcon({ className }: { className?: string }) {
-  return (
-    <IconBase className={className}>
-      <path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40Zm0,16V158.75l-26.07-26.06a16,16,0,0,0-22.63,0l-20,20-44-44a16,16,0,0,0-22.62,0L40,149.37V56ZM40,172l52-52,80,80H40Zm176,28H194.63l-36-36,20-20L216,181.38V200ZM144,100a12,12,0,1,1,12,12A12,12,0,0,1,144,100Z" />
-    </IconBase>
-  );
-}
-
-function CodeIcon({ className }: { className?: string }) {
-  return (
-    <IconBase className={className}>
-      <path d="M69.12,94.15,28.5,128l40.62,33.85a8,8,0,1,1-10.24,12.29l-48-40a8,8,0,0,1,0-12.29l48-40a8,8,0,0,1,10.24,12.3Zm176,27.7-48-40a8,8,0,1,0-10.24,12.3L227.5,128l-40.62,33.85a8,8,0,1,0,10.24,12.29l48-40a8,8,0,0,0,0-12.29ZM162.73,32.48a8,8,0,0,0-10.25,4.79l-64,176a8,8,0,0,0,4.79,10.26A8.14,8.14,0,0,0,96,224a8,8,0,0,0,7.52-5.27l64-176A8,8,0,0,0,162.73,32.48Z" />
-    </IconBase>
-  );
-}
-
-function GameControllerIcon({ className }: { className?: string }) {
-  return (
-    <IconBase className={className}>
-      <path d="M176,112H152a8,8,0,0,1,0-16h24a8,8,0,0,1,0,16ZM104,96H96V88a8,8,0,0,0-16,0v8H72a8,8,0,0,0,0,16h8v8a8,8,0,0,0,16,0v-8h8a8,8,0,0,0,0-16ZM241.48,200.65a36,36,0,0,1-54.94,4.81c-.12-.12-.24-.24-.35-.37L146.48,160h-37L69.81,205.09l-.35.37A36.08,36.08,0,0,1,44,216,36,36,0,0,1,8.56,173.75a.68.68,0,0,1,0-.14L24.93,89.52A59.88,59.88,0,0,1,83.89,40H172a60.08,60.08,0,0,1,59,49.25c0,.06,0,.12,0,.18l16.37,84.17a.68.68,0,0,1,0,.14A35.74,35.74,0,0,1,241.48,200.65ZM172,144a44,44,0,0,0,0-88H83.89A43.9,43.9,0,0,0,40.68,92.37l0,.13L24.3,176.59A20,20,0,0,0,58,194.3l41.92-47.59a8,8,0,0,1,6-2.71Zm59.7,32.59-8.74-45A60,60,0,0,1,172,160h-4.2L198,194.31a20.09,20.09,0,0,0,17.46,5.39,20,20,0,0,0,16.23-23.11Z" />
-    </IconBase>
-  );
-}
-
-function ChartBarIcon({ className }: { className?: string }) {
-  return (
-    <IconBase className={className}>
-      <path d="M224,200h-8V40a8,8,0,0,0-8-8H152a8,8,0,0,0-8,8V80H96a8,8,0,0,0-8,8v40H48a8,8,0,0,0-8,8v64H32a8,8,0,0,0,0,16H224a8,8,0,0,0,0-16ZM160,48h40V200H160ZM104,96h40V200H104ZM56,144H88v56H56Z" />
-    </IconBase>
-  );
-}
-
-function GithubMarkIcon({ className }: { className?: string }) {
-  return (
-    <IconBase className={className} viewBox="0 0 24 24">
-      <path d="M12 .5C5.65.5.5 5.66.5 12.03c0 5.1 3.29 9.42 7.86 10.94.57.1.78-.25.78-.55 0-.27-.01-1.17-.02-2.12-3.2.7-3.88-1.37-3.88-1.37-.52-1.34-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.2 1.77 1.2 1.03 1.77 2.71 1.26 3.37.97.1-.75.4-1.26.72-1.55-2.55-.29-5.24-1.28-5.24-5.71 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.47.11-3.06 0 0 .97-.31 3.17 1.19a10.97 10.97 0 0 1 5.77 0c2.2-1.5 3.17-1.19 3.17-1.19.63 1.59.23 2.77.11 3.06.74.81 1.19 1.84 1.19 3.1 0 4.44-2.7 5.41-5.27 5.7.41.36.78 1.08.78 2.18 0 1.57-.01 2.83-.01 3.21 0 .3.2.66.79.55A11.54 11.54 0 0 0 23.5 12.03C23.5 5.66 18.35.5 12 .5Z" />
-    </IconBase>
-  );
-}
-
-const INITIAL_SKILLS: SkillItemData[] = [
-  { id: 1, name: "Analyze provided image", description: "Extract insights from images.", icon: ImageIcon },
-  { id: 2, name: "Create Bustly openclaw demo page", description: "Generate Openclaw demo pages.", icon: CodeIcon },
-  { id: 3, name: "Add classic Snake game mode", description: "Add Snake game mode.", icon: GameControllerIcon },
-  { id: 4, name: "Generate weekly report", description: "Summarize weekly metrics.", icon: ChartBarIcon },
-];
-
-function toSkillItem(skill: SkillStatusEntry, index: number): SkillItemData {
-  return {
-    id: skill.skillKey || `${skill.name}-${index}`,
-    name: skill.name,
-    description: skill.description,
-    icon: INITIAL_SKILLS.find((item) => item.name === skill.name)?.icon ?? LightningIcon,
-    skillKey: skill.skillKey,
-    source: skill.source,
-    filePath: skill.filePath,
-    homepage: skill.homepage,
-    primaryEnv: skill.primaryEnv,
-  };
-}
-
-function normalizeSkillSearchText(value: string | undefined): string {
-  return value?.trim().toLocaleLowerCase() ?? "";
-}
-
-function skillMatchesQuery(skill: SkillItemData, query: string): boolean {
-  if (!query) {
-    return true;
-  }
-
-  const fields = [
-    skill.name,
-    skill.description,
-    skill.skillKey,
-    skill.source,
-    skill.filePath,
-    skill.homepage,
-    skill.primaryEnv,
-  ];
-
-  return fields.some((field) => normalizeSkillSearchText(field).includes(query));
-}
 
 function ModalShell(props: {
   isOpen: boolean;
@@ -229,64 +43,9 @@ function ModalShell(props: {
   );
 }
 
-function SkillCard(props: {
-  skill: SkillItemData;
-}) {
-  const Icon = props.skill.icon;
-  const showSource = Boolean(props.skill.source && props.skill.source !== "openclaw-bundled");
-
-  return (
-    <div className="group flex h-[104px] items-center justify-between rounded-xl border border-gray-100 bg-white p-4 transition-all hover:shadow-sm">
-      <div className="flex min-w-0 flex-1 items-center gap-4">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#1A162F]/5 text-[#1A162F]">
-          <Icon className="h-5 w-5" />
-        </div>
-        <div className="min-w-0 flex-1 pr-4">
-          <h3 className="truncate text-sm font-bold text-[#1A162F]">{props.skill.name}</h3>
-          <p className="truncate text-xs text-[#6B7280]">{props.skill.description}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[#666F8D]">
-            {showSource ? (
-              <span className="rounded-full bg-[#F3F5F8] px-2 py-1 font-semibold text-[#1A162F]">
-                {props.skill.source}
-              </span>
-            ) : null}
-            {props.skill.primaryEnv ? <span>Env: {props.skill.primaryEnv}</span> : null}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SkillCardSkeleton() {
-  return (
-    <div className="flex h-[88px] items-center justify-between rounded-xl border border-gray-100 bg-white p-4">
-      <div className="flex min-w-0 flex-1 items-center gap-4">
-        <Skeleton className="h-10 w-10 shrink-0 rounded-lg" />
-        <div className="min-w-0 flex-1 space-y-2 pr-4">
-          <Skeleton className="h-3.5 w-40 rounded-md" />
-          <Skeleton className="h-3 w-32 rounded-md" />
-        </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-4">
-        <Skeleton className="h-[22px] w-[38px]" />
-      </div>
-    </div>
-  );
-}
-
-const BUILD_WITH_BUSTLY_PROMPT =
-  "/skill-creator Help me create a skill together. First ask me what the skill should do.";
-
 function buildImportGithubSkillPrompt(url: string): string {
   return `Help me install a skill from GitHub together. I want to use this repository: ${url}`;
 }
-
-type PendingChatContext = {
-  path: string;
-  name: string;
-  kind: "file" | "directory";
-};
 
 function basenameFromPath(pathValue: string): string {
   return pathValue.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || pathValue;
@@ -387,8 +146,12 @@ function UploadSkillModal(props: {
         <div className="p-6">
           <div className="mb-6 flex items-center justify-between">
             <h2 className="text-xl font-bold text-[#1A162F]">Upload skill</h2>
-            <button type="button" onClick={props.onClose} className="text-gray-400 transition-colors hover:text-gray-600">
-              <XIcon className="h-5 w-5" />
+            <button
+              type="button"
+              onClick={props.onClose}
+              className="text-gray-400 transition-colors hover:text-gray-600"
+            >
+              <X size={20} weight="bold" />
             </button>
           </div>
 
@@ -425,9 +188,9 @@ function UploadSkillModal(props: {
             }}
           >
             <div className="mb-4 flex gap-[-8px]">
-              <FileZipIcon className="h-8 w-8 translate-x-2 rotate-[-6deg] text-gray-400" />
-              <FileIcon className="z-10 h-8 w-8 -translate-y-2 text-gray-400" />
-              <FolderIcon className="h-8 w-8 -translate-x-2 rotate-[6deg] text-gray-400" />
+              <FileZip size={32} weight="bold" className="translate-x-2 rotate-[-6deg] text-gray-400" />
+              <File size={32} weight="bold" className="z-10 -translate-y-2 text-gray-400" />
+              <FolderSimple size={32} weight="bold" className="-translate-x-2 rotate-[6deg] text-gray-400" />
             </div>
             <p className="text-sm font-medium text-[#1A162F]">Drag and drop or click to upload</p>
           </div>
@@ -475,13 +238,13 @@ function GithubImportModal(props: {
             onClick={props.onClose}
             className="absolute top-4 right-4 text-gray-400 transition-colors hover:text-gray-600"
           >
-            <XIcon className="h-5 w-5" />
+            <X size={20} weight="bold" />
           </button>
 
           <div className="mb-4 flex items-center justify-center gap-4">
-            <GithubMarkIcon className="h-8 w-8 text-[#111827] opacity-90" />
+            <GithubLogo size={32} weight="bold" className="text-[#111827] opacity-90" />
             <div className="text-gray-300">
-              <ArrowsCounterClockwiseIcon className="h-6 w-6" />
+              <ArrowsCounterClockwise size={24} weight="bold" />
             </div>
             <img src={collapsedLogo} alt="Bustly" className="h-8 w-8 object-contain" />
           </div>
@@ -490,7 +253,7 @@ function GithubImportModal(props: {
           <p className="mb-6 text-sm text-[#6B7280]">Import a skill directly from a public GitHub repository.</p>
 
           <div className="mb-6 text-left">
-            <label className="mb-1.5 block text-xs font-bold tracking-wide text-[#1A162F] uppercase">URL</label>
+            <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-[#1A162F]">URL</label>
             <input
               type="text"
               value={url}
@@ -529,17 +292,85 @@ function GithubImportModal(props: {
 
 export default function SkillPage() {
   const navigate = useNavigate();
-  const dropdownRef = useRef<HTMLDivElement | null>(null);
-  const clientRef = useRef<GatewayBrowserClient | null>(null);
-  const gatewayInstanceIdRef = useRef(createGatewayInstanceId("skill"));
-  const [skills, setSkills] = useState<SkillItemData[]>([]);
+  const mountedRef = useRef(true);
+  const [skills, setSkills] = useState<SkillCatalogItem[]>([]);
   const [loadingSkills, setLoadingSkills] = useState(true);
   const [skillsError, setSkillsError] = useState<string | null>(null);
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [skillActionError, setSkillActionError] = useState<string | null>(null);
+  const [installingSkillName, setInstallingSkillName] = useState<string | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showGithubModal, setShowGithubModal] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const deferredSearchQuery = useDeferredValue(searchQuery);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const loadSkills = useCallback(async (options?: { withSpinner?: boolean }) => {
+    const withSpinner = options?.withSpinner !== false;
+    if (withSpinner) {
+      setLoadingSkills(true);
+    }
+    const items = await fetchSkillCatalog({ scope: "skill-page" });
+    if (!mountedRef.current) {
+      return;
+    }
+    setSkills(items);
+    setSkillsError(null);
+    if (withSpinner) {
+      setLoadingSkills(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void loadSkills({ withSpinner: true })
+      .catch((error) => {
+        if (cancelled || !mountedRef.current) {
+          return;
+        }
+        setSkillsError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (!cancelled && mountedRef.current) {
+          setLoadingSkills(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadSkills]);
+
+  const handleInstallSkill = useCallback(async (skill: SkillCatalogItem) => {
+    const installId = skill.installOptions[0]?.id;
+    if (!installId) {
+      return;
+    }
+
+    setSkillActionError(null);
+    setInstallingSkillName(skill.name);
+
+    try {
+      await installSkillCatalogItem({
+        skillName: skill.name,
+        installId,
+        scope: `skill-install-${skill.skillKey || skill.name}`,
+      });
+      await loadSkills({ withSpinner: false });
+    } catch (error) {
+      if (mountedRef.current) {
+        setSkillActionError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (mountedRef.current) {
+        setInstallingSkillName(null);
+      }
+    }
+  }, [loadSkills]);
 
   const navigateToChatWithPrompt = (prompt: string, context?: PendingChatContext) => {
     const searchParams = new URLSearchParams();
@@ -552,257 +383,19 @@ export default function SkillPage() {
     void navigate(`/chat?${searchParams.toString()}`);
   };
 
-  useEffect(() => {
-    const onPointerDown = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsDropdownOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    return () => document.removeEventListener("mousedown", onPointerDown);
-  }, []);
-
-  useEffect(() => {
-    let disposed = false;
-
-    const connectGateway = async () => {
-      try {
-        const status = await window.electronAPI.gatewayStatus();
-        if (!status.running) {
-          if (!disposed) {
-            setLoadingSkills(false);
-            setSkillsError("Gateway is not running.");
-          }
-          return;
-        }
-        const connectConfig = await window.electronAPI.gatewayConnectConfig();
-        if (!connectConfig.token || !connectConfig.wsUrl) {
-          if (!disposed) {
-            setLoadingSkills(false);
-            setSkillsError("Gateway token missing in config; cannot load skills.");
-          }
-          return;
-        }
-
-        const client = new GatewayBrowserClient({
-          url: connectConfig.wsUrl,
-          token: connectConfig.token ?? undefined,
-          clientName: "openclaw-control-ui",
-          mode: "webchat",
-          instanceId: gatewayInstanceIdRef.current,
-          onHello: () => {
-            if (disposed) {
-              return;
-            }
-            setSkillsError(null);
-            void client
-              .request<SkillStatusReport>("skills.status", {})
-              .then((report) => {
-                if (disposed) {
-                  return;
-                }
-                setSkills(report.skills.map(toSkillItem));
-                setLoadingSkills(false);
-              })
-              .catch((error) => {
-                if (disposed) {
-                  return;
-                }
-                setSkillsError(error instanceof Error ? error.message : String(error));
-                setLoadingSkills(false);
-              });
-          },
-          onClose: ({ error }) => {
-            if (disposed) {
-              return;
-            }
-            setLoadingSkills(false);
-            if (skills.length === 0) {
-              setSkillsError(error?.message ?? "Gateway disconnected.");
-            }
-          },
-        });
-
-        clientRef.current = client;
-        client.start();
-      } catch (error) {
-        if (disposed) {
-          return;
-        }
-        setLoadingSkills(false);
-        setSkillsError(error instanceof Error ? error.message : String(error));
-      }
-    };
-
-    void connectGateway();
-
-    return () => {
-      disposed = true;
-      clientRef.current?.stop();
-      clientRef.current = null;
-    };
-  }, []);
-  const normalizedSearchQuery = normalizeSkillSearchText(deferredSearchQuery);
-  const hasActiveSearch = normalizedSearchQuery.length > 0;
-  const visibleSkillRows = useMemo(() => {
-    return [...skills]
-      .filter((skill) => skillMatchesQuery(skill, normalizedSearchQuery))
-      .sort((left, right) => {
-        return left.name.localeCompare(right.name, undefined, {
-          sensitivity: "base",
-          numeric: true,
-        });
-      });
-  }, [normalizedSearchQuery, skills]);
-
   return (
-    <div className="custom-scrollbar h-full overflow-y-auto">
-      <div className="mx-auto min-h-full max-w-5xl px-6 pt-6 pb-10 font-sans">
-        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="mb-1 text-2xl font-bold text-[#1A162F]">Skills Hub</h1>
-            <p className="text-sm text-[#6B7280]">Browse built-in, shared, and generated skills in one catalog.</p>
-          </div>
-
-          <div ref={dropdownRef} className="relative">
-            <button
-              type="button"
-              onClick={() => setIsDropdownOpen((previous) => !previous)}
-              className="flex items-center gap-2 rounded-lg bg-[#1A162F] px-4 py-2 text-sm font-medium text-white shadow-sm transition-all hover:bg-[#1A162F]/90"
-            >
-              <PlusIcon className="h-4 w-4" />
-              <span>New skill</span>
-            </button>
-
-            {isDropdownOpen ? (
-              <div className="absolute top-full right-0 z-20 mt-2 w-72 animate-in fade-in zoom-in-95 rounded-xl border border-gray-100 bg-white p-2 shadow-xl duration-100">
-                <div className="flex flex-col gap-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsDropdownOpen(false);
-                      navigateToChatWithPrompt(BUILD_WITH_BUSTLY_PROMPT);
-                    }}
-                    className="group flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[#1A162F]/5"
-                  >
-                    <ChatsIcon className="mt-0.5 h-[18px] w-[18px] text-[#6B7280] opacity-60 transition-opacity group-hover:opacity-100" />
-                    <div>
-                      <span className="block text-sm font-semibold text-[#1A162F]">Build with Bustly</span>
-                      <span className="mt-0.5 block text-xs text-[#6B7280] transition-colors group-hover:text-[#1A162F]">
-                        Build great skills through conversation
-                      </span>
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsDropdownOpen(false);
-                      setShowUploadModal(true);
-                    }}
-                    className="group flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[#1A162F]/5"
-                  >
-                    <img src={uploadIcon} alt="Upload" className="mt-0.5 h-[18px] w-[18px] opacity-60 transition-opacity group-hover:opacity-100" />
-                    <div>
-                      <span className="block text-sm font-semibold text-[#1A162F]">Upload a skill</span>
-                      <span className="mt-0.5 block text-xs text-[#6B7280] transition-colors group-hover:text-[#1A162F]">
-                        Choose any local file or folder
-                      </span>
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsDropdownOpen(false);
-                      setShowGithubModal(true);
-                    }}
-                    className="group flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[#1A162F]/5"
-                  >
-                    <GithubMarkIcon className="mt-0.5 h-[18px] w-[18px] text-[#111827] opacity-60 transition-opacity group-hover:opacity-100" />
-                    <div>
-                      <span className="block text-sm font-semibold text-[#1A162F]">Import from GitHub</span>
-                      <span className="mt-0.5 block text-xs text-[#6B7280] transition-colors group-hover:text-[#1A162F]">
-                        Paste a repository link to get started
-                      </span>
-                    </div>
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="mb-6 rounded-2xl border border-[#EEF1F6] bg-white/90 p-3 shadow-[0_10px_24px_rgba(26,22,47,0.04)]">
-          <div className="relative">
-            <MagnifyingGlass
-              size={18}
-              weight="bold"
-              className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[#666F8D]"
-            />
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search skills by name, description, source, or path"
-              aria-label="Search skills"
-              className="h-11 w-full appearance-none rounded-xl border border-[#E7EAF0] bg-[#FAFBFD] pr-4 pl-10 text-sm text-[#1A162F] outline-none transition-all placeholder:text-[#8B93AA] focus:border-[#D8DDE8] focus:bg-white focus:outline-none focus:ring-0 focus:shadow-[0_0_0_1px_rgba(26,22,47,0.05)]"
-            />
-          </div>
-          <div className="mt-2 flex items-center justify-between px-1 text-xs text-[#666F8D]">
-            <span>
-              {loadingSkills ? "Loading skills..." : `${visibleSkillRows.length} ${visibleSkillRows.length === 1 ? "skill" : "skills"}`}
-              {hasActiveSearch ? " matched" : ""}
-            </span>
-            {hasActiveSearch ? (
-              <button
-                type="button"
-                onClick={() => setSearchQuery("")}
-                className="font-semibold text-[#1A162F] transition-colors hover:text-[#0F0C21]"
-              >
-                Clear
-              </button>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {loadingSkills ? (
-            <>
-              <SkillCardSkeleton />
-              <SkillCardSkeleton />
-              <SkillCardSkeleton />
-              <SkillCardSkeleton />
-            </>
-          ) : skillsError ? (
-            <div className="col-span-full rounded-xl border border-red-100 bg-red-50 py-12 text-center text-sm text-red-600">
-              {skillsError}
-            </div>
-          ) : visibleSkillRows.length > 0 ? (
-            visibleSkillRows.map((skill) => (
-              <SkillCard key={skill.id} skill={skill} />
-            ))
-          ) : skills.length > 0 ? (
-            <div className="col-span-full rounded-xl border border-dashed border-[#DCE2EC] bg-[#FAFBFD] py-12 text-center">
-              <div className="mx-auto max-w-md px-6">
-                <h3 className="text-base font-bold text-[#1A162F]">No skills found</h3>
-                <p className="mt-2 text-sm text-[#666F8D]">Try another keyword or clear the current search.</p>
-                {hasActiveSearch ? (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery("")}
-                    className="mt-5 rounded-lg bg-[#1A162F] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-[#1A162F]/90"
-                  >
-                    Clear search
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          ) : (
-            <div className="col-span-full rounded-xl border border-dashed border-gray-200 bg-gray-50 py-12 text-center text-gray-500">
-              No skills installed yet.
-            </div>
-          )}
-        </div>
-      </div>
+    <div className="custom-scrollbar h-full overflow-y-auto bg-[#E9ECF1]">
+      <WorkspaceSkillsPanel
+        items={skills}
+        loading={loadingSkills}
+        error={skillsError}
+        notice={skillActionError}
+        installingSkillName={installingSkillName}
+        onBuildWithBustly={() => navigateToChatWithPrompt(BUILD_WITH_BUSTLY_PROMPT)}
+        onUploadSkill={() => setShowUploadModal(true)}
+        onImportGithub={() => setShowGithubModal(true)}
+        onInstallSkill={handleInstallSkill}
+      />
 
       <UploadSkillModal
         isOpen={showUploadModal}
