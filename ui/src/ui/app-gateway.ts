@@ -248,6 +248,12 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       return;
     }
     const payload = evt.payload as AgentEventPayload | undefined;
+    const isHiddenAgentEvent =
+      payload?.data?.openclaw &&
+      (payload.data.openclaw as { visibility?: unknown }).visibility === "hidden";
+    if (isHiddenAgentEvent) {
+      return;
+    }
     const sessionKeyVariants = (value: unknown): Set<string> => {
       const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
       const variants = new Set<string>();

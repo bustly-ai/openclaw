@@ -114,6 +114,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "skill_manage",
+    label: "skill_manage",
+    description: "Manage workspace skills",
+    sectionId: "memory",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "sessions_list",
     label: "sessions_list",
     description: "List sessions",
@@ -159,6 +167,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Session status",
     sectionId: "sessions",
     profiles: ["minimal", "coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "session_search",
+    label: "session_search",
+    description: "Search prior session transcripts",
+    sectionId: "sessions",
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {

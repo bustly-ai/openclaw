@@ -38,6 +38,27 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe(null);
   });
 
+  it("ignores hidden internal chat payloads", () => {
+    const state = createState({ sessionKey: "main", chatRunId: "run-user", chatStream: "Hello" });
+    const payload: ChatEventPayload = {
+      runId: "run-hidden",
+      sessionKey: "main",
+      state: "final",
+      meta: {
+        visibility: "hidden",
+        silentReason: "post-run-review",
+      },
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO" }],
+      },
+    };
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Hello");
+  });
+
   it("returns null for delta from another run", () => {
     const state = createState({
       sessionKey: "main",

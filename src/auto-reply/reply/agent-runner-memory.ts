@@ -22,6 +22,7 @@ import {
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
 } from "./memory-flush.js";
+import { buildIsolatedInternalSessionId, withIsolatedSessionFile } from "./isolated-session-file.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 export async function runMemoryFlushIfNeeded(params: {
@@ -86,6 +87,8 @@ export async function runMemoryFlushIfNeeded(params: {
     registerAgentRunContext(flushRunId, {
       sessionKey: params.sessionKey,
       verboseLevel: params.resolvedVerboseLevel,
+      uiVisibility: "hidden",
+      silentReason: "memory-flush",
     });
   }
   let memoryCompactionCompleted = false;
@@ -95,6 +98,11 @@ export async function runMemoryFlushIfNeeded(params: {
   ]
     .filter(Boolean)
     .join("\n\n");
+  const flushSessionId = buildIsolatedInternalSessionId(
+    params.followupRun.run.sessionId,
+    "memory-flush",
+    flushRunId,
+  );
   try {
     await runWithModelFallback({
       ...resolveModelFallbackOptions(params.followupRun.run),
@@ -112,24 +120,28 @@ export async function runMemoryFlushIfNeeded(params: {
           runId: flushRunId,
           authProfile,
         });
-        return runEmbeddedPiAgent({
-          ...embeddedContext,
-          ...senderContext,
-          ...runBaseParams,
-          prompt: resolveMemoryFlushPromptForRun({
-            prompt: memoryFlushSettings.prompt,
-            cfg: params.cfg,
-          }),
-          extraSystemPrompt: flushSystemPrompt,
-          onAgentEvent: (evt) => {
-            if (evt.stream === "compaction") {
-              const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              if (phase === "end") {
-                memoryCompactionCompleted = true;
+        return withIsolatedSessionFile(params.followupRun.run.sessionFile, "memory-flush", (sessionFile) =>
+          runEmbeddedPiAgent({
+            ...embeddedContext,
+            ...senderContext,
+            ...runBaseParams,
+            sessionId: flushSessionId,
+            sessionFile,
+            prompt: resolveMemoryFlushPromptForRun({
+              prompt: memoryFlushSettings.prompt,
+              cfg: params.cfg,
+            }),
+            extraSystemPrompt: flushSystemPrompt,
+            onAgentEvent: (evt) => {
+              if (evt.stream === "compaction") {
+                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                if (phase === "end") {
+                  memoryCompactionCompleted = true;
+                }
               }
-            }
-          },
-        });
+            },
+          }),
+        );
       },
     });
     let memoryFlushCompactionCount =
