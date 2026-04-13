@@ -234,6 +234,37 @@ function validateConfigObjectWithPluginsBase(
     return registryInfo;
   };
 
+  const findConfiguredChannelKey = (channelId: string): string | null => {
+    if (!isRecord(config.channels)) {
+      return null;
+    }
+    const normalized = channelId.trim().toLowerCase();
+    if (!normalized || normalized === "defaults" || normalized === "modelbychannel") {
+      return null;
+    }
+    for (const key of Object.keys(config.channels)) {
+      const trimmed = key.trim();
+      if (trimmed && trimmed.toLowerCase() === normalized) {
+        return trimmed;
+      }
+    }
+    return null;
+  };
+
+  const pushMissingPluginChannelWarning = (
+    path: string,
+    channelId: string,
+    kind: "config" | "heartbeat",
+  ) => {
+    warnings.push({
+      path,
+      message:
+        kind === "config"
+          ? `plugin channel not installed: ${channelId} (stale channel config ignored; install the plugin or remove ${path})`
+          : `plugin channel not installed: ${channelId} (stale heartbeat target ignored; install the plugin or remove ${path})`,
+    });
+  };
+
   const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
 
   if (config.channels && isRecord(config.channels)) {
@@ -251,10 +282,7 @@ function validateConfigObjectWithPluginsBase(
         }
       }
       if (!allowedChannels.has(trimmed)) {
-        issues.push({
-          path: `channels.${trimmed}`,
-          message: `unknown channel id: ${trimmed}`,
-        });
+        pushMissingPluginChannelWarning(`channels.${trimmed}`, trimmed, "config");
       }
     }
   }
@@ -294,6 +322,10 @@ function validateConfigObjectWithPluginsBase(
     if (heartbeatChannelIds.has(normalized)) {
       return;
     }
+    if (findConfiguredChannelKey(trimmed)) {
+      pushMissingPluginChannelWarning(path, trimmed, "heartbeat");
+      return;
+    }
     issues.push({ path, message: `unknown heartbeat target: ${target}` });
   };
 
@@ -323,9 +355,11 @@ function validateConfigObjectWithPluginsBase(
       });
       return;
     }
-    issues.push({
+    warnings.push({
       path,
-      message: `plugin not found: ${pluginId}`,
+      message:
+        `plugin not installed: ${pluginId} ` +
+        `(stale plugin config ignored; install the plugin or remove the stale reference at ${path})`,
     });
   };
 
