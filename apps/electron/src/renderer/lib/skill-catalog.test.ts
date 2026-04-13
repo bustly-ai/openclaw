@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { toSkillCatalogItems, type GatewaySkillStatusReport } from "./skill-catalog";
+import { recommendSkillNames, toSkillCatalogItems, type GatewaySkillStatusReport, type SkillCatalogItem } from "./skill-catalog";
 
 describe("toSkillCatalogItems", () => {
   it("uses supabase sub_layer matched by skillKey slug", () => {
@@ -69,5 +69,78 @@ describe("toSkillCatalogItems", () => {
     expect(items[0]?.category).toBe("CRM");
     expect(items[0]?.eligible).toBe(false);
     expect(items[1]?.category).toBe("Uncategorized");
+  });
+});
+
+describe("recommendSkillNames", () => {
+  const items: SkillCatalogItem[] = [
+    {
+      id: "ads-core-ops",
+      name: "ads-core-ops",
+      description: "Ads ops.",
+      source: "openclaw-bundled",
+      sourceLabel: "Built-in",
+      skillKey: "ads-core-ops",
+      filePath: "/tmp/skills/ads-core-ops/SKILL.md",
+      eligible: true,
+      bundled: true,
+      category: "Ads",
+      installOptions: [],
+      installed: true,
+      canInstall: false,
+    },
+    {
+      id: "hubspot",
+      name: "hubspot",
+      description: "HubSpot CRM.",
+      source: "openclaw-bundled",
+      sourceLabel: "Built-in",
+      skillKey: "hubspot",
+      filePath: "/tmp/skills/hubspot/SKILL.md",
+      eligible: true,
+      bundled: true,
+      category: "CRM",
+      installOptions: [],
+      installed: true,
+      canInstall: false,
+    },
+    {
+      id: "zendesk",
+      name: "zendesk",
+      description: "Support CRM.",
+      source: "openclaw-bundled",
+      sourceLabel: "Built-in",
+      skillKey: "zendesk",
+      filePath: "/tmp/skills/zendesk/SKILL.md",
+      eligible: true,
+      bundled: true,
+      category: "CRM",
+      installOptions: [],
+      installed: true,
+      canInstall: false,
+    },
+    {
+      id: "custom-skill",
+      name: "custom-skill",
+      description: "Custom.",
+      source: "openclaw-workspace",
+      sourceLabel: "Workspace",
+      skillKey: "custom-skill",
+      filePath: "/tmp/workspace/custom-skill/SKILL.md",
+      eligible: true,
+      bundled: false,
+      category: "Uncategorized",
+      installOptions: [],
+      installed: true,
+      canInstall: false,
+    },
+  ];
+
+  it("returns the curated recommendation list in configured order", () => {
+    expect(recommendSkillNames(items)).toEqual(["ads-core-ops", "hubspot", "zendesk"]);
+  });
+
+  it("supports limiting the initial preselected recommendation count", () => {
+    expect(recommendSkillNames(items, { limit: 2 })).toEqual(["ads-core-ops", "hubspot"]);
   });
 });

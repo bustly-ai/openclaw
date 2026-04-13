@@ -1836,11 +1836,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     ) {
       return;
     }
-    setSelectedCreateSkills(recommendSkillNames(createSkillCatalog, {
-      roleText: draftScenarioDescription,
-      vibe: draftScenarioVibe,
-      limit: 4,
-    }));
+    setSelectedCreateSkills(recommendSkillNames(createSkillCatalog));
     setHasSeededCreateSkills(true);
   }, [
     createAgentStep,
@@ -2539,11 +2535,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
               loading={createSkillsLoading}
               error={createError ?? createSkillsError}
               selectedSkillNames={selectedCreateSkills}
-              recommendedSkillNames={recommendSkillNames(createSkillCatalog, {
-                roleText: draftScenarioDescription,
-                vibe: draftScenarioVibe,
-                limit: 4,
-              })}
+              recommendedSkillNames={recommendSkillNames(createSkillCatalog)}
               saving={createSaving}
               onToggleSkill={toggleCreateSkill}
               onBack={() => setCreateAgentStep("info")}

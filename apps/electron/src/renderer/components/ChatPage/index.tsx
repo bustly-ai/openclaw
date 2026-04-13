@@ -3578,12 +3578,9 @@ export default function ChatPage() {
                     <CurrentAgentIcon size={28} weight="bold" />
                   )}
                 </div>
-                <h1 className="mb-2 text-2xl font-semibold tracking-tight text-[#1A162F]">
+                <h1 className="text-2xl font-semibold tracking-tight text-[#1A162F]">
                   {currentAgentSummary?.name || currentScenarioLabel}
                 </h1>
-                <p className="max-w-[720px] text-base text-[#666F8D]">
-                  {currentAgentPresentation.description}
-                </p>
               </div>
             ) : null}
             <ChatTimeline

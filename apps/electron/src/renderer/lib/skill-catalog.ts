@@ -84,27 +84,27 @@ const UPPERCASE_CATEGORY_TOKENS = new Set([
   "ux",
 ]);
 const SKILL_CATEGORY_CACHE_TTL_MS = 60_000;
-
-const COMMON_SEARCH_WORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "assistant",
-  "build",
-  "for",
-  "from",
-  "help",
-  "in",
-  "of",
-  "on",
-  "or",
-  "skill",
-  "skills",
-  "the",
-  "to",
-  "with",
-  "your",
-]);
+const CURATED_RECOMMENDED_SKILL_NAMES = [
+  "ads-core-ops",
+  "clawhub",
+  "coding-agent",
+  "commerce-core-ops",
+  "gog",
+  "hubspot",
+  "meta-ads",
+  "docx-generator",
+  "pdf-generator",
+  "tts-generator",
+  "xlsx-generator",
+  "image-generator",
+  "video-generator",
+  "pptx-generator",
+  "shipstation",
+  "skill-creator",
+  "slack",
+  "aliexpress-source-product",
+  "zendesk",
+] as const;
 
 let cachedSkillCategoryLookup: SkillCategoryLookup | null = null;
 let cachedSkillCategoryLookupExpiresAt = 0;
@@ -135,14 +135,6 @@ function compareSkillCategories(left: SkillCategory, right: SkillCategory): numb
     sensitivity: "base",
     numeric: true,
   });
-}
-
-function tokenizeText(value: string): string[] {
-  return value
-    .toLowerCase()
-    .split(/[^a-z0-9]+/i)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && !COMMON_SEARCH_WORDS.has(token));
 }
 
 function normalizeSkillLookupToken(value: string | undefined): string {
@@ -309,60 +301,17 @@ export function getSkillCategoryOptions(items: SkillCatalogItem[]): SkillCategor
 export function recommendSkillNames(
   items: SkillCatalogItem[],
   params?: {
-    roleText?: string;
-    vibe?: string;
     limit?: number;
   },
 ): string[] {
-  const limit = Math.max(1, params?.limit ?? 4);
-  const targetTokens = tokenizeText(`${params?.roleText ?? ""} ${params?.vibe ?? ""}`);
-  const targetTokenSet = new Set(targetTokens);
-
-  const scored = items
-    .map((item) => {
-      const itemTokenSet = new Set(
-        tokenizeText(
-          [item.name, item.description, item.sourceLabel, item.primaryEnv ?? "", item.category].join(" "),
-        ),
-      );
-
-      let score = 0;
-      for (const token of targetTokenSet) {
-        if (itemTokenSet.has(token)) {
-          score += token.length >= 6 ? 4 : 2;
-        }
-      }
-      if (item.eligible) {
-        score += 2;
-      }
-      if (item.bundled) {
-        score += 1;
-      }
-      if (
-        item.source === "openclaw-workspace"
-        || item.source === "agents-skills-personal"
-        || item.source === "agents-skills-project"
-      ) {
-        score += 1;
-      }
-      return { name: item.name, score };
-    })
-    .toSorted((left, right) => {
-      if (left.score !== right.score) {
-        return right.score - left.score;
-      }
-      return compareSkillNames(left, right);
-    });
-
-  const recommended = scored.filter((entry) => entry.score > 0).slice(0, limit).map((entry) => entry.name);
-  if (recommended.length > 0) {
-    return recommended;
+  const recommended = CURATED_RECOMMENDED_SKILL_NAMES.filter((skillName) =>
+    items.some((item) => item.name.toLowerCase() === skillName.toLowerCase()),
+  );
+  if (recommended.length === 0) {
+    return [];
   }
-
-  return items
-    .filter((item) => item.eligible)
-    .slice(0, limit)
-    .map((item) => item.name);
+  const limit = params?.limit ? Math.max(1, params.limit) : null;
+  return limit ? recommended.slice(0, limit) : recommended;
 }
 
 async function requestSkillGatewayMethod<T>(params: {
