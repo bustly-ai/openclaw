@@ -3448,20 +3448,21 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-white text-gray-900">
-      <div className="sticky top-0 z-20 h-8 flex-none bg-white [-webkit-app-region:drag]" />
       {!isOverviewPage ? (
-        <div className="relative z-10 flex h-16 shrink-0 items-center justify-end border-b border-[#E8EBF3] bg-white px-8">
-          <button
-            type="button"
-            onClick={() => {
-              setAgentSettingsTab("skills");
-              setIsAgentSettingsModalOpen(true);
-            }}
-            className="flex items-center gap-2 rounded-xl border border-[#E8EBF3] bg-white px-3 py-1.5 text-[13px] font-bold text-[#1A162F] shadow-sm transition-all hover:border-indigo-200 hover:bg-[#F8F9FC]"
-          >
-            <Gear size={16} weight="fill" className="text-[#666F8D]" />
-            Agent Settings
-          </button>
+        <div className="sticky top-0 z-20 flex-none bg-white [-webkit-app-region:drag]">
+          <div className="relative z-10 flex h-16 shrink-0 items-center justify-end border-b border-[#E8EBF3] bg-white px-8">
+            <button
+              type="button"
+              onClick={() => {
+                setAgentSettingsTab("skills");
+                setIsAgentSettingsModalOpen(true);
+              }}
+              className="[-webkit-app-region:no-drag] flex items-center gap-2 rounded-xl border border-[#E8EBF3] bg-white px-3 py-1.5 text-[13px] font-bold text-[#1A162F] shadow-sm transition-all hover:border-indigo-200 hover:bg-[#F8F9FC]"
+            >
+              <Gear size={16} weight="bold" className="text-[#666F8D]" />
+              Agent Settings
+            </button>
+          </div>
         </div>
       ) : null}
 

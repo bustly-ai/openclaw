@@ -61,7 +61,17 @@ type SidebarTask = {
   updatedAt?: number | null;
 };
 
+type SidebarSession = {
+  id: string;
+  agentId: string;
+  name: string;
+  icon?: string;
+  running?: boolean;
+  updatedAt?: number | null;
+};
+
 const SIDEBAR_TASKS_REFRESH_EVENT = "openclaw:sidebar-refresh-tasks";
+const SIDEBAR_TASK_RUN_STATE_EVENT = "openclaw:sidebar-task-run-state";
 
 function notifySidebarTasksRefresh() {
   window.dispatchEvent(new Event(SIDEBAR_TASKS_REFRESH_EVENT));
@@ -106,6 +116,17 @@ function sortSidebarAgents(
     const rightCreatedAt = right.createdAt ?? 0;
     if (leftCreatedAt !== rightCreatedAt) {
       return rightCreatedAt - leftCreatedAt;
+    }
+    return left.name.localeCompare(right.name);
+  });
+}
+
+function sortSidebarSessions(sessions: SidebarSession[]): SidebarSession[] {
+  return [...sessions].sort((left, right) => {
+    const leftUpdatedAt = left.updatedAt ?? 0;
+    const rightUpdatedAt = right.updatedAt ?? 0;
+    if (leftUpdatedAt !== rightUpdatedAt) {
+      return rightUpdatedAt - leftUpdatedAt;
     }
     return left.name.localeCompare(right.name);
   });
@@ -274,6 +295,7 @@ function AgentFolderItem(props: {
   agent: SidebarTask;
   workspaceId: string;
   active: boolean;
+  hasSessions: boolean;
   expanded: boolean;
   collapsed: boolean;
   onToggleExpand: () => void;
@@ -293,6 +315,13 @@ function AgentFolderItem(props: {
     icon: props.agent.icon,
   });
   const Icon = getSessionIconComponent(presentation.iconId);
+  const handleRowClick = () => {
+    if (props.hasSessions) {
+      props.onToggleExpand();
+      return;
+    }
+    props.onOpenAgent();
+  };
 
   useEffect(() => {
     if (!menuOpen) {
@@ -317,7 +346,7 @@ function AgentFolderItem(props: {
         ref={triggerRef}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
-        onClick={props.onToggleExpand}
+        onClick={handleRowClick}
         className={`group relative mx-3 flex cursor-pointer items-center gap-3 rounded-lg px-3 py-1.5 transition-all duration-200 ${
           props.active
             ? "bg-[#1A162F]/10 text-[#1A162F] hover:bg-[#1A162F]/15"
@@ -326,29 +355,41 @@ function AgentFolderItem(props: {
       >
         {!props.collapsed ? (
           <div className="relative flex h-5 w-5 shrink-0 items-center justify-center">
-            <div
-              className={`absolute inset-0 flex items-center justify-center transition-all duration-200 ${
-                isHovered ? "scale-90 opacity-0" : "scale-100 opacity-100"
-              }`}
-            >
-              {presentation.avatarSrc ? (
-                <img
-                  src={presentation.avatarSrc}
-                  alt={props.agent.name}
-                  className="h-5 w-5 rounded-full border border-[#E8EBF3] object-cover"
-                />
-              ) : (
-                <Icon size={16} weight="bold" className="shrink-0" />
-              )}
-            </div>
-            <div
-              className={`absolute inset-0 flex items-center justify-center text-[#8A93B2] transition-all duration-200 ${
-                isHovered ? "scale-100 opacity-100" : "scale-90 opacity-0"
-              }`}
-              style={{ transform: `rotate(${props.expanded ? 90 : 0}deg)` }}
-            >
-              <CaretRight size={12} weight="fill" />
-            </div>
+            {props.hasSessions ? (
+              <>
+                <div
+                  className={`absolute inset-0 flex items-center justify-center transition-all duration-200 ${
+                    isHovered ? "scale-90 opacity-0" : "scale-100 opacity-100"
+                  }`}
+                >
+                  {presentation.avatarSrc ? (
+                    <img
+                      src={presentation.avatarSrc}
+                      alt={props.agent.name}
+                      className="h-5 w-5 rounded-full border border-[#E8EBF3] object-cover"
+                    />
+                  ) : (
+                    <Icon size={16} weight="bold" className="shrink-0" />
+                  )}
+                </div>
+                <div
+                  className={`absolute inset-0 flex items-center justify-center text-[#8A93B2] transition-all duration-200 ${
+                    isHovered ? "scale-100 opacity-100" : "scale-90 opacity-0"
+                  }`}
+                  style={{ transform: `rotate(${props.expanded ? 90 : 0}deg)` }}
+                >
+                  <CaretRight size={12} weight="fill" />
+                </div>
+              </>
+            ) : presentation.avatarSrc ? (
+              <img
+                src={presentation.avatarSrc}
+                alt={props.agent.name}
+                className="h-5 w-5 rounded-full border border-[#E8EBF3] object-cover"
+              />
+            ) : (
+              <Icon size={16} weight="bold" className="shrink-0" />
+            )}
           </div>
         ) : null}
 
@@ -1146,6 +1187,8 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isWindowFullscreen, setIsWindowFullscreen] = useState(false);
   const [recentTasks, setRecentTasks] = useState<SidebarTask[]>([]);
+  const [sessionsByAgent, setSessionsByAgent] = useState<Record<string, SidebarSession[]>>({});
+  const [runningTasks, setRunningTasks] = useState<Record<string, boolean>>({});
   const [tasksLoading, setTasksLoading] = useState(true);
   const [hasLoadedTasks, setHasLoadedTasks] = useState(false);
   const [bustlyUserInfo, setBustlyUserInfo] = useState<BustlyUserInfo | null>(null);
@@ -1330,6 +1373,33 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   }, [loadWorkspaces]);
 
   useEffect(() => {
+    const handleRunStateChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionKey?: string; running?: boolean }>).detail;
+      const sessionKey = typeof detail?.sessionKey === "string" ? detail.sessionKey.trim() : "";
+      if (!sessionKey) {
+        return;
+      }
+      setRunningTasks((prev) => {
+        const nextRunning = detail?.running === true;
+        if ((prev[sessionKey] ?? false) === nextRunning) {
+          return prev;
+        }
+        if (!nextRunning) {
+          const next = { ...prev };
+          delete next[sessionKey];
+          return next;
+        }
+        return { ...prev, [sessionKey]: true };
+      });
+    };
+
+    window.addEventListener(SIDEBAR_TASK_RUN_STATE_EVENT, handleRunStateChange as EventListener);
+    return () => {
+      window.removeEventListener(SIDEBAR_TASK_RUN_STATE_EVENT, handleRunStateChange as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
     if (checking || !initialized || !effectiveWorkspaceId) {
       return;
     }
@@ -1346,6 +1416,27 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
           return;
         }
         const sortedAgents = sortSidebarAgents(agents, { pendingAgentId });
+        const sessionRows = await Promise.all(
+          sortedAgents.map(async (agent) => {
+            const sessions = await window.electronAPI.bustlyListAgentSessions(effectiveWorkspaceId, agent.agentId);
+            return [
+              agent.agentId,
+              sortSidebarSessions(
+                sessions.map((session) => ({
+                  id: session.sessionKey,
+                  agentId: session.agentId,
+                  name: session.name,
+                  icon: session.icon,
+                  updatedAt: session.updatedAt,
+                  running: runningTasks[session.sessionKey] === true,
+                })),
+              ),
+            ] as const;
+          }),
+        );
+        if (disposed) {
+          return;
+        }
         setRecentTasks(
           sortedAgents.map((agent) => ({
             id: agent.agentId,
@@ -1358,12 +1449,14 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
             updatedAt: agent.updatedAt,
           })),
         );
+        setSessionsByAgent(Object.fromEntries(sessionRows));
         setHasLoadedTasks(true);
         setTasksLoading(false);
       } catch {
         if (!disposed) {
           if (!hasLoadedTasks) {
             setRecentTasks([]);
+            setSessionsByAgent({});
           }
           setTasksLoading(false);
         }
@@ -1389,7 +1482,43 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     location.pathname,
     location.search,
     pendingAgentId,
+    runningTasks,
   ]);
+
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.onBustlySessionLabelUpdated((payload) => {
+      setSessionsByAgent((prev) => {
+        const agentSessions = prev[payload.agentId];
+        if (!agentSessions || agentSessions.length === 0) {
+          return prev;
+        }
+        let changed = false;
+        const nextSessions = sortSidebarSessions(
+          agentSessions.map((session) => {
+            if (session.id !== payload.sessionKey) {
+              return session;
+            }
+            changed = true;
+            return {
+              ...session,
+              name: payload.label,
+              updatedAt: payload.updatedAt ?? session.updatedAt,
+            };
+          }),
+        );
+        if (!changed) {
+          return prev;
+        }
+        return {
+          ...prev,
+          [payload.agentId]: nextSessions,
+        };
+      });
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     if (location.pathname !== "/chat") {
@@ -1552,27 +1681,6 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     }).iconId;
   }, [effectiveWorkspaceId]);
 
-  const getAgentChildTasks = useCallback((task: SidebarTask) => {
-    return resolveAgentPresentation({
-      workspaceId: effectiveWorkspaceId,
-      agentId: task.agentId,
-      name: task.name,
-      icon: task.icon,
-    }).useCases;
-  }, [effectiveWorkspaceId]);
-
-  const handleOpenAgentChildTask = useCallback((task: SidebarTask, useCase: { prompt: string }) => {
-    const searchParams = new URLSearchParams();
-    searchParams.set("agent", task.agentId);
-    searchParams.set("label", task.name);
-    searchParams.set("icon", resolveAgentRouteIcon(task));
-    searchParams.set("prompt", useCase.prompt);
-    void navigate({
-      pathname: "/chat",
-      search: `?${searchParams.toString()}`,
-    });
-  }, [navigate, resolveAgentRouteIcon]);
-
   const toggleAgentExpand = useCallback((agentId: string) => {
     setExpandedAgents((prev) => ({
       ...prev,
@@ -1694,6 +1802,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
         const otherTasks = remainingTasks.filter((entry) => !entry.isMain);
         return mainTask ? [mainTask, nextTask, ...otherTasks] : [nextTask, ...otherTasks];
       });
+      setSessionsByAgent((prev) => ({ ...prev, [nextAgentId]: [] }));
       setDraftScenarioName("");
       setSelectedIcon(DEFAULT_AGENT_AVATAR);
       setCreateModalOpen(false);
@@ -1769,6 +1878,11 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
         return;
       }
       setRecentTasks((prev) => prev.filter((entry) => entry.id !== selectedTask.id));
+      setSessionsByAgent((prev) => {
+        const next = { ...prev };
+        delete next[selectedTask.agentId];
+        return next;
+      });
       setDeleteModalOpen(false);
       setSelectedTaskId(null);
       if (selectedTask.agentId === activeAgentId) {
@@ -1890,7 +2004,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       >
         {!props.collapsed ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="space-y-0.5 px-0 pt-2 pb-4">
+            <div className="space-y-0.5 px-0 pt-2 pb-2">
               <SidebarItem
                 icon={SquaresFour}
                 label="Overview"
@@ -1925,11 +2039,11 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
             </div>
 
             <div
-              className="custom-scrollbar flex-1 overflow-y-auto pt-1 pb-4"
+              className="custom-scrollbar flex-1 overflow-y-auto pb-4"
               style={{ scrollbarGutter: "stable" }}
             >
-              <div className="sticky top-0 z-10 bg-[#F4F5F8] px-3 pb-2 pt-1">
-                <div className="group flex items-center justify-between py-1">
+              <div className="sticky top-0 z-10 bg-[#F4F5F8] px-3 pb-1.5">
+                <div className="group flex items-center justify-between py-0.5">
                   <div className="flex items-center gap-1 text-[11px] font-normal text-[#8A93B2]">
                     My agents
                   </div>
@@ -1958,13 +2072,15 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                   </>
                 ) : (
                   visibleAgentTasks.map((task) => {
-                    const childTasks = getAgentChildTasks(task);
+                    const childSessions = sessionsByAgent[task.agentId] ?? [];
+                    const showChildSessions = childSessions.length > 0 && expandedAgents[task.agentId] !== false;
                     return (
                       <div key={task.id} className="flex flex-col gap-0.5">
                         <AgentFolderItem
                           agent={task}
                           workspaceId={effectiveWorkspaceId}
-                          active={activeTaskId === task.id}
+                          active={!activeSessionKey && activeTaskId === task.id}
+                          hasSessions={childSessions.length > 0}
                           expanded={expandedAgents[task.agentId] !== false}
                           collapsed={false}
                           onToggleExpand={() => toggleAgentExpand(task.agentId)}
@@ -1992,30 +2108,34 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                         <div
                           className="grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
                           style={{
-                            gridTemplateRows: expandedAgents[task.agentId] !== false ? "1fr" : "0fr",
-                            opacity: expandedAgents[task.agentId] !== false ? 1 : 0.72,
+                            gridTemplateRows: showChildSessions ? "1fr" : "0fr",
+                            opacity: showChildSessions ? 1 : 0.72,
                           }}
                         >
                           <div className="overflow-hidden">
                             <div
                               className={`relative mb-1 flex flex-col gap-0.5 before:absolute before:top-0 before:bottom-3 before:left-[30px] before:w-px before:bg-gray-200/60 before:content-[''] transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                                expandedAgents[task.agentId] !== false ? "translate-y-0" : "-translate-y-1"
+                                showChildSessions ? "translate-y-0" : "-translate-y-1"
                               }`}
                             >
-                              {childTasks.length === 0 ? (
-                                <div className="mx-3 ml-[30px] flex items-center px-2 py-1.5 text-[12px] text-[#8A93B2] select-none">
-                                  No active tasks
-                                </div>
-                              ) : (
-                                childTasks.map((useCase) => (
-                                  <AgentChildItem
-                                    key={`${task.id}-${useCase.label}`}
-                                    label={useCase.label}
-                                    active={false}
-                                    onClick={() => handleOpenAgentChildTask(task, useCase)}
-                                  />
-                                ))
-                              )}
+                              {childSessions.map((session) => (
+                                <AgentChildItem
+                                  key={session.id}
+                                  label={session.name}
+                                  active={activeSessionKey === session.id}
+                                  running={session.running}
+                                  onClick={() => {
+                                    void navigate(
+                                      buildChatRoute({
+                                        agentId: task.agentId,
+                                        sessionKey: session.id,
+                                        label: session.name,
+                                        icon: session.icon ?? resolveAgentRouteIcon(task),
+                                      }),
+                                    );
+                                  }}
+                                />
+                              ))}
                             </div>
                           </div>
                         </div>
