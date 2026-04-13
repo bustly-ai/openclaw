@@ -541,14 +541,6 @@ export function enforceRuntimeRouting(params: {
     };
   }
 
-  if (params.classification.layer === "retrieval_only" && params.matchedPriorSessions === 0) {
-    return {
-      ...params.classification,
-      layer: "none",
-      reason: "no_prior_sessions",
-    };
-  }
-
   return {
     ...params.classification,
     repeatedTask,

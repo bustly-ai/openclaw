@@ -70,4 +70,38 @@ describe("enforceRuntimeRouting", () => {
     expect(routed.repeatedTask).toBe(true);
     expect(routed.reason).toBe("runtime_promoted_repeated_procedure");
   });
+
+  it("keeps first-seen retrieval precedents instead of dropping them", () => {
+    const settings = resolvePostRunMemoryReviewSettings({
+      agents: {
+        defaults: {
+          selfEvolution: {
+            enabled: true,
+            minToolCalls: DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS,
+          },
+        },
+      },
+    });
+    expect(settings).not.toBeNull();
+    if (!settings) {
+      throw new Error("missing settings");
+    }
+
+    const routed = enforceRuntimeRouting({
+      classification: {
+        layer: "retrieval_only",
+        reason: "first_seen_correction_precedent",
+        confidence: 0.88,
+        repeatedTask: false,
+        summary: "The agent corrected a pagination mistake after user feedback.",
+      },
+      matchedPriorSessions: 0,
+      toolCallCount: 3,
+      settings,
+    });
+
+    expect(routed.layer).toBe("retrieval_only");
+    expect(routed.reason).toBe("first_seen_correction_precedent");
+    expect(routed.repeatedTask).toBe(false);
+  });
 });
