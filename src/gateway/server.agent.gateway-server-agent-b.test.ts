@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { BARE_SESSION_RESET_PROMPT } from "../auto-reply/reply/session-reset-prompt.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import { createWhatsAppTestPlugin } from "../test-utils/channel-plugin-stubs.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
@@ -64,7 +64,7 @@ const defaultRegistry = createRegistry([
   {
     pluginId: "whatsapp",
     source: "test",
-    plugin: whatsappPlugin,
+    plugin: createWhatsAppTestPlugin(),
   },
 ]);
 
@@ -156,14 +156,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent errors when deliver=true and last-channel plugin is unavailable", async () => {
-    const registry = createRegistry([
-      {
-        pluginId: "msteams",
-        source: "test",
-        plugin: createMSTeamsPlugin(),
-      },
-    ]);
-    setRegistry(registry);
+    setRegistry(emptyRegistry);
     await writeMainSessionEntry({
       sessionId: "sess-teams",
       lastChannel: "msteams",

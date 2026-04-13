@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
-import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createTelegramTestPlugin,
+  createWhatsAppTestPlugin,
+} from "../../test-utils/channel-plugin-stubs.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveOutboundTarget } from "./targets.js";
 
@@ -9,8 +11,8 @@ export function installResolveOutboundTargetPluginRegistryHooks(): void {
   beforeEach(() => {
     setActivePluginRegistry(
       createTestRegistry([
-        { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
-        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+        { pluginId: "whatsapp", plugin: createWhatsAppTestPlugin(), source: "test" },
+        { pluginId: "telegram", plugin: createTelegramTestPlugin(), source: "test" },
       ]),
     );
   });
