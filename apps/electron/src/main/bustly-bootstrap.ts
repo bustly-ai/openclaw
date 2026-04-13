@@ -940,21 +940,15 @@ async function loadRenderedTemplate(
     agentName?: string;
   },
 ): Promise<string> {
-  const candidateNames = opts?.agentName
-    ? [`agents/${normalizeBustlyAgentName(opts.agentName)}/${name}`, name]
-    : [name];
-  for (const candidateName of candidateNames) {
-    try {
-      const template = await loadWorkspaceTemplate(candidateName);
-      return `${MANAGED_MARKER}\n${renderTemplate(template, values).trim()}\n`;
-    } catch (error) {
-      if (candidateName !== name) {
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw new Error(`Missing Bustly template for ${name}`);
+  const template = opts?.agentName
+    ? await loadWorkspaceTemplate(`agents/${normalizeBustlyAgentName(opts.agentName)}/${name}`, {
+        // Prefer the remote agent override, then the remote default template,
+        // and only then fall back to the bundled default template.
+        remoteFallbackName: name,
+        localFallbackName: name,
+      })
+    : await loadWorkspaceTemplate(name);
+  return `${MANAGED_MARKER}\n${renderTemplate(template, values).trim()}\n`;
 }
 
 async function writeManagedFile(filePath: string, content: string): Promise<void> {

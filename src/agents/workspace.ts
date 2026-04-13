@@ -43,10 +43,6 @@ let gitAvailabilityPromise: Promise<boolean> | null = null;
 // File content cache with mtime invalidation to avoid redundant reads
 const workspaceFileCache = new Map<string, { content: string; mtimeMs: number }>();
 
-function buildWorkspaceTemplateCacheKey(name: string, env: NodeJS.ProcessEnv = process.env): string {
-  return `${buildRemoteWorkspaceTemplateSourceKey(env)}::${name}`;
-}
-
 /**
  * Read file with caching based on mtime. Returns cached content if file
  * hasn't changed, otherwise reads from disk and updates cache.
@@ -87,8 +83,44 @@ function stripFrontMatter(content: string): string {
   return trimmed;
 }
 
-export async function loadWorkspaceTemplate(name: string): Promise<string> {
-  const cacheKey = buildWorkspaceTemplateCacheKey(name);
+type LoadWorkspaceTemplateOptions = {
+  remoteFallbackName?: string;
+  localFallbackName?: string;
+};
+
+function normalizeWorkspaceTemplateName(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+async function readLocalWorkspaceTemplate(name: string): Promise<string> {
+  const templateDir = await resolveWorkspaceTemplateDir();
+  const templatePath = path.join(templateDir, name);
+  try {
+    const content = await fs.readFile(templatePath, "utf-8");
+    return stripFrontMatter(content);
+  } catch {
+    throw new Error(
+      `Missing workspace template: ${name} (${templatePath}). Ensure docs/reference/templates are packaged.`,
+    );
+  }
+}
+
+function buildWorkspaceTemplateCacheKey(
+  name: string,
+  opts?: LoadWorkspaceTemplateOptions,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const remoteFallbackName = normalizeWorkspaceTemplateName(opts?.remoteFallbackName) ?? "";
+  const localFallbackName = normalizeWorkspaceTemplateName(opts?.localFallbackName) ?? "";
+  return `${buildRemoteWorkspaceTemplateSourceKey(env)}::${name}::${remoteFallbackName}::${localFallbackName}`;
+}
+
+export async function loadWorkspaceTemplate(
+  name: string,
+  opts?: LoadWorkspaceTemplateOptions,
+): Promise<string> {
+  const cacheKey = buildWorkspaceTemplateCacheKey(name, opts);
   const cached = workspaceTemplateCache.get(cacheKey);
   if (cached) {
     return cached;
@@ -99,16 +131,16 @@ export async function loadWorkspaceTemplate(name: string): Promise<string> {
     if (typeof remoteContent === "string") {
       return stripFrontMatter(remoteContent);
     }
-    const templateDir = await resolveWorkspaceTemplateDir();
-    const templatePath = path.join(templateDir, name);
-    try {
-      const content = await fs.readFile(templatePath, "utf-8");
-      return stripFrontMatter(content);
-    } catch {
-      throw new Error(
-        `Missing workspace template: ${name} (${templatePath}). Ensure docs/reference/templates are packaged.`,
-      );
+
+    const remoteFallbackName = normalizeWorkspaceTemplateName(opts?.remoteFallbackName);
+    if (remoteFallbackName && remoteFallbackName !== name) {
+      const remoteFallbackContent = await loadRemoteWorkspaceTemplate(remoteFallbackName);
+      if (typeof remoteFallbackContent === "string") {
+        return stripFrontMatter(remoteFallbackContent);
+      }
     }
+
+    return await readLocalWorkspaceTemplate(normalizeWorkspaceTemplateName(opts?.localFallbackName) ?? name);
   })();
 
   workspaceTemplateCache.set(cacheKey, pending);

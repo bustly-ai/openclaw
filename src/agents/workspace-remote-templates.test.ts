@@ -109,4 +109,57 @@ describe("workspace remote templates", () => {
 
     expect(content).toBe("# Remote Preferred\n");
   });
+
+  it("falls back from a missing remote agent template to the remote default template", async () => {
+    const home = await makeTempRoot();
+    vi.stubEnv("OPENCLAW_HOME", home);
+    vi.stubEnv(
+      "BUSTLY_WORKSPACE_TEMPLATE_BASE_URL",
+      "https://example.com/openclaw-prompts",
+    );
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/agents/test-user/SOUL.md")) {
+        return new Response("missing", { status: 404, statusText: "Not Found" });
+      }
+      if (url.endsWith("/SOUL.md")) {
+        return new Response("# Remote Default Soul\n", { status: 200 });
+      }
+      return new Response("missing", { status: 404, statusText: "Not Found" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const content = await loadWorkspaceTemplate("agents/test-user/SOUL.md", {
+      remoteFallbackName: "SOUL.md",
+      localFallbackName: "SOUL.md",
+    });
+
+    expect(content).toBe("# Remote Default Soul\n");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://example.com/openclaw-prompts/agents/test-user/SOUL.md",
+    );
+    expect(fetchMock).toHaveBeenCalledWith("https://example.com/openclaw-prompts/SOUL.md");
+  });
+
+  it("falls back to the bundled default template after remote agent and default templates miss", async () => {
+    const home = await makeTempRoot();
+    vi.stubEnv("OPENCLAW_HOME", home);
+    vi.stubEnv(
+      "BUSTLY_WORKSPACE_TEMPLATE_BASE_URL",
+      "https://example.com/openclaw-prompts",
+    );
+    const fetchMock = vi.fn(async () => new Response("missing", { status: 404, statusText: "Not Found" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const content = await loadWorkspaceTemplate("agents/test-user/SOUL.md", {
+      remoteFallbackName: "SOUL.md",
+      localFallbackName: "SOUL.md",
+    });
+
+    expect(content).toContain("# SOUL.md - Who You Are");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://example.com/openclaw-prompts/agents/test-user/SOUL.md",
+    );
+    expect(fetchMock).toHaveBeenCalledWith("https://example.com/openclaw-prompts/SOUL.md");
+  });
 });
