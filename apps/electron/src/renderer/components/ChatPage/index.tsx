@@ -15,6 +15,13 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { listWorkspaceSummaries } from "../../lib/bustly-supabase";
+import {
+  createBustlyAgentSession,
+  listBustlyAgents,
+  patchBustlySessionModel,
+  subscribeBustlySessionLabelUpdated,
+  updateBustlyAgent,
+} from "../../lib/bustly-gateway";
 import { GatewayBrowserClient, type GatewayEventFrame } from "../../lib/gateway-client";
 import { createGatewayInstanceId } from "../../lib/gateway-instance-id";
 import {
@@ -2282,7 +2289,7 @@ export default function ChatPage() {
       return;
     }
     let disposed = false;
-    void window.electronAPI.bustlyListAgents(activeWorkspaceId).then((agents) => {
+    void listBustlyAgents(activeWorkspaceId).then((agents) => {
       if (disposed) {
         return;
       }
@@ -2669,9 +2676,13 @@ export default function ChatPage() {
       return false;
     }
     const selectedModelRef = resolveChatModelRef(modelLevel);
-    const patchModelResult = await window.electronAPI.gatewayPatchSessionModel(params.sessionKey, selectedModelRef);
-    if (!patchModelResult.success) {
-      setError(patchModelResult.error ?? "Failed to apply model selection.");
+    try {
+      await patchBustlySessionModel({
+        sessionKey: params.sessionKey,
+        model: selectedModelRef,
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Failed to apply model selection.");
       return false;
     }
     const outgoingArtifacts: ChatInputArtifact[] = [
@@ -2807,15 +2818,15 @@ export default function ChatPage() {
       const startedFromAgentDraft = !currentSessionKey;
       if (!targetSessionKey) {
         const nextLabel = draft.trim().slice(0, 60) || "New conversation";
-        const createSessionResult = await window.electronAPI.bustlyCreateAgentSession({
+        const createSessionResult = await createBustlyAgentSession({
           workspaceId: activeWorkspaceId,
           agentId: currentAgentId,
           label: nextLabel,
           promptExcerpt: draft.trim(),
           sampleRouteKey: resolveBustlySampleRouteKey(modelLevel),
         });
-        if (!createSessionResult.success || !createSessionResult.sessionKey) {
-          setError(createSessionResult.error ?? "Failed to create conversation.");
+        if (!createSessionResult.sessionKey) {
+          setError("Failed to create conversation.");
           return;
         }
         targetSessionKey = createSessionResult.sessionKey;
@@ -2872,7 +2883,7 @@ export default function ChatPage() {
   }, [sendChatMessage]);
 
   useEffect(() => {
-    const unsubscribe = window.electronAPI.onBustlySessionLabelUpdated((payload) => {
+    const unsubscribe = subscribeBustlySessionLabelUpdated((payload) => {
       notifySidebarTasksRefresh();
       if (payload.sessionKey !== currentSessionKeyRef.current) {
         return;
@@ -2903,9 +2914,13 @@ export default function ChatPage() {
       return;
     }
     const selectedModelRef = resolveChatModelRef(modelLevel);
-    const patchModelResult = await window.electronAPI.gatewayPatchSessionModel(currentSessionKey, selectedModelRef);
-    if (!patchModelResult.success) {
-      setError(patchModelResult.error ?? "Failed to apply model selection.");
+    try {
+      await patchBustlySessionModel({
+        sessionKey: currentSessionKey,
+        model: selectedModelRef,
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Failed to apply model selection.");
       return;
     }
     const outgoingArtifacts: ChatInputArtifact[] = [
@@ -3126,7 +3141,7 @@ export default function ChatPage() {
     }
     setAgentSettingsSaving(true);
     try {
-      const result = await window.electronAPI.bustlyUpdateAgent({
+      await updateBustlyAgent({
         workspaceId: activeWorkspaceId,
         agentId: currentAgentId,
         ...(nameChanged ? { name: trimmedName } : {}),
@@ -3134,11 +3149,7 @@ export default function ChatPage() {
         ...(skillsChanged ? { skills: nextPersistedSkills } : {}),
         ...(nextAvatarName !== undefined ? { icon: nextAvatarName ?? undefined } : {}),
       });
-      if (!result.success) {
-        setError(result.error ?? "Failed to save agent settings.");
-        return;
-      }
-      const refreshedAgents = await window.electronAPI.bustlyListAgents(activeWorkspaceId).catch(() => null);
+      const refreshedAgents = await listBustlyAgents(activeWorkspaceId).catch(() => null);
       if (Array.isArray(refreshedAgents)) {
         setCurrentAgentSummary(refreshedAgents.find((agent) => agent.agentId === currentAgentId) ?? null);
       } else {

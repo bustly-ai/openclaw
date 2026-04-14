@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import * as Sentry from "@sentry/electron/renderer";
+import { getBustlySupabaseConfig } from "./bustly-gateway";
 
 type WorkspaceMemberCountRow = {
   workspace_id: string;
@@ -372,7 +373,7 @@ function buildSupabaseConfigKey(config: BustlySupabaseConfig): string {
 }
 
 async function getSupabaseConfig(): Promise<BustlySupabaseConfig> {
-  const config = await window.electronAPI.bustlyGetSupabaseConfig();
+  const config = await getBustlySupabaseConfig();
   if (!config?.url || !config.anonKey || !config.accessToken || !config.userId) {
     throw new Error("Missing Bustly Supabase config");
   }

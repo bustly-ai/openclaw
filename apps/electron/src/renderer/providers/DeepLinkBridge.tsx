@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import { getBustlySupabaseConfig, setActiveBustlyWorkspace } from "../lib/bustly-gateway";
 import { useAppState } from "./AppStateProvider";
 
 function sanitizeDeepLinkRoute(route: string | null, workspaceId: string | null): string | null {
@@ -32,21 +33,15 @@ export default function DeepLinkBridge() {
     const nextWorkspaceId = data.workspaceId?.trim() || "";
     if (nextWorkspaceId) {
       try {
-        const currentConfig = await window.electronAPI.bustlyGetSupabaseConfig();
+        const currentConfig = await getBustlySupabaseConfig();
         const currentWorkspaceId = currentConfig?.workspaceId?.trim() || "";
         console.log("[DeepLinkBridge] workspace check", {
           currentWorkspaceId,
           nextWorkspaceId,
         });
         if (currentWorkspaceId !== nextWorkspaceId) {
-          const switchResult = await window.electronAPI.bustlySetActiveWorkspace(nextWorkspaceId);
+          const switchResult = await setActiveBustlyWorkspace({ workspaceId: nextWorkspaceId });
           console.log("[DeepLinkBridge] switch result", switchResult);
-          if (!switchResult.success) {
-            console.warn("[DeepLink] Failed to switch workspace", {
-              workspaceId: nextWorkspaceId,
-              error: switchResult.error ?? "Unknown error",
-            });
-          }
         }
       } catch (error) {
         console.warn("[DeepLink] Workspace switch failed", {

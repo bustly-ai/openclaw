@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   deleteBustlyWorkspaceAgent: vi.fn(),
   listBustlyWorkspaceAgentSessions: vi.fn(),
   createBustlyWorkspaceAgentSession: vi.fn(),
+  loadConfig: vi.fn(),
+  scheduleBustlySessionTitleGeneration: vi.fn(),
 }));
 
 vi.mock("../../bustly-oauth.js", () => ({
@@ -26,6 +28,15 @@ vi.mock("../../bustly/workspace-agents.js", () => ({
     mocks.createBustlyWorkspaceAgentSession(params),
 }));
 
+vi.mock("../../config/config.js", () => ({
+  loadConfig: () => mocks.loadConfig(),
+}));
+
+vi.mock("../../bustly/session-title.js", () => ({
+  scheduleBustlySessionTitleGeneration: (params: unknown) =>
+    mocks.scheduleBustlySessionTitleGeneration(params),
+}));
+
 import { bustlyAgentsHandlers } from "./bustly-agents.js";
 
 async function invoke(
@@ -33,15 +44,16 @@ async function invoke(
   params: Record<string, unknown> = {},
 ) {
   const respond = vi.fn();
+  const broadcast = vi.fn();
   await bustlyAgentsHandlers[method]({
     req: {} as never,
     params: params as never,
     respond: respond as never,
-    context: {} as never,
+    context: { broadcast } as never,
     client: null,
     isWebchatConnect: () => false,
   });
-  return respond;
+  return { respond, broadcast };
 }
 
 describe("gateway bustly agent/session handlers", () => {
@@ -53,11 +65,14 @@ describe("gateway bustly agent/session handlers", () => {
     mocks.deleteBustlyWorkspaceAgent.mockReset();
     mocks.listBustlyWorkspaceAgentSessions.mockReset();
     mocks.createBustlyWorkspaceAgentSession.mockReset();
+    mocks.loadConfig.mockReset();
+    mocks.scheduleBustlySessionTitleGeneration.mockReset();
+    mocks.loadConfig.mockReturnValue({ providers: [] });
   });
 
   it("lists empty agent list when workspace id is unavailable", async () => {
     mocks.readBustlyOAuthState.mockReturnValue(null);
-    const respond = await invoke("bustly.agents.list");
+    const { respond } = await invoke("bustly.agents.list");
     expect(respond).toHaveBeenCalledWith(true, [], undefined);
     expect(mocks.listBustlyWorkspaceAgents).not.toHaveBeenCalled();
   });
@@ -66,7 +81,7 @@ describe("gateway bustly agent/session handlers", () => {
     mocks.listBustlyWorkspaceAgents.mockReturnValue([
       { agentId: "bustly-workspace-1-overview", name: "Overview" },
     ]);
-    const respond = await invoke("bustly.agents.list", { workspaceId: "workspace-1" });
+    const { respond } = await invoke("bustly.agents.list", { workspaceId: "workspace-1" });
     expect(mocks.listBustlyWorkspaceAgents).toHaveBeenCalledWith({
       workspaceId: "workspace-1",
     });
@@ -78,7 +93,7 @@ describe("gateway bustly agent/session handlers", () => {
   });
 
   it("validates required fields for bustly.agents.create", async () => {
-    const respond = await invoke("bustly.agents.create", { workspaceId: "workspace-1" });
+    const { respond } = await invoke("bustly.agents.create", { workspaceId: "workspace-1" });
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
@@ -94,7 +109,7 @@ describe("gateway bustly agent/session handlers", () => {
       agentId: "bustly-workspace-1-growth",
       workspaceDir: "/tmp/workspaces/workspace-1/agents/growth",
     });
-    const respond = await invoke("bustly.agents.create", {
+    const { respond } = await invoke("bustly.agents.create", {
       workspaceId: "workspace-1",
       name: "growth",
       icon: "TrendUp",
@@ -142,7 +157,7 @@ describe("gateway bustly agent/session handlers", () => {
 
   it("passes through bustly agent update identity and skills", async () => {
     mocks.updateBustlyWorkspaceAgent.mockResolvedValue(undefined);
-    const respond = await invoke("bustly.agents.update", {
+    const { respond } = await invoke("bustly.agents.update", {
       workspaceId: "workspace-1",
       agentId: "bustly-workspace-1-growth",
       name: "Growth Ops",
@@ -176,16 +191,48 @@ describe("gateway bustly agent/session handlers", () => {
       name: "Daily pulse",
       updatedAt: 100,
     });
-    const respond = await invoke("bustly.sessions.create", {
+    const { respond, broadcast } = await invoke("bustly.sessions.create", {
       workspaceId: "workspace-1",
       agentId: "bustly-workspace-1-overview",
       label: "Daily pulse",
+      promptExcerpt: "Summarize today's pipeline failures",
+      sampleRouteKey: "chat.advanced",
     });
     expect(mocks.createBustlyWorkspaceAgentSession).toHaveBeenCalledWith({
       workspaceId: "workspace-1",
       agentId: "bustly-workspace-1-overview",
       label: "Daily pulse",
     });
+    expect(mocks.scheduleBustlySessionTitleGeneration).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+      sessionKey: "agent:bustly-workspace-1-overview:conversation:abc",
+      sessionId: "session-1",
+      seedLabel: "Daily pulse",
+      promptExcerpt: "Summarize today's pipeline failures",
+      sampleRouteKey: "chat.advanced",
+      cfg: { providers: [] },
+      onLabelUpdated: expect.any(Function),
+    });
+    const onLabelUpdated = mocks.scheduleBustlySessionTitleGeneration.mock.calls[0]?.[0]
+      ?.onLabelUpdated as ((payload: unknown) => void) | undefined;
+    expect(onLabelUpdated).toBeTypeOf("function");
+    onLabelUpdated?.({
+      agentId: "bustly-workspace-1-overview",
+      sessionKey: "agent:bustly-workspace-1-overview:conversation:abc",
+      label: "Pipeline failures",
+      updatedAt: 200,
+    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "bustly.session.label.updated",
+      {
+        agentId: "bustly-workspace-1-overview",
+        sessionKey: "agent:bustly-workspace-1-overview:conversation:abc",
+        label: "Pipeline failures",
+        updatedAt: 200,
+      },
+      { dropIfSlow: true },
+    );
     expect(respond).toHaveBeenCalledWith(
       true,
       {
@@ -214,7 +261,7 @@ describe("gateway bustly agent/session handlers", () => {
         userName: "User One",
       },
     });
-    const respond = await invoke("bustly.supabase.get-config");
+    const { respond } = await invoke("bustly.supabase.get-config");
     expect(respond).toHaveBeenCalledWith(
       true,
       {

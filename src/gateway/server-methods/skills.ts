@@ -4,6 +4,10 @@ import { buildGlobalSkillStatus, buildWorkspaceSkillStatus } from "../../agents/
 import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
 import { bumpSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
+import {
+  installBustlyGlobalSkill,
+  listBustlyGlobalSkillCatalog,
+} from "../../bustly/skill-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
@@ -66,6 +70,35 @@ function resolveWorkspaceDirForSkillName(params: {
 }
 
 export const skillsHandlers: GatewayRequestHandlers = {
+  "skills.catalog.list": async ({ respond }) => {
+    try {
+      const items = await listBustlyGlobalSkillCatalog();
+      respond(true, items, undefined);
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : String(error)),
+      );
+    }
+  },
+  "skills.catalog.install": async ({ params, respond }) => {
+    const skillKey = typeof params.skillKey === "string" ? params.skillKey.trim() : "";
+    if (!skillKey) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "skillKey is required"));
+      return;
+    }
+    try {
+      await installBustlyGlobalSkill(skillKey);
+      respond(true, { ok: true, skillKey }, undefined);
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : String(error)),
+      );
+    }
+  },
   "skills.status": ({ params, respond }) => {
     if (!validateSkillsStatusParams(params)) {
       respond(

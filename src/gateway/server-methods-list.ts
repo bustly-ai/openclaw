@@ -47,6 +47,8 @@ const BASE_METHODS = [
   "skills.bins",
   "skills.install",
   "skills.update",
+  "skills.catalog.list",
+  "skills.catalog.install",
   "update.run",
   "voicewake.get",
   "voicewake.set",
@@ -140,5 +142,6 @@ export const GATEWAY_EVENTS = [
   "voicewake.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
+  "bustly.session.label.updated",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];

@@ -363,6 +363,27 @@ describe("gateway sessions patch", () => {
     expect(res.error.message).toContain("invalid sendPolicy");
   });
 
+  test("allows duplicate labels across sessions", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:one": {
+        sessionId: "session-one",
+        updatedAt: 1,
+        label: "Briefing",
+      } as SessionEntry,
+    };
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:two",
+      patch: { key: "agent:main:two", label: "Briefing" },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.label).toBe("Briefing");
+  });
+
   test("rejects invalid groupActivation values", async () => {
     const store: Record<string, SessionEntry> = {};
     const res = await applySessionsPatchToStore({

@@ -36,6 +36,17 @@ import {
 import { resolveAgentPresentation } from "../../lib/agent-presentation";
 import { listWorkspaceSummaries, type WorkspaceSummary } from "../../lib/bustly-supabase";
 import {
+  createBustlyAgent,
+  deleteBustlyAgent,
+  getBustlyUserInfo,
+  isBustlyLoggedIn,
+  listBustlyAgentSessions,
+  listBustlyAgents,
+  setActiveBustlyWorkspace,
+  subscribeBustlySessionLabelUpdated,
+  updateBustlyAgent,
+} from "../../lib/bustly-gateway";
+import {
   fetchSkillCatalog,
   recommendSkillNames,
   type SkillCatalogItem,
@@ -1438,14 +1449,17 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
         setTasksLoading(!hasLoadedTasks);
       }
       try {
-        const agents = await window.electronAPI.bustlyListAgents(effectiveWorkspaceId);
+        const agents = await listBustlyAgents(effectiveWorkspaceId);
         if (disposed) {
           return;
         }
         const sortedAgents = sortSidebarAgents(agents, { pendingAgentId });
         const sessionRows = await Promise.all(
           sortedAgents.map(async (agent) => {
-            const sessions = await window.electronAPI.bustlyListAgentSessions(effectiveWorkspaceId, agent.agentId);
+            const sessions = await listBustlyAgentSessions({
+              workspaceId: effectiveWorkspaceId,
+              agentId: agent.agentId,
+            });
             return [
               agent.agentId,
               sortSidebarSessions(
@@ -1513,7 +1527,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   ]);
 
   useEffect(() => {
-    const unsubscribe = window.electronAPI.onBustlySessionLabelUpdated((payload) => {
+    const unsubscribe = subscribeBustlySessionLabelUpdated((payload) => {
       setSessionsByAgent((prev) => {
         const agentSessions = prev[payload.agentId];
         if (!agentSessions || agentSessions.length === 0) {
@@ -1622,14 +1636,14 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
 
     const loadBustlyUserInfo = async () => {
       try {
-        const loggedIn = await window.electronAPI.bustlyIsLoggedIn();
+        const loggedIn = await isBustlyLoggedIn();
         if (!loggedIn) {
           if (!disposed) {
             setBustlyUserInfo(null);
           }
           return;
         }
-        const userInfo = await window.electronAPI.bustlyGetUserInfo();
+        const userInfo = await getBustlyUserInfo();
         if (!disposed) {
           setBustlyUserInfo(userInfo);
         }
@@ -1722,11 +1736,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     const workspace = workspaces.find((entry) => entry.id === workspaceId);
     showGlobalLoading(`Loading ${workspace?.name?.trim() || "workspace"}...`, "workspace-switch", "loading", 10);
     try {
-      const result = await window.electronAPI.bustlySetActiveWorkspace(workspaceId, workspace?.name);
-      if (!result.success) {
-        hideGlobalLoading("workspace-switch");
-        return;
-      }
+      await setActiveBustlyWorkspace({ workspaceId, workspaceName: workspace?.name });
       setActiveWorkspaceId(workspaceId);
       void navigate("/chat", { replace: true });
       notifySidebarTasksRefresh();
@@ -1879,7 +1889,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     setCreateError(null);
     try {
       const workspace = workspaces.find((entry) => entry.id === effectiveWorkspaceId);
-      const result = await window.electronAPI.bustlyCreateAgent({
+      const result = await createBustlyAgent({
         workspaceId: effectiveWorkspaceId,
         name,
         description: draftScenarioDescription.trim(),
@@ -1892,11 +1902,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
               ? createSkillCatalog.map((skill) => skill.name).toSorted()
               : selectedCreateSkills),
       });
-      if (!result.success) {
-        setCreateError(result.error ?? "Failed to create agent.");
-        return;
-      }
-      const nextAgentId = result.agentId ?? buildBustlyWorkspaceAgentId(effectiveWorkspaceId, name);
+      const nextAgentId = result.agentId || buildBustlyWorkspaceAgentId(effectiveWorkspaceId, name);
       setPendingAgentId(nextAgentId);
       setHasLoadedTasks(true);
       setRecentTasks((prev) => {
@@ -1939,15 +1945,11 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     setRenameSaving(true);
     setRenameError(null);
     try {
-      const result = await window.electronAPI.bustlyUpdateAgent({
+      await updateBustlyAgent({
         workspaceId: effectiveWorkspaceId,
         agentId: selectedTask.agentId,
         name,
       });
-      if (!result.success) {
-        setRenameError(result.error ?? "Failed to save agent name.");
-        return;
-      }
       setRecentTasks((prev) => prev.map((entry) => (entry.id === selectedTaskId ? { ...entry, name } : entry)));
       setRenameModalOpen(false);
       setSelectedTaskId(null);
@@ -1978,14 +1980,10 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       return;
     }
     try {
-      const result = await window.electronAPI.bustlyDeleteAgent({
+      await deleteBustlyAgent({
         workspaceId: effectiveWorkspaceId,
         agentId: selectedTask.agentId,
       });
-      if (!result.success) {
-        setDeleteModalOpen(false);
-        return;
-      }
       setRecentTasks((prev) => prev.filter((entry) => entry.id !== selectedTask.id));
       setSessionsByAgent((prev) => {
         const next = { ...prev };
@@ -2017,12 +2015,13 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     if (!selectedTask || !effectiveWorkspaceId) {
       return;
     }
-    const result = await window.electronAPI.bustlyUpdateAgent({
-      workspaceId: effectiveWorkspaceId,
-      agentId: selectedTask.agentId,
-      icon,
-    });
-    if (!result.success) {
+    try {
+      await updateBustlyAgent({
+        workspaceId: effectiveWorkspaceId,
+        agentId: selectedTask.agentId,
+        icon,
+      });
+    } catch {
       return;
     }
     setRecentTasks((prev) => prev.map((entry) => (entry.id === selectedTaskId ? { ...entry, icon } : entry)));

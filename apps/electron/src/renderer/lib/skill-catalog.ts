@@ -1,5 +1,8 @@
-import { GatewayBrowserClient } from "./gateway-client";
-import { createGatewayInstanceId } from "./gateway-instance-id";
+import {
+  installGlobalSkillCatalogItem as installGlobalSkillCatalogItemViaGateway,
+  listGlobalSkillCatalog,
+  requestBustlyGatewayMethod,
+} from "./bustly-gateway";
 import { runSupabaseRequestWithRetry } from "./bustly-supabase";
 
 export type GatewaySkillStatusEntry = {
@@ -314,67 +317,11 @@ export function recommendSkillNames(
   return limit ? recommended.slice(0, limit) : recommended;
 }
 
-async function requestSkillGatewayMethod<T>(params: {
-  method: string;
-  payload?: unknown;
-  scope?: string;
-}): Promise<T> {
-  const gatewayStatus = await window.electronAPI.gatewayStatus();
-  if (!gatewayStatus.running) {
-    throw new Error("Gateway is not running.");
-  }
-
-  const connection = await window.electronAPI.gatewayConnectConfig();
-  if (!connection.token || !connection.wsUrl) {
-    throw new Error("Gateway token missing in config; cannot load skills.");
-  }
-
-  return await new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const client = new GatewayBrowserClient({
-      url: connection.wsUrl,
-      token: connection.token ?? undefined,
-      clientName: "openclaw-control-ui",
-      mode: "webchat",
-      instanceId: createGatewayInstanceId(params.scope ?? "skills"),
-      onHello: () => {
-        void client
-          .request<T>(params.method, params.payload)
-          .then((report) => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            client.stop();
-            resolve(report);
-          })
-          .catch((error) => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            client.stop();
-            reject(error);
-          });
-      },
-      onClose: ({ error, reason }) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        reject(new Error(error?.message || reason || "Gateway disconnected."));
-      },
-    });
-
-    client.start();
-  });
-}
-
 export async function fetchSkillStatusReport(params?: {
   agentId?: string;
   scope?: string;
 }): Promise<GatewaySkillStatusReport> {
-  return await requestSkillGatewayMethod<GatewaySkillStatusReport>({
+  return await requestBustlyGatewayMethod<GatewaySkillStatusReport>({
     method: "skills.status",
     payload: params?.agentId ? { agentId: params.agentId } : {},
     scope: params?.scope,
@@ -387,7 +334,7 @@ export async function fetchSkillCatalog(params?: {
   surface?: "agent" | "hub";
 }): Promise<SkillCatalogItem[]> {
   if (params?.surface === "hub") {
-    const items = await window.electronAPI.bustlyListGlobalSkills();
+    const items = await listGlobalSkillCatalog();
     return items
       .map((item) => ({
         id: item.id.trim(),
@@ -429,13 +376,10 @@ export async function installSkillCatalogItem(params: {
   scope?: string;
 }): Promise<void> {
   if (!params.installId) {
-    const result = await window.electronAPI.bustlyInstallGlobalSkill(params.skillKey);
-    if (!result.success) {
-      throw new Error(result.error ?? `Failed to install skill "${params.skillKey}".`);
-    }
+    await installGlobalSkillCatalogItemViaGateway(params.skillKey);
     return;
   }
-  await requestSkillGatewayMethod({
+  await requestBustlyGatewayMethod({
     method: "skills.install",
     payload: {
       name: params.skillName,

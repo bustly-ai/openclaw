@@ -138,14 +138,6 @@ export async function applySessionsPatchToStore(params: {
       if (!parsed.ok) {
         return invalid(parsed.error);
       }
-      for (const [key, entry] of Object.entries(store)) {
-        if (key === storeKey) {
-          continue;
-        }
-        if (entry?.label === parsed.label) {
-          return invalid(`label already in use: ${parsed.label}`);
-        }
-      }
       next.label = parsed.label;
     }
   }

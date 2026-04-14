@@ -1,4 +1,5 @@
 import { readBustlyOAuthState } from "../../bustly-oauth.js";
+import { scheduleBustlySessionTitleGeneration } from "../../bustly/session-title.js";
 import {
   createBustlyWorkspaceAgent,
   createBustlyWorkspaceAgentSession,
@@ -7,6 +8,7 @@ import {
   listBustlyWorkspaceAgentSessions,
   updateBustlyWorkspaceAgent,
 } from "../../bustly/workspace-agents.js";
+import { loadConfig } from "../../config/config.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -213,11 +215,15 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       );
     }
   },
-  "bustly.sessions.create": async ({ params, respond }) => {
+  "bustly.sessions.create": async ({ params, respond, context }) => {
     try {
       const workspaceId = resolveWorkspaceIdParam(params);
       const agentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
       const label = typeof params.label === "string" ? params.label.trim() : "";
+      const promptExcerpt =
+        typeof params.promptExcerpt === "string" ? params.promptExcerpt : undefined;
+      const sampleRouteKey =
+        typeof params.sampleRouteKey === "string" ? params.sampleRouteKey : undefined;
       if (!workspaceId) {
         respond(
           false,
@@ -234,6 +240,19 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         workspaceId,
         agentId,
         label: label || undefined,
+      });
+      scheduleBustlySessionTitleGeneration({
+        workspaceId,
+        agentId,
+        sessionKey: created.sessionKey,
+        sessionId: created.sessionId,
+        seedLabel: created.name,
+        promptExcerpt,
+        sampleRouteKey,
+        cfg: loadConfig(),
+        onLabelUpdated: (payload) => {
+          context.broadcast("bustly.session.label.updated", payload, { dropIfSlow: true });
+        },
       });
       respond(
         true,

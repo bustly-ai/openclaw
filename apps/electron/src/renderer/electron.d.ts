@@ -174,16 +174,6 @@ interface ElectronAPI {
   gatewayRestoreLastGoodConfig: () => Promise<{ success: boolean; error?: string }>;
   gatewayStatus: () => Promise<GatewayStatus>;
   gatewayConnectConfig: () => Promise<GatewayConnectConfig>;
-  gatewayPatchSession: (
-    key: string,
-    patch: { label?: string | null; icon?: string | null },
-  ) => Promise<{ success: boolean; error?: string }>;
-  gatewayPatchSessionLabel: (key: string, label: string) => Promise<{ success: boolean; error?: string }>;
-  gatewayPatchSessionModel: (
-    key: string,
-    model: string,
-  ) => Promise<{ success: boolean; model?: string; error?: string }>;
-  gatewayDeleteSession: (key: string) => Promise<{ success: boolean; error?: string }>;
   resolvePastedPath: (params: {
     file?: File;
     entryPath?: string;
@@ -205,44 +195,6 @@ interface ElectronAPI {
   // Onboarding
   bustlyLogin: () => Promise<{ success: boolean; canceled?: boolean; error?: string }>;
   bustlyCancelLogin: () => Promise<{ success: boolean; error?: string }>;
-  bustlyIsLoggedIn: () => Promise<boolean>;
-  bustlyGetUserInfo: () => Promise<BustlyUserInfo | null>;
-  bustlyGetSupabaseConfig: () => Promise<BustlySupabaseConfig | null>;
-  bustlySetActiveWorkspace: (
-    workspaceId: string,
-    workspaceName?: string,
-  ) => Promise<{ success: boolean; agentId?: string; error?: string }>;
-  bustlyListAgents: (workspaceId?: string) => Promise<BustlyWorkspaceAgent[]>;
-  bustlyListAgentSessions: (workspaceId: string, agentId: string) => Promise<BustlyWorkspaceAgentSession[]>;
-  bustlyListGlobalSkills: () => Promise<BustlyGlobalSkillCatalogItem[]>;
-  bustlyInstallGlobalSkill: (skillKey: string) => Promise<{ success: boolean; error?: string }>;
-  bustlyCreateAgent: (params: {
-    workspaceId: string;
-    name: string;
-    description?: string;
-    icon?: string;
-    workspaceName?: string;
-    skills?: string[] | null;
-  }) => Promise<{ success: boolean; agentId?: string; error?: string }>;
-  bustlyCreateAgentSession: (params: {
-    workspaceId: string;
-    agentId: string;
-    label?: string;
-    promptExcerpt?: string;
-    sampleRouteKey?: string;
-  }) => Promise<{ success: boolean; sessionKey?: string; error?: string }>;
-  bustlyUpdateAgent: (params: {
-    workspaceId: string;
-    agentId: string;
-    name?: string;
-    identityMarkdown?: string;
-    icon?: string;
-    skills?: string[] | null;
-  }) => Promise<{ success: boolean; error?: string }>;
-  bustlyDeleteAgent: (params: {
-    workspaceId: string;
-    agentId: string;
-  }) => Promise<{ success: boolean; error?: string }>;
   bustlyLogout: () => Promise<{ success: boolean; error?: string }>;
   bustlyOpenLogin: () => Promise<{ success: boolean; error?: string }>;
   bustlyOpenSettings: () => Promise<{ success: boolean; error?: string }>;
@@ -267,9 +219,6 @@ interface ElectronAPI {
   onUpdateStatus: (callback: (data: { event: string; state?: DesktopUpdateState }) => void) => () => void;
   onNativeFullscreenChange: (callback: (data: { isNativeFullscreen: boolean }) => void) => () => void;
   onDeepLink: (callback: (data: DeepLinkData) => void) => () => void;
-  onBustlySessionLabelUpdated: (
-    callback: (data: { agentId: string; sessionKey: string; label: string; updatedAt: number | null }) => void,
-  ) => () => void;
 }
 
 interface Window {

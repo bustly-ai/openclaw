@@ -16,6 +16,7 @@ import {
   installSkillCatalogItem,
   type SkillCatalogItem,
 } from "../../lib/skill-catalog";
+import { getBustlySupabaseConfig } from "../../lib/bustly-gateway";
 import { WorkspaceSkillsPanel } from "../skills/SkillLibraryPanels";
 
 const BUILD_WITH_BUSTLY_PROMPT =
@@ -388,8 +389,7 @@ export default function SkillPage() {
 
   useEffect(() => {
     let disposed = false;
-    void window.electronAPI
-      .bustlyGetSupabaseConfig()
+    void getBustlySupabaseConfig()
       .then((config) => {
         if (!disposed && config?.workspaceId) {
           setChatAgentId(buildBustlyWorkspaceAgentId(config.workspaceId));

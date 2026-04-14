@@ -51,13 +51,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   gatewayRestoreLastGoodConfig: () => ipcRenderer.invoke("gateway-restore-last-good-config"),
   gatewayStatus: () => ipcRenderer.invoke("gateway-status"),
   gatewayConnectConfig: () => ipcRenderer.invoke("gateway-connect-config"),
-  gatewayPatchSession: (key: string, patch: { label?: string | null; icon?: string | null }) =>
-    ipcRenderer.invoke("gateway-patch-session", key, patch),
-  gatewayPatchSessionLabel: (key: string, label: string) =>
-    ipcRenderer.invoke("gateway-patch-session-label", key, label),
-  gatewayPatchSessionModel: (key: string, model: string) =>
-    ipcRenderer.invoke("gateway-patch-session-model", key, model),
-  gatewayDeleteSession: (key: string) => ipcRenderer.invoke("gateway-delete-session", key),
   resolvePastedPath: (params: {
     file?: File;
     entryPath?: string;
@@ -88,44 +81,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Onboarding
   bustlyLogin: () => ipcRenderer.invoke("bustly-login"),
   bustlyCancelLogin: () => ipcRenderer.invoke("bustly-cancel-login"),
-  bustlyIsLoggedIn: () => ipcRenderer.invoke("bustly-is-logged-in"),
-  bustlyGetUserInfo: () => ipcRenderer.invoke("bustly-get-user-info"),
-  bustlyGetSupabaseConfig: () => ipcRenderer.invoke("bustly-get-supabase-config"),
-  bustlySetActiveWorkspace: (workspaceId: string, workspaceName?: string) =>
-    ipcRenderer.invoke("bustly-set-active-workspace", workspaceId, workspaceName),
-  bustlyListAgents: (workspaceId?: string) => ipcRenderer.invoke("bustly-list-agents", workspaceId),
-  bustlyListAgentSessions: (workspaceId: string, agentId: string) =>
-    ipcRenderer.invoke("bustly-list-agent-sessions", workspaceId, agentId),
-  bustlyListGlobalSkills: () => ipcRenderer.invoke("bustly-list-global-skills"),
-  bustlyInstallGlobalSkill: (skillKey: string) => ipcRenderer.invoke("bustly-install-global-skill", skillKey),
-  bustlyCreateAgent: (params: {
-    workspaceId: string;
-    name: string;
-    description?: string;
-    icon?: string;
-    workspaceName?: string;
-    skills?: string[] | null;
-  }) =>
-    ipcRenderer.invoke("bustly-create-agent", params),
-  bustlyCreateAgentSession: (params: {
-    workspaceId: string;
-    agentId: string;
-    label?: string;
-    promptExcerpt?: string;
-    sampleRouteKey?: string;
-  }) =>
-    ipcRenderer.invoke("bustly-create-agent-session", params),
-  bustlyUpdateAgent: (params: {
-    workspaceId: string;
-    agentId: string;
-    name?: string;
-    identityMarkdown?: string;
-    icon?: string;
-    skills?: string[] | null;
-  }) =>
-    ipcRenderer.invoke("bustly-update-agent", params),
-  bustlyDeleteAgent: (params: { workspaceId: string; agentId: string }) =>
-    ipcRenderer.invoke("bustly-delete-agent", params),
   bustlyLogout: () => ipcRenderer.invoke("bustly-logout"),
   bustlyOpenLogin: () => ipcRenderer.invoke("bustly-open-login"),
   bustlyOpenSettings: () => ipcRenderer.invoke("bustly-open-settings"),
@@ -183,15 +138,5 @@ contextBridge.exposeInMainWorld("electronAPI", {
       callback(payload);
     ipcRenderer.on("deep-link", listener);
     return () => ipcRenderer.removeListener("deep-link", listener);
-  },
-  onBustlySessionLabelUpdated: (
-    callback: (payload: { agentId: string; sessionKey: string; label: string; updatedAt: number | null }) => void,
-  ) => {
-    const listener = (
-      _event: IpcRendererEvent,
-      payload: { agentId: string; sessionKey: string; label: string; updatedAt: number | null },
-    ) => callback(payload);
-    ipcRenderer.on("bustly-session-label-updated", listener);
-    return () => ipcRenderer.removeListener("bustly-session-label-updated", listener);
   },
 });

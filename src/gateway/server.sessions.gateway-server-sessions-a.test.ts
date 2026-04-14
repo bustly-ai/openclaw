@@ -332,7 +332,8 @@ describe("gateway server sessions", () => {
       key: "agent:main:discord:group:dev",
       label: "Briefing",
     });
-    expect(labelPatchedDuplicate.ok).toBe(false);
+    expect(labelPatchedDuplicate.ok).toBe(true);
+    expect(labelPatchedDuplicate.payload?.entry.label).toBe("Briefing");
 
     const list2 = await rpcReq<{
       sessions: Array<{
@@ -377,14 +378,20 @@ describe("gateway server sessions", () => {
       label: "Briefing",
     });
     expect(listByLabel.ok).toBe(true);
-    expect(listByLabel.payload?.sessions.map((s) => s.key)).toEqual(["agent:main:subagent:one"]);
+    expect(listByLabel.payload?.sessions.map((s) => s.key)).toHaveLength(2);
+    expect(listByLabel.payload?.sessions.map((s) => s.key)).toEqual(
+      expect.arrayContaining([
+        "agent:main:subagent:one",
+        "agent:main:discord:group:dev",
+      ]),
+    );
 
     const resolvedByLabel = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
       label: "Briefing",
       agentId: "main",
     });
-    expect(resolvedByLabel.ok).toBe(true);
-    expect(resolvedByLabel.payload?.key).toBe("agent:main:subagent:one");
+    expect(resolvedByLabel.ok).toBe(false);
+    expect(resolvedByLabel.error?.message).toContain("Multiple sessions found with label: Briefing");
 
     const spawnedOnly = await rpcReq<{
       sessions: Array<{ key: string }>;

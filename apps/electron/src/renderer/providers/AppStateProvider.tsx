@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { isBustlyLoggedIn } from "../lib/bustly-gateway";
 import { GatewayBrowserClient } from "../lib/gateway-client";
 import { createGatewayInstanceId } from "../lib/gateway-instance-id";
 
@@ -92,12 +93,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
     setChecking(true);
     try {
-      const [status, info, nextInitialized, nextLoggedIn] = await Promise.all([
+      const [status, info, nextInitialized] = await Promise.all([
         window.electronAPI.gatewayStatus(),
         window.electronAPI.getAppInfo(),
         window.electronAPI.openclawIsInitialized(),
-        window.electronAPI.bustlyIsLoggedIn(),
       ]);
+      const nextLoggedIn = nextInitialized ? await isBustlyLoggedIn().catch(() => false) : false;
       setGatewayStatus(status);
       setAppInfo(info);
       setInitialized(nextInitialized);
