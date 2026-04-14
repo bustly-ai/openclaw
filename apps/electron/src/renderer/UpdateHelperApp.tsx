@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { getRendererHostAdapter } from "./platform/host";
 
 const emptyState: DesktopUpdateState = {
   sessionId: null,
@@ -17,11 +18,12 @@ const emptyState: DesktopUpdateState = {
 };
 
 export default function UpdateHelperApp() {
+  const host = useRef(getRendererHostAdapter()).current;
   const [state, setState] = useState<DesktopUpdateState>(emptyState);
 
   useEffect(() => {
     let mounted = true;
-    const statusPromise = window.electronAPI?.updaterStatus?.();
+    const statusPromise = host.updaterStatus?.();
     if (statusPromise) {
       void statusPromise.then((status) => {
         if (!mounted) {
@@ -30,7 +32,7 @@ export default function UpdateHelperApp() {
         setState(status.state ?? emptyState);
       });
     }
-    const unsubscribe = window.electronAPI?.onUpdateStatus?.((payload) => {
+    const unsubscribe = host.onUpdateStatus?.((payload) => {
       if (payload.state) {
         setState(payload.state);
       }
@@ -39,7 +41,7 @@ export default function UpdateHelperApp() {
       mounted = false;
       unsubscribe?.();
     };
-  }, []);
+  }, [host]);
 
   const isError = state.stage === "error";
 

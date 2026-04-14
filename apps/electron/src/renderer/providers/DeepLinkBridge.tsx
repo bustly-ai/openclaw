@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { getBustlySupabaseConfig, setActiveBustlyWorkspace } from "../lib/bustly-gateway";
+import { getRendererHostAdapter } from "../platform/host";
 import { useAppState } from "./AppStateProvider";
 
 function sanitizeDeepLinkRoute(route: string | null, workspaceId: string | null): string | null {
@@ -23,6 +24,7 @@ function sanitizeDeepLinkRoute(route: string | null, workspaceId: string | null)
 }
 
 export default function DeepLinkBridge() {
+  const host = useRef(getRendererHostAdapter()).current;
   const { checking, loggedIn } = useAppState();
   const navigate = useNavigate();
   const pendingDeepLinksRef = useRef<DeepLinkData[]>([]);
@@ -109,19 +111,19 @@ export default function DeepLinkBridge() {
   }, [checking, drainPendingDeepLinks, loggedIn]);
 
   useEffect(() => {
-    if (!window.electronAPI) {
+    if (!host.consumePendingDeepLink || !host.onDeepLink) {
       return;
     }
-    void window.electronAPI.consumePendingDeepLink().then((data) => {
+    void host.consumePendingDeepLink().then((data) => {
       enqueueDeepLink(data);
     });
-    const unsubscribe = window.electronAPI.onDeepLink((data) => {
+    const unsubscribe = host.onDeepLink((data) => {
       enqueueDeepLink(data);
     });
     return () => {
       unsubscribe();
     };
-  }, [enqueueDeepLink]);
+  }, [enqueueDeepLink, host]);
 
   useEffect(() => {
     if (!checking && loggedIn) {

@@ -38,6 +38,7 @@ import {
 } from "@phosphor-icons/react";
 import loadingAnimation from "../../assets/lottie/thinking.json";
 import PortalTooltip from "../ui/PortalTooltip";
+import { getRendererHostAdapter } from "../../platform/host";
 import {
   parseInputArtifactsFromMessage,
   type ChatInputArtifact,
@@ -117,6 +118,7 @@ function UserArtifactCard({
   artifact: ChatInputArtifact | TimelineArtifact;
   onPreviewImage?: (url: string) => void;
 }) {
+  const host = useMemo(() => getRendererHostAdapter(), []);
   const [previewUrl, setPreviewUrl] = useState<string | undefined>(() =>
     "imageUrl" in artifact ? artifact.imageUrl : undefined,
   );
@@ -127,12 +129,12 @@ function UserArtifactCard({
       setPreviewUrl(immediatePreview);
       return;
     }
-    if (artifact.kind !== "image" || !artifact.path || typeof window.electronAPI?.resolveChatImagePreview !== "function") {
+    if (artifact.kind !== "image" || !artifact.path || typeof host.resolveChatImagePreview !== "function") {
       setPreviewUrl(undefined);
       return;
     }
     let cancelled = false;
-    void window.electronAPI.resolveChatImagePreview(artifact.path).then((resolved) => {
+    void host.resolveChatImagePreview(artifact.path).then((resolved) => {
       if (!cancelled) {
         setPreviewUrl(resolved ?? undefined);
       }
@@ -144,7 +146,7 @@ function UserArtifactCard({
     return () => {
       cancelled = true;
     };
-  }, [artifact]);
+  }, [artifact, host]);
 
   const Icon =
     artifact.kind === "directory"
@@ -605,6 +607,7 @@ const MarkdownContent = memo(function MarkdownContent({
   text: string;
   className: string;
 }) {
+  const host = useMemo(() => getRendererHostAdapter(), []);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const html = toSanitizedMarkdownHtml(text);
 
@@ -642,8 +645,8 @@ const MarkdownContent = memo(function MarkdownContent({
       image.setAttribute("data-local-path", localPath);
       image.setAttribute("title", localPath);
 
-      if (typeof window.electronAPI?.resolveChatMediaPreview === "function") {
-        void window.electronAPI.resolveChatMediaPreview(localPath)
+      if (typeof host.resolveChatMediaPreview === "function") {
+        void host.resolveChatMediaPreview(localPath)
           .then((preview) => {
             if (disposed || !root.contains(image)) {
               return;
@@ -671,8 +674,8 @@ const MarkdownContent = memo(function MarkdownContent({
         return;
       }
 
-      if (typeof window.electronAPI?.resolveChatImagePreview === "function") {
-        void window.electronAPI.resolveChatImagePreview(localPath)
+      if (typeof host.resolveChatImagePreview === "function") {
+        void host.resolveChatImagePreview(localPath)
           .then((resolved) => {
             if (disposed || !root.contains(image)) {
               return;
@@ -712,7 +715,9 @@ const MarkdownContent = memo(function MarkdownContent({
       }
       event.preventDefault();
       event.stopPropagation();
-      void window.electronAPI?.openLocalPath(path);
+      if (host.openLocalPath) {
+        void host.openLocalPath(path);
+      }
     };
 
     root.addEventListener("click", handleClick);
@@ -720,7 +725,7 @@ const MarkdownContent = memo(function MarkdownContent({
       disposed = true;
       root.removeEventListener("click", handleClick);
     };
-  }, [html]);
+  }, [host, html]);
 
   return <div ref={containerRef} className={className} dangerouslySetInnerHTML={{ __html: html }} />;
 });

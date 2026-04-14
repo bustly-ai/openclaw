@@ -11,6 +11,7 @@ import {
 import { bootstrapBustlyRuntime, isBustlyLoggedIn } from "../lib/bustly-gateway";
 import { GatewayBrowserClient } from "../lib/gateway-client";
 import { createGatewayInstanceId } from "../lib/gateway-instance-id";
+import { getRendererHostAdapter } from "../platform/host";
 
 type GatewayPhase = "idle" | "checking" | "starting" | "ready" | "error";
 
@@ -72,6 +73,7 @@ async function openGatewayProbe(wsUrl: string, token?: string): Promise<void> {
 }
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
+  const host = useMemo(() => getRendererHostAdapter(), []);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
   const [loggedIn, setLoggedIn] = useState(false);
@@ -87,18 +89,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const runtimeBootstrapKeyRef = useRef<string | null>(null);
 
   const refreshAppState = useCallback(async () => {
-    if (!window.electronAPI) {
-      setChecking(false);
-      setError("Electron API not available. Are you running in a browser?");
-      return;
-    }
-
     setChecking(true);
     try {
       const [status, info, nextInitialized] = await Promise.all([
-        window.electronAPI.gatewayStatus(),
-        window.electronAPI.getAppInfo(),
-        window.electronAPI.openclawIsInitialized(),
+        host.gatewayStatus(),
+        host.getAppInfo(),
+        host.openclawIsInitialized(),
       ]);
       const nextLoggedIn = nextInitialized ? await isBustlyLoggedIn().catch(() => false) : false;
       setGatewayStatus(status);
@@ -116,16 +112,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     } finally {
       setChecking(false);
     }
-  }, []);
+  }, [host]);
 
   const ensureGatewayReady = useCallback(async () => {
-    if (!window.electronAPI?.gatewayStatus || !window.electronAPI.gatewayConnectConfig) {
-      setGatewayPhase("error");
-      setGatewayMessage(null);
-      setGatewayCanRestoreLastGoodConfig(false);
-      setError("Electron gateway APIs are unavailable");
-      return false;
-    }
     if (ensurePromiseRef.current) {
       return ensurePromiseRef.current;
     }
@@ -143,7 +132,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           if (isStale()) {
             return false;
           }
-          const status = await window.electronAPI.gatewayStatus();
+          const status = await host.gatewayStatus();
           if (isStale()) {
             return false;
           }
@@ -157,7 +146,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
             setGatewayPhase("starting");
             setGatewayMessage("Starting gateway...");
             setGatewayCanRestoreLastGoodConfig(false);
-            const startResult = await window.electronAPI.gatewayStart();
+            const startResult = await host.gatewayStart();
             if (!startResult.success) {
               lastError = startResult.error ?? "Failed to start gateway";
               break;
@@ -172,7 +161,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
             setGatewayMessage("Waiting for bustly...");
             setGatewayCanRestoreLastGoodConfig(false);
             try {
-              const connectConfig = await window.electronAPI.gatewayConnectConfig();
+              const connectConfig = await host.gatewayConnectConfig();
               if (connectConfig.wsUrl) {
                 await openGatewayProbe(connectConfig.wsUrl, connectConfig.token ?? undefined);
                 if (isStale()) {
@@ -225,20 +214,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       ensurePromiseRef.current = null;
     });
     return ensurePromiseRef.current;
-  }, [initialized, loggedIn]);
+  }, [host, initialized, loggedIn]);
 
   const restoreGatewayLastGoodConfig = useCallback(async () => {
-    if (!window.electronAPI?.gatewayRestoreLastGoodConfig) {
-      setGatewayPhase("error");
-      setError("Electron gateway recovery API is unavailable");
-      return false;
-    }
     ensureRunIdRef.current += 1;
     setGatewayPhase("starting");
     setGatewayMessage("Restoring last working gateway config...");
     setGatewayCanRestoreLastGoodConfig(false);
     setError(null);
-    const result = await window.electronAPI.gatewayRestoreLastGoodConfig();
+    const result = await host.gatewayRestoreLastGoodConfig();
     if (!result.success) {
       setGatewayPhase("error");
       setGatewayMessage(null);
@@ -246,17 +230,17 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       return false;
     }
     return await ensureGatewayReady();
-  }, [ensureGatewayReady]);
+  }, [ensureGatewayReady, host]);
 
   useEffect(() => {
     void refreshAppState();
   }, [refreshAppState]);
 
   useEffect(() => {
-    if (!window.electronAPI?.onGatewayLifecycle) {
+    if (!host.onGatewayLifecycle) {
       return;
     }
-    const unsubscribe = window.electronAPI.onGatewayLifecycle((data) => {
+    const unsubscribe = host.onGatewayLifecycle((data) => {
       if (data.phase === "starting") {
         setGatewayPhase("starting");
         setGatewayMessage(data.message ?? "Starting gateway...");
@@ -292,16 +276,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return () => {
       unsubscribe();
     };
-  }, [ensureGatewayReady, refreshAppState]);
+  }, [ensureGatewayReady, host, refreshAppState]);
 
   useEffect(() => {
-    if (!window.electronAPI?.onBustlyLoginRefresh) {
+    if (!host.onBustlyLoginRefresh) {
       return;
     }
-    return window.electronAPI.onBustlyLoginRefresh(() => {
+    return host.onBustlyLoginRefresh(() => {
       void refreshAppState();
     });
-  }, [refreshAppState]);
+  }, [host, refreshAppState]);
 
   useEffect(() => {
     const wasLoggedIn = previousLoggedInRef.current;
@@ -333,13 +317,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [checking, ensureGatewayReady, gatewayPhase, initialized, loggedIn]);
 
   useEffect(() => {
-    if (!window.electronAPI) {
-      return;
-    }
     let cancelled = false;
     const tick = async () => {
       try {
-        const status = await window.electronAPI.gatewayStatus();
+        const status = await host.gatewayStatus();
         if (cancelled) {
           return;
         }
@@ -374,7 +355,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [ensureGatewayReady, gatewayPhase, initialized, loggedIn]);
+  }, [ensureGatewayReady, gatewayPhase, host, initialized, loggedIn]);
 
   const value = useMemo<AppStateContextValue>(
     () => ({

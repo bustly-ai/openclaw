@@ -59,6 +59,7 @@ import {
 } from "../../lib/skill-catalog";
 import { useAppState } from "../../providers/AppStateProvider";
 import { useGlobalLoader } from "../../providers/GlobalLoaderProvider";
+import { getRendererHostAdapter } from "../../platform/host";
 import {
   buildBustlyWorkspaceAgentId,
   resolveAgentIdFromSessionKey,
@@ -1218,6 +1219,7 @@ function WorkspaceSwitcher(props: {
 }
 
 export function ClientAppSidebar(props: ClientAppSidebarProps) {
+  const host = useMemo(() => getRendererHostAdapter(), []);
   const { checking, initialized, loggedIn, refreshAppState } = useAppState();
   const { showGlobalLoading, hideGlobalLoading } = useGlobalLoader();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -1341,15 +1343,18 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   }, [computeUserMenuLayout, isUserMenuOpen]);
 
   useEffect(() => {
+    if (!host.getNativeFullscreenStatus || !host.onNativeFullscreenChange) {
+      return;
+    }
     let disposed = false;
 
-    void window.electronAPI.getNativeFullscreenStatus().then((state) => {
+    void host.getNativeFullscreenStatus().then((state) => {
       if (!disposed) {
         setIsWindowFullscreen(state.isNativeFullscreen === true);
       }
     });
 
-    const unsubscribe = window.electronAPI.onNativeFullscreenChange((state) => {
+    const unsubscribe = host.onNativeFullscreenChange((state) => {
       setIsWindowFullscreen(state.isNativeFullscreen === true);
     });
 
@@ -1357,7 +1362,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       disposed = true;
       unsubscribe();
     };
-  }, []);
+  }, [host]);
 
   useEffect(() => {
     workspaceLoadingRef.current = workspaceLoading;
@@ -1671,7 +1676,9 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
 
   const handleOpenSettings = async () => {
     setIsUserMenuOpen(false);
-    await window.electronAPI.bustlyOpenSettings();
+    if (host.bustlyOpenSettings) {
+      await host.bustlyOpenSettings();
+    }
   };
 
   const handleReportIssue = async () => {
@@ -1690,23 +1697,33 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   };
 
   const handleOpenWorkspaceSettings = (workspaceId: string) => {
-    void window.electronAPI.bustlyOpenWorkspaceSettings(workspaceId);
+    if (host.bustlyOpenWorkspaceSettings) {
+      void host.bustlyOpenWorkspaceSettings(workspaceId);
+    }
   };
 
   const handleOpenWorkspaceInvite = (workspaceId: string) => {
-    void window.electronAPI.bustlyOpenWorkspaceInvite(workspaceId);
+    if (host.bustlyOpenWorkspaceInvite) {
+      void host.bustlyOpenWorkspaceInvite(workspaceId);
+    }
   };
 
   const handleOpenWorkspaceManage = (workspaceId: string) => {
-    void window.electronAPI.bustlyOpenWorkspaceManage(workspaceId);
+    if (host.bustlyOpenWorkspaceManage) {
+      void host.bustlyOpenWorkspaceManage(workspaceId);
+    }
   };
 
   const handleOpenWorkspacePricing = (workspaceId: string) => {
-    void window.electronAPI.bustlyOpenWorkspacePricing(workspaceId);
+    if (host.bustlyOpenWorkspacePricing) {
+      void host.bustlyOpenWorkspacePricing(workspaceId);
+    }
   };
 
   const handleCreateWorkspace = () => {
-    void window.electronAPI.bustlyOpenWorkspaceCreate(effectiveWorkspaceId || undefined);
+    if (host.bustlyOpenWorkspaceCreate) {
+      void host.bustlyOpenWorkspaceCreate(effectiveWorkspaceId || undefined);
+    }
   };
 
   const resolveAgentRouteIcon = useCallback((task: SidebarTask) => {

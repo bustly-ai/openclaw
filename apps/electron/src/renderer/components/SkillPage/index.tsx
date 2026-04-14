@@ -17,6 +17,7 @@ import {
   type SkillCatalogItem,
 } from "../../lib/skill-catalog";
 import { getBustlySupabaseConfig } from "../../lib/bustly-gateway";
+import { getRendererHostAdapter } from "../../platform/host";
 import { WorkspaceSkillsPanel } from "../skills/SkillLibraryPanels";
 
 const BUILD_WITH_BUSTLY_PROMPT =
@@ -147,6 +148,10 @@ function extractNativeTransferPaths(dataTransfer?: DataTransfer | null): string[
 async function resolveDroppedSkillSelection(
   dataTransfer: DataTransfer,
 ): Promise<PendingChatContext | null> {
+  const host = getRendererHostAdapter();
+  if (!host.resolvePastedPath) {
+    return null;
+  }
   const transferPaths = extractNativeTransferPaths(dataTransfer);
   const firstFile = dataTransfer.files?.[0];
   const firstItem = dataTransfer.items?.[0];
@@ -161,7 +166,7 @@ async function resolveDroppedSkillSelection(
           webkitGetAsEntry: () => { fullPath?: string; name?: string } | null;
         }).webkitGetAsEntry()
       : null;
-  const resolved = await window.electronAPI.resolvePastedPath({
+  const resolved = await host.resolvePastedPath({
     file: firstFile ?? undefined,
     entryPath: transferPaths[0] ?? entryHandle?.fullPath,
     entryName: firstFile?.name ?? entryHandle?.name,
@@ -184,6 +189,7 @@ function UploadSkillModal(props: {
   onClose: () => void;
   onSelect: (selection: PendingChatContext) => void;
 }) {
+  const host = useRef(getRendererHostAdapter()).current;
   const [isDragging, setIsDragging] = useState(false);
 
   if (!props.isOpen) {
@@ -226,7 +232,10 @@ function UploadSkillModal(props: {
               });
             }}
             onClick={() => {
-              void window.electronAPI.selectChatContextPaths().then((selected) => {
+              if (!host.selectChatContextPaths) {
+                return;
+              }
+              void host.selectChatContextPaths().then((selected) => {
                 const first = Array.isArray(selected) ? selected[0] : null;
                 if (!first?.path) {
                   return;

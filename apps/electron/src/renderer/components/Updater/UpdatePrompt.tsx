@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowsInSimple, ArrowClockwise, CheckCircle, DownloadSimple, WarningCircle } from "@phosphor-icons/react";
+import { getRendererHostAdapter } from "../../platform/host";
 
 const emptyState: DesktopUpdateState = {
   sessionId: null,
@@ -19,6 +20,7 @@ const emptyState: DesktopUpdateState = {
 };
 
 export default function UpdatePrompt() {
+  const host = useRef(getRendererHostAdapter()).current;
   const [state, setState] = useState<DesktopUpdateState>(emptyState);
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -27,7 +29,7 @@ export default function UpdatePrompt() {
 
   useEffect(() => {
     let mounted = true;
-    const statusPromise = window.electronAPI?.updaterStatus?.();
+    const statusPromise = host.updaterStatus?.();
     if (statusPromise) {
       void statusPromise.then((status) => {
         if (!mounted) {
@@ -36,7 +38,7 @@ export default function UpdatePrompt() {
         setState(status.state ?? emptyState);
       });
     }
-    const unsubscribe = window.electronAPI?.onUpdateStatus?.((payload) => {
+    const unsubscribe = host.onUpdateStatus?.((payload) => {
       if (payload.state) {
         setState(payload.state);
       }
@@ -45,7 +47,7 @@ export default function UpdatePrompt() {
       mounted = false;
       unsubscribe?.();
     };
-  }, []);
+  }, [host]);
 
   useEffect(() => {
     if (state.targetVersion && state.targetVersion !== dismissedVersion) {
@@ -86,11 +88,11 @@ export default function UpdatePrompt() {
     (isDownloading || isDownloaded || isInstalling || isError);
 
   const startInstall = async () => {
-    if (!window.electronAPI?.updaterStartInstall || busy) {
+    if (!host.updaterStartInstall || busy) {
       return;
     }
     setBusy(true);
-    const result = await window.electronAPI.updaterStartInstall();
+    const result = await host.updaterStartInstall();
     if (!result.success) {
       setState((prev) => ({
         ...prev,
@@ -274,8 +276,8 @@ export default function UpdatePrompt() {
                 </button>
                 <button
                   onClick={() => {
-                    if (window.electronAPI?.updaterInstall) {
-                      void window.electronAPI.updaterInstall();
+                    if (host.updaterInstall) {
+                      void host.updaterInstall();
                     }
                   }}
                   className="rounded-xl bg-[#1A162F] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#1A162F]/90"

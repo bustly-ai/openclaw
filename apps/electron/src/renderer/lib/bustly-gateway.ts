@@ -1,5 +1,6 @@
 import { GatewayBrowserClient, type GatewayEventFrame } from "./gateway-client";
 import { createGatewayInstanceId } from "./gateway-instance-id";
+import { getRendererHostAdapter } from "../platform/host";
 
 type GatewayMethodRequest = {
   method: string;
@@ -26,15 +27,16 @@ let sharedEventClientStarting = false;
 const sharedEventListeners = new Set<GatewayEventListener>();
 
 async function ensureGatewayConnectConfig(): Promise<GatewayConnectConfig> {
-  const gatewayStatus = await window.electronAPI.gatewayStatus();
+  const host = getRendererHostAdapter();
+  const gatewayStatus = await host.gatewayStatus();
   if (!gatewayStatus.running) {
-    const startResult = await window.electronAPI.gatewayStart();
+    const startResult = await host.gatewayStart();
     if (!startResult.success) {
       throw new Error(startResult.error ?? "Gateway is not running.");
     }
   }
 
-  const connection = await window.electronAPI.gatewayConnectConfig();
+  const connection = await host.gatewayConnectConfig();
   if (!connection.token || !connection.wsUrl) {
     throw new Error("Gateway token missing in config; cannot connect.");
   }
@@ -42,11 +44,12 @@ async function ensureGatewayConnectConfig(): Promise<GatewayConnectConfig> {
 }
 
 export async function initializeBustlyGatewayIfNeeded(): Promise<void> {
-  const gatewayStatus = await window.electronAPI.gatewayStatus();
+  const host = getRendererHostAdapter();
+  const gatewayStatus = await host.gatewayStatus();
   if (gatewayStatus.initialized) {
     return;
   }
-  const result = await window.electronAPI.openclawInit();
+  const result = await host.openclawInit();
   if (!result.success) {
     throw new Error(result.error ?? "Failed to initialize OpenClaw.");
   }
@@ -186,7 +189,7 @@ export async function getBustlySupabaseConfig(): Promise<BustlySupabaseConfig | 
 }
 
 export async function isBustlyLoggedIn(): Promise<boolean> {
-  const result = await window.electronAPI.bustlyIsLoggedIn();
+  const result = await getRendererHostAdapter().bustlyIsLoggedIn();
   if (!result.success) {
     throw new Error(result.error || "Failed to check Bustly login status.");
   }
@@ -194,7 +197,7 @@ export async function isBustlyLoggedIn(): Promise<boolean> {
 }
 
 export async function startBustlyLogin(): Promise<BustlyLoginStartResult> {
-  const result = await window.electronAPI.bustlyLogin();
+  const result = await getRendererHostAdapter().bustlyLogin();
   if (!result.success || !result.loginTraceId) {
     throw new Error(result.error || "Failed to start Bustly login.");
   }
@@ -205,7 +208,7 @@ export async function startBustlyLogin(): Promise<BustlyLoginStartResult> {
 }
 
 export async function pollBustlyLogin(loginTraceId: string): Promise<{ pending: boolean }> {
-  const result = await window.electronAPI.bustlyPollLogin(loginTraceId);
+  const result = await getRendererHostAdapter().bustlyPollLogin(loginTraceId);
   if (!result.success) {
     throw new Error(result.error || "Failed to poll Bustly login.");
   }
@@ -213,14 +216,14 @@ export async function pollBustlyLogin(loginTraceId: string): Promise<{ pending: 
 }
 
 export async function cancelBustlyLogin(loginTraceId?: string): Promise<void> {
-  const result = await window.electronAPI.bustlyCancelLogin(loginTraceId);
+  const result = await getRendererHostAdapter().bustlyCancelLogin(loginTraceId);
   if (!result.success) {
     throw new Error(result.error || "Failed to cancel Bustly login.");
   }
 }
 
 export async function getBustlyUserInfo(): Promise<BustlyUserInfo | null> {
-  const result = await window.electronAPI.bustlyGetUserInfo();
+  const result = await getRendererHostAdapter().bustlyGetUserInfo();
   if (!result.success) {
     throw new Error(result.error || "Failed to load Bustly user info.");
   }
@@ -390,7 +393,7 @@ export async function installGlobalSkillCatalogItem(skillKey: string): Promise<v
 }
 
 export async function logoutBustly(): Promise<void> {
-  const result = await window.electronAPI.bustlyLogout();
+  const result = await getRendererHostAdapter().bustlyLogout();
   if (!result.success) {
     throw new Error(result.error || "Failed to sign out from Bustly.");
   }

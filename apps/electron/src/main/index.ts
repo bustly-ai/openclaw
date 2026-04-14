@@ -700,6 +700,7 @@ function applyInitializationResult(result: InitializationResult): void {
 // Gateway configuration
 const GATEWAY_HOST = "127.0.0.1";
 const BUSTLY_LOGIN_HASH = "/bustly-login";
+const BUSTLY_RENDERER_URL = process.env.BUSTLY_RENDERER_URL?.trim() || "";
 const PRELOAD_PATH = process.env.NODE_ENV === "development"
   ? resolve(__dirname, "main/preload.js")
   : resolve(__dirname, "preload.js");
@@ -2106,7 +2107,46 @@ function readGatewayTokenFromConfig(): string | null {
   }
 }
 
+function normalizeRendererHash(hash?: string): string | null {
+  const trimmed = hash?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const withoutHash = trimmed.startsWith("#") ? trimmed.slice(1) : trimmed;
+  if (!withoutHash) {
+    return null;
+  }
+  return withoutHash.startsWith("/") ? withoutHash : `/${withoutHash}`;
+}
+
+function resolveRemoteRendererUrl(hash?: string): string | null {
+  if (!BUSTLY_RENDERER_URL) {
+    return null;
+  }
+  try {
+    const url = new URL(BUSTLY_RENDERER_URL);
+    const normalizedHash = normalizeRendererHash(hash);
+    if (normalizedHash) {
+      url.hash = normalizedHash;
+    }
+    return url.toString();
+  } catch (error) {
+    writeMainLog(
+      `[Renderer] Invalid BUSTLY_RENDERER_URL "${BUSTLY_RENDERER_URL}": ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
+  }
+}
+
 function loadRendererWindow(targetWindow: BrowserWindow, options?: { hash?: string }) {
+  const remoteRendererUrl = resolveRemoteRendererUrl(options?.hash);
+  if (remoteRendererUrl) {
+    targetWindow.loadURL(remoteRendererUrl).catch((error) => {
+      writeMainLog(`Renderer load failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    return;
+  }
+
   if (process.env.NODE_ENV === "development") {
     const url = options?.hash ? `http://localhost:5180/#${options.hash}` : "http://localhost:5180";
     targetWindow.loadURL(url).catch((error) => {

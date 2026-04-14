@@ -51,6 +51,7 @@ import type { TimelineArtifact, TimelineNode } from "./types";
 import { useAppState } from "../../providers/AppStateProvider";
 import { useGlobalLoader } from "../../providers/GlobalLoaderProvider";
 import { BUSTLY_WORKSPACE_SWITCH_EVENT } from "../../lib/workspace-events";
+import { getRendererHostAdapter } from "../../platform/host";
 import AgentSettingsModal, { type AgentSettingsSkill } from "./AgentSettingsModal";
 import { isAgentAvatarFile } from "../../lib/agent-avatars";
 import { resolveAgentIconComponent, resolveAgentPresentation } from "../../lib/agent-presentation";
@@ -574,11 +575,12 @@ async function resolvePastedSelection(params: {
   transferPaths?: string[];
   fallbackKind: "file" | "directory";
 }): Promise<{ path: string; kind: "file" | "directory" }> {
-  if (typeof window.electronAPI?.resolvePastedPath !== "function") {
+  const host = getRendererHostAdapter();
+  if (typeof host.resolvePastedPath !== "function") {
     return { path: params.entryPath?.trim() ?? "", kind: params.fallbackKind };
   }
   try {
-    const resolved = await window.electronAPI.resolvePastedPath(params);
+    const resolved = await host.resolvePastedPath(params);
     return {
       path: resolved?.path?.trim() ?? params.entryPath?.trim() ?? "",
       kind: resolved?.kind === "directory" || resolved?.kind === "file" ? resolved.kind : params.fallbackKind,
@@ -829,6 +831,7 @@ export default function ChatPage() {
   const { showGlobalLoading, hideGlobalLoading, showLoader, hideLoader } = useGlobalLoader();
   const location = useLocation();
   const navigate = useNavigate();
+  const host = useMemo(() => getRendererHostAdapter(), []);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -1128,9 +1131,9 @@ export default function ChatPage() {
     };
   }, [previewImage]);
   const loadGatewayStatus = useCallback(async () => {
-    const status = await window.electronAPI.gatewayStatus();
+    const status = await host.gatewayStatus();
     return status;
-  }, []);
+  }, [host]);
 
   useEffect(() => {
     if (error) {
@@ -1820,7 +1823,7 @@ export default function ChatPage() {
       hideLoader();
       let connectConfig: GatewayConnectConfig;
       try {
-        connectConfig = await window.electronAPI.gatewayConnectConfig();
+        connectConfig = await host.gatewayConnectConfig();
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         setError(`Gateway connect config unavailable: ${reason}`);
@@ -1836,7 +1839,7 @@ export default function ChatPage() {
         url: connectConfig.wsUrl,
         token: connectConfig.token ?? undefined,
         resolveConnection: async () => {
-          const next = await window.electronAPI.gatewayConnectConfig();
+          const next = await host.gatewayConnectConfig();
           return {
             url: next.wsUrl,
             token: next.token ?? undefined,
@@ -2223,6 +2226,7 @@ export default function ChatPage() {
       clearReconnectStatus,
       finalizeRunState,
       getSessionRuntime,
+      host,
       loadHistory,
       loadSessionUsage,
       markLastAssistantAsFinal,
@@ -3092,8 +3096,10 @@ export default function ChatPage() {
     if (!activeWorkspaceId) {
       return;
     }
-    await window.electronAPI.bustlyOpenWorkspacePricing(activeWorkspaceId);
-  }, [activeWorkspaceId]);
+    if (host.bustlyOpenWorkspacePricing) {
+      await host.bustlyOpenWorkspacePricing(activeWorkspaceId);
+    }
+  }, [activeWorkspaceId, host]);
 
   const CurrentAgentIcon = useMemo(
     () =>
@@ -3431,8 +3437,11 @@ export default function ChatPage() {
     if (subscriptionExpired) {
       return;
     }
+    if (!host.selectChatContextPaths) {
+      return;
+    }
     try {
-      const selected = await window.electronAPI.selectChatContextPaths();
+      const selected = await host.selectChatContextPaths();
       if (!Array.isArray(selected) || selected.length === 0) {
         return;
       }
@@ -3440,7 +3449,7 @@ export default function ChatPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [appendContextSelections, subscriptionExpired]);
+  }, [appendContextSelections, host, subscriptionExpired]);
 
   const runningTools = useMemo(
     () =>
