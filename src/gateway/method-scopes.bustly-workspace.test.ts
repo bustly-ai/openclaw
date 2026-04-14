@@ -58,29 +58,9 @@ describe("bustly workspace method scopes", () => {
       "bustly.agents.delete",
       "bustly.sessions.create",
       "bustly.runtime.report-issue",
+      "bustly.runtime.bootstrap",
       "bustly.runtime.manifest.apply",
     ]) {
-      expect(isGatewayMethodClassified(method)).toBe(true);
-      expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual([WRITE_SCOPE]);
-      expect(authorizeOperatorScopesForMethod(method, [READ_SCOPE])).toEqual({
-        allowed: false,
-        missingScope: WRITE_SCOPE,
-      });
-      expect(authorizeOperatorScopesForMethod(method, [WRITE_SCOPE])).toEqual({
-        allowed: true,
-      });
-    }
-  });
-
-  it("classifies oauth methods with least privilege read/write scopes", () => {
-    for (const method of ["oauth.is-logged-in", "oauth.get-user-info"]) {
-      expect(isGatewayMethodClassified(method)).toBe(true);
-      expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual([READ_SCOPE]);
-      expect(authorizeOperatorScopesForMethod(method, [READ_SCOPE])).toEqual({
-        allowed: true,
-      });
-    }
-    for (const method of ["oauth.login", "oauth.poll", "oauth.cancel", "oauth.logout"]) {
       expect(isGatewayMethodClassified(method)).toBe(true);
       expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual([WRITE_SCOPE]);
       expect(authorizeOperatorScopesForMethod(method, [READ_SCOPE])).toEqual({

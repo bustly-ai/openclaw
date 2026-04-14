@@ -1,4 +1,5 @@
 import { readBustlyOAuthState } from "../bustly-oauth.js";
+import { loadEnabledBustlyRemoteAgentPresets } from "./agent-presets.js";
 import type { BustlyWorkspaceBinding } from "./workspace-runtime.js";
 import { resolveActiveBustlyWorkspaceBinding, setActiveBustlyWorkspace } from "./workspace-runtime.js";
 import { ensureBustlyWorkspacePresetAgents } from "./workspace-agents.js";
@@ -27,6 +28,8 @@ export type BustlyRuntimeManifestApplyResult = BustlyWorkspaceBinding & {
   workspaceId: string;
   presetAgentsApplied: number;
 };
+
+export type BustlyRuntimeBootstrapParams = BustlyRuntimeManifestApplyParams;
 
 function resolveWorkspaceId(params?: {
   workspaceId?: string;
@@ -107,3 +110,14 @@ export async function applyBustlyRuntimeManifest(
   };
 }
 
+export async function bootstrapBustlyRuntime(
+  params: BustlyRuntimeBootstrapParams = {},
+): Promise<BustlyRuntimeManifestApplyResult> {
+  const presetAgents = params.presetAgents ?? await loadEnabledBustlyRemoteAgentPresets({
+    env: params.env,
+  });
+  return await applyBustlyRuntimeManifest({
+    ...params,
+    presetAgents,
+  });
+}

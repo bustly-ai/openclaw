@@ -34,14 +34,20 @@ import {
   normalizeAgentAvatarName,
 } from "../../lib/agent-avatars";
 import { resolveAgentPresentation } from "../../lib/agent-presentation";
-import { listWorkspaceSummaries, type WorkspaceSummary } from "../../lib/bustly-supabase";
+import {
+  invalidateWorkspaceSummariesCache,
+  listWorkspaceSummaries,
+  type WorkspaceSummary,
+} from "../../lib/bustly-supabase";
+import { notifyBustlyWorkspaceSwitched } from "../../lib/workspace-events";
 import {
   createBustlyAgent,
   deleteBustlyAgent,
   getBustlyUserInfo,
-  isBustlyLoggedIn,
   listBustlyAgentSessions,
   listBustlyAgents,
+  logoutBustly,
+  reportBustlyIssue,
   setActiveBustlyWorkspace,
   subscribeBustlySessionLabelUpdated,
   updateBustlyAgent,
@@ -1212,7 +1218,7 @@ function WorkspaceSwitcher(props: {
 }
 
 export function ClientAppSidebar(props: ClientAppSidebarProps) {
-  const { checking, initialized } = useAppState();
+  const { checking, initialized, loggedIn, refreshAppState } = useAppState();
   const { showGlobalLoading, hideGlobalLoading } = useGlobalLoader();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isWindowFullscreen, setIsWindowFullscreen] = useState(false);
@@ -1398,17 +1404,16 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   );
 
   useEffect(() => {
-    const unsubscribe = window.electronAPI.onBustlyLoginRefresh(() => {
-      void loadWorkspaces({ force: true, silent: hasLoadedWorkspacesRef.current });
-    });
-    return () => {
-      unsubscribe();
-    };
-  }, [loadWorkspaces]);
-
-  useEffect(() => {
-    void loadWorkspaces();
-  }, [loadWorkspaces]);
+    if (!initialized || !loggedIn) {
+      hasLoadedWorkspacesRef.current = false;
+      setHasLoadedWorkspaces(false);
+      setWorkspaceLoading(false);
+      setWorkspaces([]);
+      setActiveWorkspaceId("");
+      return;
+    }
+    void loadWorkspaces({ silent: hasLoadedWorkspacesRef.current });
+  }, [initialized, loadWorkspaces, loggedIn]);
 
   useEffect(() => {
     const handleRunStateChange = (event: Event) => {
@@ -1632,17 +1637,14 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   }, [visibleAgentTasks]);
 
   useEffect(() => {
+    if (!loggedIn) {
+      setBustlyUserInfo(null);
+      return;
+    }
     let disposed = false;
 
     const loadBustlyUserInfo = async () => {
       try {
-        const loggedIn = await isBustlyLoggedIn();
-        if (!loggedIn) {
-          if (!disposed) {
-            setBustlyUserInfo(null);
-          }
-          return;
-        }
         const userInfo = await getBustlyUserInfo();
         if (!disposed) {
           setBustlyUserInfo(userInfo);
@@ -1655,15 +1657,10 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     };
 
     void loadBustlyUserInfo();
-    const unsubscribe = window.electronAPI.onBustlyLoginRefresh(() => {
-      void loadBustlyUserInfo();
-    });
-
     return () => {
       disposed = true;
-      unsubscribe();
     };
-  }, []);
+  }, [loggedIn]);
 
   const userName = bustlyUserInfo?.userName?.trim() || "User";
   const userEmail = bustlyUserInfo?.userEmail?.trim() || "user@example.com";
@@ -1683,10 +1680,9 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     }
     setIsPreparingIssueReport(true);
     try {
-      const result = await window.electronAPI.bustlyReportIssue();
-      if (!result.success) {
-        console.error("[Bustly Report Issue] Failed:", result.error);
-      }
+      await reportBustlyIssue();
+    } catch (error) {
+      console.error("[Bustly Report Issue] Failed:", error);
     } finally {
       setIsPreparingIssueReport(false);
       setIsUserMenuOpen(false);
@@ -1737,10 +1733,17 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     showGlobalLoading(`Loading ${workspace?.name?.trim() || "workspace"}...`, "workspace-switch", "loading", 10);
     try {
       await setActiveBustlyWorkspace({ workspaceId, workspaceName: workspace?.name });
+      invalidateWorkspaceSummariesCache();
+      await loadWorkspaces({ force: true, silent: true }).catch(() => undefined);
       setActiveWorkspaceId(workspaceId);
+      setBustlyUserInfo((prev) => (prev ? { ...prev, workspaceId } : prev));
+      setRecentTasks([]);
+      setSessionsByAgent({});
+      setHasLoadedTasks(false);
+      notifyBustlyWorkspaceSwitched();
       void navigate("/chat", { replace: true });
       notifySidebarTasksRefresh();
-    } catch {
+    } finally {
       hideGlobalLoading("workspace-switch");
     }
   };
@@ -1751,16 +1754,18 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     }
     setIsLoggingOut(true);
     try {
-      const result = await window.electronAPI.bustlyLogout();
-      if (!result.success) {
-        return;
-      }
+      await logoutBustly();
+      invalidateWorkspaceSummariesCache();
       setBustlyUserInfo(null);
+      setWorkspaces([]);
+      setActiveWorkspaceId("");
+      setRecentTasks([]);
+      setSessionsByAgent({});
+      setHasLoadedTasks(false);
+      setHasLoadedWorkspaces(false);
       setIsUserMenuOpen(false);
-      const openResult = await window.electronAPI.bustlyOpenLogin();
-      if (!openResult.success) {
-        void navigate("/bustly-login", { replace: true });
-      }
+      await refreshAppState();
+      void navigate("/bustly-login", { replace: true });
     } finally {
       setIsLoggingOut(false);
     }

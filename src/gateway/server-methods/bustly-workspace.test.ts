@@ -3,13 +3,16 @@ import { ErrorCodes } from "../protocol/index.js";
 
 const mocks = vi.hoisted(() => ({
   resolveActiveBustlyWorkspaceBinding: vi.fn(),
-  setActiveBustlyWorkspace: vi.fn(),
+  bootstrapBustlyRuntime: vi.fn(),
 }));
 
 vi.mock("../../bustly/workspace-runtime.js", () => ({
   resolveActiveBustlyWorkspaceBinding: (...args: unknown[]) =>
     mocks.resolveActiveBustlyWorkspaceBinding(...args),
-  setActiveBustlyWorkspace: (...args: unknown[]) => mocks.setActiveBustlyWorkspace(...args),
+}));
+
+vi.mock("../../bustly/runtime-manifest.js", () => ({
+  bootstrapBustlyRuntime: (...args: unknown[]) => mocks.bootstrapBustlyRuntime(...args),
 }));
 
 import { bustlyWorkspaceHandlers } from "./bustly-workspace.js";
@@ -43,7 +46,7 @@ async function invokeSetActive(params: Record<string, unknown>) {
 describe("gateway bustly.workspace methods", () => {
   beforeEach(() => {
     mocks.resolveActiveBustlyWorkspaceBinding.mockReset();
-    mocks.setActiveBustlyWorkspace.mockReset();
+    mocks.bootstrapBustlyRuntime.mockReset();
   });
 
   it("returns current active bustly workspace", async () => {
@@ -87,11 +90,11 @@ describe("gateway bustly.workspace methods", () => {
         message: "workspaceId is required",
       }),
     );
-    expect(mocks.setActiveBustlyWorkspace).not.toHaveBeenCalled();
+    expect(mocks.bootstrapBustlyRuntime).not.toHaveBeenCalled();
   });
 
   it("switches active workspace and returns updated binding", async () => {
-    mocks.setActiveBustlyWorkspace.mockResolvedValue({
+    mocks.bootstrapBustlyRuntime.mockResolvedValue({
       workspaceId: "workspace-2",
       agentId: "bustly-workspace-2-overview",
       workspaceDir: "/tmp/workspaces/workspace-2/agents/overview",
@@ -100,7 +103,7 @@ describe("gateway bustly.workspace methods", () => {
       workspaceId: "workspace-2",
       workspaceName: "Workspace Two",
     });
-    expect(mocks.setActiveBustlyWorkspace).toHaveBeenCalledWith({
+    expect(mocks.bootstrapBustlyRuntime).toHaveBeenCalledWith({
       workspaceId: "workspace-2",
       workspaceName: "Workspace Two",
       allowCreateConfig: true,

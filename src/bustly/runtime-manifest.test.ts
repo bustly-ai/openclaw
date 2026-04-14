@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { BustlyOAuthState } from "../config/types.base.js";
 import {
   applyBustlyRuntimeManifest,
+  bootstrapBustlyRuntime,
   getBustlyRuntimeHealthSnapshot,
 } from "./runtime-manifest.js";
 
@@ -10,6 +11,7 @@ const {
   setActiveBustlyWorkspaceMock,
   resolveActiveBustlyWorkspaceBindingMock,
   ensureBustlyWorkspacePresetAgentsMock,
+  loadEnabledBustlyRemoteAgentPresetsMock,
 } = vi.hoisted(() => {
   return {
     oauthStateRef: { current: null as BustlyOAuthState | null },
@@ -24,6 +26,7 @@ const {
       workspaceDir: "/tmp/workspaces/workspace-1/agents/overview",
     })),
     ensureBustlyWorkspacePresetAgentsMock: vi.fn(async () => undefined),
+    loadEnabledBustlyRemoteAgentPresetsMock: vi.fn(async () => []),
   };
 });
 
@@ -39,6 +42,11 @@ vi.mock("./workspace-runtime.js", () => ({
 vi.mock("./workspace-agents.js", () => ({
   ensureBustlyWorkspacePresetAgents: (params: unknown) =>
     ensureBustlyWorkspacePresetAgentsMock(params),
+}));
+
+vi.mock("./agent-presets.js", () => ({
+  loadEnabledBustlyRemoteAgentPresets: (params: unknown) =>
+    loadEnabledBustlyRemoteAgentPresetsMock(params),
 }));
 
 describe("bustly runtime manifest", () => {
@@ -104,6 +112,51 @@ describe("bustly runtime manifest", () => {
     });
   });
 
+  it("bootstraps runtime with shared remote presets when none are provided", async () => {
+    oauthStateRef.current = {
+      deviceId: "device-1",
+      callbackPort: 17900,
+      user: {
+        userId: "u-1",
+        userName: "Tester",
+        userEmail: "tester@example.com",
+        userAccessToken: "token-1",
+        workspaceId: "workspace-from-oauth",
+        skills: [],
+      },
+    };
+    loadEnabledBustlyRemoteAgentPresetsMock.mockResolvedValue([
+      { slug: "overview", label: "Overview", icon: "Robot", order: 0, isMain: true },
+      { slug: "marketing", label: "Marketing", icon: "TrendUp", order: 40 },
+    ]);
+
+    const applied = await bootstrapBustlyRuntime({
+      selectedModelInput: "bustly/chat.ultra",
+      userAgent: "desktop-gateway",
+    });
+
+    expect(loadEnabledBustlyRemoteAgentPresetsMock).toHaveBeenCalledWith({
+      env: undefined,
+    });
+    expect(setActiveBustlyWorkspaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-from-oauth",
+        selectedModelInput: "bustly/chat.ultra",
+        userAgent: "desktop-gateway",
+      }),
+    );
+    expect(ensureBustlyWorkspacePresetAgentsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-from-oauth",
+        presets: [
+          { slug: "overview", label: "Overview", icon: "Robot", isMain: true },
+          { slug: "marketing", label: "Marketing", icon: "TrendUp", isMain: undefined },
+        ],
+      }),
+    );
+    expect(applied.presetAgentsApplied).toBe(2);
+  });
+
   it("falls back to oauth workspace id and validates missing workspace", async () => {
     oauthStateRef.current = {
       deviceId: "device-1",
@@ -135,4 +188,3 @@ describe("bustly runtime manifest", () => {
     ).rejects.toThrow("workspaceId is required");
   });
 });
-

@@ -13,18 +13,10 @@ const BUSTLY_METHODS = [
   "bustly.links.resolve",
   "bustly.runtime.health",
   "bustly.runtime.report-issue",
+  "bustly.runtime.bootstrap",
   "bustly.runtime.manifest.apply",
   "bustly.workspace.get-active",
   "bustly.workspace.set-active",
-] as const;
-
-const OAUTH_METHODS = [
-  "oauth.login",
-  "oauth.poll",
-  "oauth.cancel",
-  "oauth.is-logged-in",
-  "oauth.get-user-info",
-  "oauth.logout",
 ] as const;
 
 describe("gateway method list bustly additions", () => {
@@ -37,14 +29,6 @@ describe("gateway method list bustly additions", () => {
 
   it("registers handlers for bustly methods in core handlers", () => {
     for (const method of BUSTLY_METHODS) {
-      expect(typeof coreGatewayHandlers[method]).toBe("function");
-    }
-  });
-
-  it("includes oauth methods and registers their handlers", () => {
-    const methods = listGatewayMethods();
-    for (const method of OAUTH_METHODS) {
-      expect(methods.filter((entry) => entry === method)).toHaveLength(1);
       expect(typeof coreGatewayHandlers[method]).toBe("function");
     }
   });

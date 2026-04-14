@@ -189,16 +189,19 @@ interface ElectronAPI {
     kind: "image" | "video" | "audio";
   } | null>;
   openLocalPath: (path: string) => Promise<{ success: boolean; error?: string }>;
+  openExternalUrl: (url: string) => Promise<{ success: boolean; error?: string }>;
   getAppInfo: () => Promise<AppInfo>;
   getNativeFullscreenStatus: () => Promise<{ isNativeFullscreen: boolean }>;
 
   // Onboarding
-  bustlyLogin: () => Promise<{ success: boolean; canceled?: boolean; error?: string }>;
-  bustlyCancelLogin: () => Promise<{ success: boolean; error?: string }>;
+  bustlyLogin: () => Promise<{ success: boolean; loginTraceId?: string; error?: string }>;
+  bustlyPollLogin: (loginTraceId: string) => Promise<{ success: boolean; pending: boolean; error?: string }>;
+  bustlyCancelLogin: (loginTraceId?: string) => Promise<{ success: boolean; error?: string }>;
+  bustlyIsLoggedIn: () => Promise<{ success: boolean; loggedIn: boolean; error?: string }>;
+  bustlyGetUserInfo: () => Promise<{ success: boolean; user: BustlyUserInfo | null; error?: string }>;
   bustlyLogout: () => Promise<{ success: boolean; error?: string }>;
   bustlyOpenLogin: () => Promise<{ success: boolean; error?: string }>;
   bustlyOpenSettings: () => Promise<{ success: boolean; error?: string }>;
-  bustlyReportIssue: () => Promise<{ success: boolean; archivePath?: string; error?: string }>;
   bustlyOpenWorkspaceSettings: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
   bustlyOpenWorkspaceInvite: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
   bustlyOpenWorkspaceManage: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
@@ -215,10 +218,10 @@ interface ElectronAPI {
   onGatewayExit: (callback: (data: GatewayExitData) => void) => () => void;
   onGatewayLifecycle: (callback: (data: GatewayLifecycleData) => void) => () => void;
   onMainLog: (callback: (data: MainLogData) => void) => () => void;
-  onBustlyLoginRefresh: (callback: () => void) => () => void;
   onUpdateStatus: (callback: (data: { event: string; state?: DesktopUpdateState }) => void) => () => void;
   onNativeFullscreenChange: (callback: (data: { isNativeFullscreen: boolean }) => void) => () => void;
   onDeepLink: (callback: (data: DeepLinkData) => void) => () => void;
+  onBustlyLoginRefresh: (callback: () => void) => () => void;
 }
 
 interface Window {

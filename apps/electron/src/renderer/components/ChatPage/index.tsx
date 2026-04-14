@@ -50,6 +50,7 @@ import { collapseProcessedTurn, collapseStreamingEvents, resolveToolDisplay, for
 import type { TimelineArtifact, TimelineNode } from "./types";
 import { useAppState } from "../../providers/AppStateProvider";
 import { useGlobalLoader } from "../../providers/GlobalLoaderProvider";
+import { BUSTLY_WORKSPACE_SWITCH_EVENT } from "../../lib/workspace-events";
 import AgentSettingsModal, { type AgentSettingsSkill } from "./AgentSettingsModal";
 import { isAgentAvatarFile } from "../../lib/agent-avatars";
 import { resolveAgentIconComponent, resolveAgentPresentation } from "../../lib/agent-presentation";
@@ -824,7 +825,7 @@ function InputArtifactCard({
 }
 
 export default function ChatPage() {
-  const { ensureGatewayReady, gatewayReady } = useAppState();
+  const { ensureGatewayReady, gatewayReady, initialized, loggedIn } = useAppState();
   const { showGlobalLoading, hideGlobalLoading, showLoader, hideLoader } = useGlobalLoader();
   const location = useLocation();
   const navigate = useNavigate();
@@ -2237,6 +2238,14 @@ export default function ChatPage() {
   );
 
   useEffect(() => {
+    if (!initialized || !loggedIn) {
+      setActiveWorkspaceId("");
+      setSubscriptionExpired(false);
+      setSubscriptionActionText("Upgrade");
+      setCanManageSubscription(false);
+      setWorkspaceStateLoading(false);
+      return;
+    }
     let disposed = false;
 
     const loadWorkspaceState = async (options?: { force?: boolean }) => {
@@ -2273,15 +2282,17 @@ export default function ChatPage() {
     };
 
     void loadWorkspaceState();
-    const unsubscribe = window.electronAPI.onBustlyLoginRefresh(() => {
+
+    const handleWorkspaceSwitched = () => {
       void loadWorkspaceState({ force: true });
-    });
+    };
+    window.addEventListener(BUSTLY_WORKSPACE_SWITCH_EVENT, handleWorkspaceSwitched);
 
     return () => {
       disposed = true;
-      unsubscribe();
+      window.removeEventListener(BUSTLY_WORKSPACE_SWITCH_EVENT, handleWorkspaceSwitched);
     };
-  }, [hideGlobalLoading]);
+  }, [hideGlobalLoading, initialized, loggedIn]);
 
   useEffect(() => {
     if (!activeWorkspaceId || !currentAgentId) {

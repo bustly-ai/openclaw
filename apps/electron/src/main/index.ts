@@ -11,7 +11,6 @@ import {
   type OpenDialogOptions,
 } from "electron";
 import * as Sentry from "@sentry/electron/main";
-import JSZip from "jszip";
 import { randomUUID } from "node:crypto";
 import { resolve, dirname, basename, join } from "node:path";
 import { fork, spawn, spawnSync, ChildProcess } from "node:child_process";
@@ -48,49 +47,22 @@ import {
   generateLoginUrl,
   startOAuthCallbackServer,
   stopOAuthCallbackServer,
-  cancelOAuthFlow,
 } from "./oauth-handler.js";
 import * as BustlyOAuth from "./bustly-oauth.js";
-import {
-  syncBustlyConfigFile as syncSharedBustlyConfigFile,
-} from "../../../../src/bustly/runtime-config.js";
 import { buildBustlyAdminUrl as buildSharedBustlyAdminUrl } from "../../../../src/bustly/admin-links.js";
 import {
   resolveBustlyWorkspaceAgentWorkspaceDir as resolveSharedBustlyWorkspaceAgentWorkspaceDir,
   resolveBustlyWorkspaceIdFromOAuthState as resolveSharedBustlyWorkspaceIdFromOAuthState,
-  setActiveBustlyWorkspace,
-  synchronizeBustlyWorkspaceContext as synchronizeSharedBustlyWorkspaceContext,
 } from "../../../../src/bustly/workspace-runtime.js";
 import {
-  ensureBustlyWorkspacePresetAgents as ensureSharedBustlyWorkspacePresetAgents,
-  listBustlyWorkspaceAgents as listSharedBustlyWorkspaceAgents,
-} from "../../../../src/bustly/workspace-agents.js";
-import { resolveOpenClawAgentDir } from "../../../../src/agents/agent-paths";
-import { loadConfig } from "../../../../src/config/config";
-import type { OpenClawConfig } from "../../../../src/config/types";
-import {
-  applyAuthProfileConfig,
-  applyOpenrouterProviderConfig,
-  setOpenrouterApiKey,
-} from "../../../../src/commands/onboard-auth";
-import { applyPrimaryModel } from "../../../../src/commands/model-picker";
-import {
-  ELECTRON_DEFAULT_MODEL,
   ELECTRON_OPENCLAW_PROFILE,
-  getElectronOpenrouterApiKey,
   resolveElectronBackendLogPath,
   resolveElectronIsolatedConfigPath,
   resolveElectronIsolatedStateDir,
 } from "./defaults.js";
 import {
   DEFAULT_BUSTLY_AGENT_NAME,
-  buildBustlyWorkspaceAgentId,
-  normalizeBustlyAgentName,
-  normalizeBustlyWorkspaceId,
 } from "../shared/bustly-agent.js";
-import {
-  loadEnabledBustlyRemoteAgentPresets,
-} from "./bustly-agent-presets.js";
 import { initializeMainHttpClient } from "./http-client.js";
 import {
   ensureMainLogPath,
@@ -243,89 +215,6 @@ function loadMainProcessEnvFromDotEnv(): void {
   }
 }
 
-function formatIssueReportTimestamp(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  const seconds = String(date.getSeconds()).padStart(2, "0");
-  return `${year}${month}${day}-${hours}${minutes}${seconds}`;
-}
-
-function addDirectoryToZip(params: {
-  zip: JSZip;
-  baseDir: string;
-  currentDir: string;
-  pathPrefix: string;
-}): void {
-  const entries = readdirSync(params.currentDir, { withFileTypes: true })
-    .toSorted((left, right) => left.name.localeCompare(right.name));
-
-  for (const entry of entries) {
-    const entryPath = join(params.currentDir, entry.name);
-    const relativePath = entryPath.slice(params.baseDir.length + 1).replace(/\\/g, "/");
-    const zipPath = `${params.pathPrefix}/${relativePath}`;
-
-    if (entry.isSymbolicLink()) {
-      continue;
-    }
-
-    if (entry.isDirectory()) {
-      params.zip.folder(zipPath);
-      addDirectoryToZip({
-        zip: params.zip,
-        baseDir: params.baseDir,
-        currentDir: entryPath,
-        pathPrefix: params.pathPrefix,
-      });
-      continue;
-    }
-
-    if (!entry.isFile()) {
-      continue;
-    }
-
-    const stat = lstatSync(entryPath);
-    params.zip.file(zipPath, readFileSync(entryPath), {
-      unixPermissions: stat.mode,
-      date: stat.mtime,
-    });
-  }
-}
-
-async function createBustlyIssueReportArchive(): Promise<string> {
-  const stateDir = resolve(app.getPath("home"), ".bustly");
-  if (!existsSync(stateDir) || !lstatSync(stateDir).isDirectory()) {
-    throw new Error(`Bustly state directory not found: ${stateDir}`);
-  }
-
-  const downloadsDir = app.getPath("downloads");
-  mkdirSync(downloadsDir, { recursive: true });
-
-  const zip = new JSZip();
-  zip.folder(".bustly");
-  addDirectoryToZip({
-    zip,
-    baseDir: stateDir,
-    currentDir: stateDir,
-    pathPrefix: ".bustly",
-  });
-
-  const archivePath = join(
-    downloadsDir,
-    `bustly-issue-report-${formatIssueReportTimestamp(new Date())}.zip`,
-  );
-  const archiveBuffer = await zip.generateAsync({
-    type: "nodebuffer",
-    compression: "DEFLATE",
-    compressionOptions: { level: 6 },
-  });
-  writeFileSync(archivePath, archiveBuffer);
-  shell.showItemInFolder(archivePath);
-  return archivePath;
-}
-
 loadMainProcessEnvFromDotEnv();
 
 Sentry.init({
@@ -382,8 +271,17 @@ let gatewayLastWorkerFailure: {
   kind: "config" | "runtime";
   message: string;
 } | null = null;
-let bustlyLoginCancelled = false;
-let bustlyLoginAttemptId = 0;
+type BustlyLoginAttemptState = "pending" | "completed" | "error" | "canceled";
+type BustlyLoginAttempt = {
+  loginTraceId: string;
+  loginUrl: string;
+  status: BustlyLoginAttemptState;
+  error: string | null;
+  startedAt: number;
+  finishedAt: number | null;
+};
+const bustlyLoginAttempts = new Map<string, BustlyLoginAttempt>();
+let activeBustlyLoginTraceId: string | null = null;
 let latestAvailableVersion: string | null = null;
 let latestUpdateInfo: UpdateInfoSnapshot | null = null;
 let updateStateFilePath: string | null = updaterHelperStateFilePath;
@@ -757,15 +655,6 @@ function dispatchDeepLink(url: string): boolean {
     }
 
     focusMainWindow();
-    if (payload.workspaceId?.trim()) {
-      try {
-        await setActiveWorkspaceInternal(payload.workspaceId);
-      } catch (error) {
-        writeMainLog(
-          `[DeepLink] workspace switch failed workspaceId=${payload.workspaceId} error=${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }
     writeMainLog("[DeepLink] dispatching payload to renderer");
     mainWindow.webContents.send(DEEP_LINK_CHANNEL, payload);
     pendingDeepLink = null;
@@ -800,11 +689,17 @@ function registerProtocolClient() {
 }
 let initResult: InitializationResult | null = null;
 
+function applyInitializationResult(result: InitializationResult): void {
+  initResult = result;
+  gatewayPort = result.gatewayPort;
+  gatewayBind = result.gatewayBind;
+  gatewayToken = result.gatewayToken ?? null;
+  needsOnboardAtLaunch = false;
+}
+
 // Gateway configuration
 const GATEWAY_HOST = "127.0.0.1";
 const BUSTLY_LOGIN_HASH = "/bustly-login";
-const BUSTLY_MODEL_GATEWAY_USER_AGENT =
-  process.env.BUSTLY_MODEL_GATEWAY_USER_AGENT?.trim() || `bustly/${app.getVersion()}`;
 const PRELOAD_PATH = process.env.NODE_ENV === "development"
   ? resolve(__dirname, "main/preload.js")
   : resolve(__dirname, "preload.js");
@@ -816,13 +711,6 @@ function sendNativeFullscreenState(isNativeFullscreen: boolean) {
     return;
   }
   mainWindow.webContents.send(WINDOW_NATIVE_FULLSCREEN_CHANNEL, { isNativeFullscreen });
-}
-
-function syncBustlyConfigFile(configPath: string, selectedModelInput?: string): void {
-  syncSharedBustlyConfigFile(configPath, {
-    selectedModelInput,
-    userAgent: BUSTLY_MODEL_GATEWAY_USER_AGENT,
-  });
 }
 
 function resolveElectronStateDir(): string {
@@ -911,158 +799,6 @@ function resolveBustlyWorkspaceAgentWorkspaceDir(
 
 function resolveBustlyWorkspaceIdFromOAuthState(): string {
   return resolveSharedBustlyWorkspaceIdFromOAuthState();
-}
-
-async function hasMissingBustlyWorkspaceSetup(workspaceId: string): Promise<boolean> {
-  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(workspaceId);
-  if (!normalizedWorkspaceId) {
-    return false;
-  }
-  const workspaceAgentIds = new Set(
-    listSharedBustlyWorkspaceAgents({
-      workspaceId: normalizedWorkspaceId,
-      configPath: resolveElectronConfigPath(),
-    }).map((entry) => entry.agentId),
-  );
-  const mainAgentId = buildBustlyWorkspaceAgentId(normalizedWorkspaceId);
-  const legacyMainAgentId = `bustly-${normalizedWorkspaceId}`;
-  if (!workspaceAgentIds.has(mainAgentId) && !workspaceAgentIds.has(legacyMainAgentId)) {
-    return true;
-  }
-  const presets = await loadEnabledBustlyRemoteAgentPresets();
-  return presets.some((preset) => {
-    if (preset.slug === DEFAULT_BUSTLY_AGENT_NAME || preset.isMain) {
-      return false;
-    }
-    const agentId = buildBustlyWorkspaceAgentId(normalizedWorkspaceId, preset.slug);
-    return !workspaceAgentIds.has(agentId);
-  });
-}
-
-async function ensureBustlyPresetAgents(params: {
-  workspaceId: string;
-  workspaceName?: string;
-}): Promise<void> {
-  const presets = await loadEnabledBustlyRemoteAgentPresets();
-  await ensureSharedBustlyWorkspacePresetAgents({
-    workspaceId: params.workspaceId,
-    workspaceName: params.workspaceName,
-    presets: presets.map((preset) => ({
-      slug: preset.slug,
-      label: preset.label,
-      icon: preset.icon,
-      isMain: preset.isMain,
-    })),
-    configPath: resolveElectronConfigPath(),
-    allowCreateConfig: false,
-    env: process.env,
-  });
-}
-
-async function syncBustlyWorkspaceAgent(params: {
-  workspaceId?: string;
-  workspaceName?: string;
-  agentName?: string;
-  forceInit?: boolean;
-}): Promise<{ agentId: string; workspaceDir: string } | null> {
-  const workspaceId = params.workspaceId?.trim() || resolveBustlyWorkspaceIdFromOAuthState();
-  if (!workspaceId) {
-    return null;
-  }
-  const agentName = normalizeBustlyAgentName(params.agentName);
-  const configPath = resolveElectronConfigPath();
-  const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId, agentName);
-  if (params.forceInit === true || !existsSync(configPath)) {
-    const result = await initializeOpenClaw({
-      force: params.forceInit === true,
-      workspace: workspaceDir,
-    });
-    if (!result.success) {
-      throw new Error(result.error ?? "Failed to initialize OpenClaw");
-    }
-    initResult = result;
-    gatewayPort = result.gatewayPort;
-    gatewayBind = result.gatewayBind;
-    gatewayToken = result.gatewayToken ?? null;
-    needsOnboardAtLaunch = false;
-  }
-  const sharedBinding = await synchronizeSharedBustlyWorkspaceContext({
-    workspaceId,
-    workspaceName: params.workspaceName?.trim(),
-    agentName,
-    configPath,
-    allowCreateConfig: true,
-    userAgent: BUSTLY_MODEL_GATEWAY_USER_AGENT,
-  });
-  if (!sharedBinding) {
-    return null;
-  }
-  await ensureBustlyPresetAgents({
-    workspaceId,
-    workspaceName: params.workspaceName?.trim(),
-  });
-  return {
-    agentId: sharedBinding.agentId,
-    workspaceDir: sharedBinding.workspaceDir,
-  };
-}
-
-async function synchronizeBustlyWorkspaceContext(params?: {
-  workspaceId?: string;
-  workspaceName?: string;
-  agentName?: string;
-  selectedModelInput?: string;
-  forceInit?: boolean;
-}): Promise<{ agentId: string; workspaceDir: string } | null> {
-  const agentBinding = await syncBustlyWorkspaceAgent({
-    workspaceId: params?.workspaceId,
-    workspaceName: params?.workspaceName,
-    agentName: params?.agentName,
-    forceInit: params?.forceInit,
-  });
-  syncBustlyConfigFile(resolveElectronConfigPath(), params?.selectedModelInput?.trim());
-  return agentBinding;
-}
-
-async function setActiveWorkspaceInternal(workspaceId: string, workspaceName?: string): Promise<{
-  agentId?: string;
-}> {
-  const nextWorkspaceId = workspaceId.trim();
-  if (!nextWorkspaceId) {
-    throw new Error("Missing workspaceId");
-  }
-  const currentWorkspaceId = BustlyOAuth.readBustlyOAuthState()?.user?.workspaceId?.trim() || "";
-  writeMainLog(
-    `[Workspace] set active requested current=${currentWorkspaceId || "(none)"} next=${nextWorkspaceId}`,
-  );
-  if (currentWorkspaceId === nextWorkspaceId) {
-    writeMainLog(`[Workspace] set active skipped; already on ${nextWorkspaceId}`);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("bustly-login-refresh");
-    }
-    return {};
-  }
-  const agentBinding = await setActiveBustlyWorkspace({
-    workspaceId: nextWorkspaceId,
-    workspaceName,
-    configPath: resolveElectronConfigPath(),
-    allowCreateConfig: true,
-    userAgent: BUSTLY_MODEL_GATEWAY_USER_AGENT,
-  });
-  syncSentryBustlyScope();
-  await ensureBustlyPresetAgents({
-    workspaceId: nextWorkspaceId,
-    workspaceName,
-  });
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send("bustly-login-refresh");
-  }
-  writeMainLog(
-    `[Workspace] set active completed next=${nextWorkspaceId} agentId=${agentBinding?.agentId ?? "(none)"}`,
-  );
-  return {
-    agentId: agentBinding?.agentId,
-  };
 }
 
 function prependPathEntry(pathValue: string, entry: string): string {
@@ -2318,14 +2054,6 @@ function stopGateway(): Promise<boolean> {
   });
 }
 
-function buildControlUiUrl(params: { port: number; token?: string | null }) {
-  const baseUrl = `http://127.0.0.1:${params.port}`;
-  if (!params.token) {
-    return baseUrl;
-  }
-  return `${baseUrl}?token=${params.token}`;
-}
-
 async function waitForGatewayPort(port: number, timeoutMs: number | null = 20_000): Promise<boolean> {
   const start = Date.now();
   while (timeoutMs === null || Date.now() - start < timeoutMs) {
@@ -2348,50 +2076,6 @@ async function waitForGatewayPort(port: number, timeoutMs: number | null = 20_00
     await delay(250);
   }
   return false;
-}
-
-function openControlUiInMainWindow(): void {
-  const controlUrl = buildControlUiUrl({ port: gatewayPort, token: gatewayToken });
-  writeMainLog(
-    `Opening Control UI: url=${controlUrl} token=${gatewayToken ? "present" : "missing"}`,
-  );
-  
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    return;
-  }
-  const webContents = mainWindow.webContents;
-  const logLoadFailure = (
-    _event: unknown,
-    errorCode: number,
-    errorDescription: string,
-    validatedUrl: string,
-    isMainFrame: boolean,
-  ) => {
-    if (!isMainFrame) {
-      return;
-    }
-    writeMainLog(
-      `Control UI load failed: code=${errorCode} url=${validatedUrl} error=${errorDescription}`,
-    );
-  };
-  webContents.on("did-fail-load", logLoadFailure);
-  webContents.on("did-finish-load", () => {
-    const url = webContents.getURL();
-    writeMainLog(`Control UI load finished: url=${url}`);
-  });
-  webContents.on("did-navigate", (_event, url) => {
-    writeMainLog(`Control UI navigated: url=${url}`);
-  });
-
-  void waitForGatewayPort(gatewayPort).then((ready) => {
-    writeMainLog(`Gateway port ${gatewayPort} ready=${ready}`);
-    if (!ready || !mainWindow || mainWindow.isDestroyed()) {
-      return;
-    }
-    mainWindow.loadURL(controlUrl).catch((error) => {
-      writeMainLog(`Control UI loadURL failed: ${error instanceof Error ? error.message : String(error)}`);
-    });
-  });
 }
 
 function openBustlyLoginInMainWindow(): void {
@@ -2823,57 +2507,133 @@ function ensureWindow(): void {
   app.once("ready", () => createWindow());
 }
 
-async function ensureElectronBootstrapModel(): Promise<void> {
-  const openrouterApiKey = getElectronOpenrouterApiKey();
-  if (!openrouterApiKey) {
-    return;
-  }
-
-  const configPath = resolveElectronConfigPath();
-  if (!existsSync(configPath)) {
-    return;
-  }
-
-  const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
-  const currentModel = config.agents?.defaults?.model;
-  const primaryModel = typeof currentModel === "string" ? currentModel : currentModel?.primary;
-
-  await setOpenrouterApiKey(openrouterApiKey, resolveOpenClawAgentDir());
-  let nextConfig = applyOpenrouterProviderConfig(config);
-  nextConfig = applyAuthProfileConfig(nextConfig, {
-    profileId: "openrouter:default",
-    provider: "openrouter",
-    mode: "api_key",
-  });
-  if (!primaryModel?.trim() || primaryModel !== ELECTRON_DEFAULT_MODEL) {
-    nextConfig = applyPrimaryModel(nextConfig, ELECTRON_DEFAULT_MODEL);
-  }
-  if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
-    writeFileSync(configPath, JSON.stringify(nextConfig, null, 2));
-    writeMainLog(`[Init] Applied beta bootstrap model ${ELECTRON_DEFAULT_MODEL}`);
-  }
+function setBustlyLoginAttempt(
+  loginTraceId: string,
+  updates: Partial<BustlyLoginAttempt>,
+): BustlyLoginAttempt {
+  const current = bustlyLoginAttempts.get(loginTraceId);
+  const next: BustlyLoginAttempt = {
+    loginTraceId,
+    loginUrl: updates.loginUrl ?? current?.loginUrl ?? "",
+    status: updates.status ?? current?.status ?? "pending",
+    error: updates.error ?? current?.error ?? null,
+    startedAt: updates.startedAt ?? current?.startedAt ?? Date.now(),
+    finishedAt:
+      updates.finishedAt === undefined ? current?.finishedAt ?? null : updates.finishedAt,
+  };
+  bustlyLoginAttempts.set(loginTraceId, next);
+  return next;
 }
 
-async function bootstrapDesktopSession(options?: {
-  forceInit?: boolean;
-  model?: string;
-  openControlUi?: boolean;
-}): Promise<void> {
-  await synchronizeBustlyWorkspaceContext({
-    selectedModelInput: options?.model,
-    forceInit: options?.forceInit === true,
-  });
-  const existingConfig = loadGatewayConfig();
-  if (existingConfig) {
-    gatewayPort = existingConfig.port;
-    gatewayBind = existingConfig.bind;
-    gatewayToken = existingConfig.token ?? null;
+function finishBustlyLoginAttempt(
+  loginTraceId: string,
+  params: { status: Exclude<BustlyLoginAttemptState, "pending">; error?: string | null },
+): BustlyLoginAttempt {
+  if (activeBustlyLoginTraceId === loginTraceId) {
+    activeBustlyLoginTraceId = null;
   }
-  await ensureElectronBootstrapModel();
-  await startGateway();
+  return setBustlyLoginAttempt(loginTraceId, {
+    status: params.status,
+    error: params.error ?? null,
+    finishedAt: Date.now(),
+  });
+}
 
-  if (options?.openControlUi === true) {
-    openControlUiInMainWindow();
+function resolveBustlyFilteredSkills(skills: string[] | undefined): string[] {
+  return (skills ?? []).filter((skill) =>
+    ![
+      "search-data",
+      "bustly-search-data",
+      "bustly_search_data",
+      "shopify-api",
+      "shopify_api",
+    ].includes(skill),
+  );
+}
+
+function resolveBustlyUserAvatarUrl(apiResponse: Awaited<ReturnType<typeof exchangeToken>>): string | undefined {
+  return (
+    apiResponse.data.extras?.supabase_session?.user?.user_metadata?.avatar_url?.trim()
+    || apiResponse.data.extras?.supabase_session?.user?.user_metadata?.picture?.trim()
+    || undefined
+  );
+}
+
+async function waitForBustlyDesktopAuthCode(
+  loginTraceId: string,
+  timeoutMs = 5 * 60 * 1000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const attempt = bustlyLoginAttempts.get(loginTraceId);
+    if (!attempt) {
+      throw new Error("Login session not found");
+    }
+    if (attempt.status === "canceled") {
+      throw new Error("Login canceled");
+    }
+    if (attempt.status === "error") {
+      throw new Error(attempt.error || "Login failed");
+    }
+    const currentState = BustlyOAuth.readBustlyOAuthState();
+    if (currentState?.loginTraceId !== loginTraceId) {
+      throw new Error("Login state was replaced");
+    }
+    const authCode = BustlyOAuth.consumeBustlyAuthCode();
+    if (authCode) {
+      return authCode;
+    }
+    await delay(250);
+  }
+  throw new Error("Login timed out");
+}
+
+async function runElectronBustlyLogin(loginTraceId: string): Promise<void> {
+  try {
+    const authCode = await waitForBustlyDesktopAuthCode(loginTraceId);
+    const apiResponse = await exchangeToken(authCode);
+    const supabaseSession = apiResponse.data.extras?.supabase_session;
+    const supabaseAccessToken = supabaseSession?.access_token?.trim() ?? "";
+    if (!supabaseAccessToken) {
+      throw new Error("Missing Supabase access token in API response");
+    }
+    const searchDataConfig = apiResponse.data.extras?.["bustly-search-data"];
+    BustlyOAuth.completeBustlyLogin({
+      user: {
+        userId: apiResponse.data.userId,
+        userName: apiResponse.data.userName,
+        userEmail: apiResponse.data.userEmail,
+        userAvatarUrl: resolveBustlyUserAvatarUrl(apiResponse),
+        userAccessToken: supabaseAccessToken,
+        userRefreshToken: supabaseSession?.refresh_token,
+        sessionExpiresIn: supabaseSession?.expires_in,
+        sessionExpiresAt: supabaseSession?.expires_at,
+        sessionTokenType: supabaseSession?.token_type,
+        workspaceId: apiResponse.data.workspaceId,
+        skills: resolveBustlyFilteredSkills(apiResponse.data.skills),
+      },
+      supabase: searchDataConfig
+        ? {
+            url: searchDataConfig.search_DATA_SUPABASE_URL ?? "",
+            anonKey: searchDataConfig.search_DATA_SUPABASE_ANON_KEY ?? "",
+          }
+        : undefined,
+    });
+    syncSentryBustlyScope();
+    finishBustlyLoginAttempt(loginTraceId, { status: "completed" });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("bustly-login-refresh");
+    }
+    writeMainInfo(`[Bustly OAuth] Electron login completed trace=${loginTraceId}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const status = message === "Login canceled" ? "canceled" : "error";
+    finishBustlyLoginAttempt(loginTraceId, { status, error: message });
+    if (status === "error") {
+      writeMainError("[Bustly OAuth] Electron login failed:", error);
+    } else {
+      writeMainInfo(`[Bustly OAuth] Electron login canceled trace=${loginTraceId}`);
+    }
   }
 }
 
@@ -2886,11 +2646,7 @@ function setupIpcHandlers(): void {
     try {
       const result = await initializeOpenClaw(options);
       if (result.success) {
-        initResult = result;
-        gatewayPort = result.gatewayPort;
-        gatewayBind = result.gatewayBind;
-        gatewayToken = result.gatewayToken ?? null;
-        needsOnboardAtLaunch = false;
+        applyInitializationResult(result);
       }
       return result;
     } catch (error) {
@@ -2916,6 +2672,163 @@ function setupIpcHandlers(): void {
     return needsOnboardAtLaunch && !initialized;
   });
 
+  ipcMain.handle("bustly-login", async () => {
+    try {
+      const activeAttempt = activeBustlyLoginTraceId
+        ? bustlyLoginAttempts.get(activeBustlyLoginTraceId)
+        : null;
+      if (activeAttempt?.status === "pending" && activeAttempt.loginUrl) {
+        await shell.openExternal(activeAttempt.loginUrl);
+        return {
+          success: true,
+          loginTraceId: activeAttempt.loginTraceId,
+        };
+      }
+
+      const oauthCallbackPort = await startOAuthCallbackServer();
+      const oauthState = BustlyOAuth.initBustlyOAuthFlow(oauthCallbackPort);
+      const loginTraceId = oauthState.loginTraceId?.trim() ?? "";
+      if (!loginTraceId) {
+        throw new Error("Missing login trace ID");
+      }
+      const redirectUri = `http://127.0.0.1:${oauthCallbackPort}/authorize`;
+      const loginUrl = generateLoginUrl(loginTraceId, redirectUri);
+      if (activeBustlyLoginTraceId && activeBustlyLoginTraceId !== loginTraceId) {
+        finishBustlyLoginAttempt(activeBustlyLoginTraceId, {
+          status: "canceled",
+          error: "Superseded by a newer login attempt",
+        });
+      }
+      activeBustlyLoginTraceId = loginTraceId;
+      setBustlyLoginAttempt(loginTraceId, {
+        loginUrl,
+        status: "pending",
+        error: null,
+        startedAt: Date.now(),
+        finishedAt: null,
+      });
+      void runElectronBustlyLogin(loginTraceId);
+      try {
+        await shell.openExternal(loginUrl);
+      } catch (error) {
+        finishBustlyLoginAttempt(loginTraceId, {
+          status: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        BustlyOAuth.clearBustlyOAuthState();
+        throw error;
+      }
+      return {
+        success: true,
+        loginTraceId,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle("bustly-poll-login", async (_event, loginTraceId?: string) => {
+    const traceId = typeof loginTraceId === "string" ? loginTraceId.trim() : "";
+    if (!traceId) {
+      return { success: false, pending: false, error: "Missing loginTraceId" };
+    }
+    const attempt = bustlyLoginAttempts.get(traceId);
+    if (!attempt) {
+      const loggedIn = await BustlyOAuth.isBustlyLoggedIn();
+      if (loggedIn) {
+        return { success: true, pending: false };
+      }
+      return { success: false, pending: false, error: "Login session not found" };
+    }
+    if (attempt.status === "pending") {
+      return { success: true, pending: true };
+    }
+    if (attempt.status === "completed") {
+      return { success: true, pending: false };
+    }
+    return {
+      success: false,
+      pending: false,
+      error: attempt.error || (attempt.status === "canceled" ? "Login canceled" : "Login failed"),
+    };
+  });
+
+  ipcMain.handle("bustly-cancel-login", async (_event, loginTraceId?: string) => {
+    const traceId = typeof loginTraceId === "string" ? loginTraceId.trim() : "";
+    const targetTraceId = traceId || activeBustlyLoginTraceId || "";
+    if (!targetTraceId) {
+      return { success: true };
+    }
+    const attempt = bustlyLoginAttempts.get(targetTraceId);
+    if (attempt?.status && attempt.status !== "pending") {
+      return { success: true };
+    }
+    if (await BustlyOAuth.isBustlyLoggedIn()) {
+      if (attempt?.status === "pending") {
+        finishBustlyLoginAttempt(targetTraceId, { status: "completed" });
+      }
+      return { success: true };
+    }
+    finishBustlyLoginAttempt(targetTraceId, {
+      status: "canceled",
+      error: "Login canceled",
+    });
+    BustlyOAuth.clearBustlyOAuthState();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("bustly-login-refresh");
+    }
+    return { success: true };
+  });
+
+  ipcMain.handle("bustly-is-logged-in", async () => {
+    try {
+      return {
+        success: true,
+        loggedIn: await BustlyOAuth.isBustlyLoggedIn(),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        loggedIn: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle("bustly-get-user-info", async () => {
+    try {
+      return {
+        success: true,
+        user: await BustlyOAuth.getBustlyUserInfo(),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        user: null,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle("bustly-logout", () => {
+    try {
+      BustlyOAuth.logoutBustly();
+      syncSentryBustlyScope();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("bustly-login-refresh");
+      }
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
   // Start gateway
   ipcMain.handle("gateway-start", async (_event, apiKey?: string) => {
     try {
@@ -2932,12 +2845,7 @@ function setupIpcHandlers(): void {
           workspace: workspaceId ? resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId) : undefined,
         });
         if (result.success) {
-          initResult = result;
-          gatewayPort = result.gatewayPort;
-          gatewayBind = result.gatewayBind;
-          if (result.gatewayToken) {
-            gatewayToken = result.gatewayToken;
-          }
+          applyInitializationResult(result);
         } else {
           return { success: false, error: result.error ?? "Failed to initialize config" };
         }
@@ -3110,6 +3018,26 @@ function setupIpcHandlers(): void {
       if (error) {
         return { success: false, error };
       }
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle("open-external-url", async (_event, rawUrl: string) => {
+    const targetUrl = typeof rawUrl === "string" ? rawUrl.trim() : "";
+    if (!targetUrl) {
+      return { success: false, error: "Expected a non-empty URL." };
+    }
+    try {
+      const parsed = new URL(targetUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return { success: false, error: "Expected an http(s) URL." };
+      }
+      await shell.openExternal(parsed.toString());
       return { success: true };
     } catch (error) {
       return {
@@ -3303,170 +3231,6 @@ function setupIpcHandlers(): void {
     }
   });
 
-  // Bustly OAuth login
-  ipcMain.handle("bustly-login", async () => {
-    const loginAttemptId = bustlyLoginAttemptId + 1;
-    bustlyLoginAttemptId = loginAttemptId;
-    try {
-      writeMainInfo("[Bustly Login] Starting Bustly OAuth login flow");
-      bustlyLoginCancelled = false;
-
-      // Initialize OAuth flow (clears any existing state)
-      const oauthState = BustlyOAuth.initBustlyOAuthFlow();
-      writeMainInfo("[Bustly Login] OAuth state initialized");
-
-      // Start OAuth callback server
-      const oauthPort = await startOAuthCallbackServer();
-      writeMainInfo(`[Bustly Login] OAuth callback server started on port ${oauthPort}`);
-
-      // Generate login URL
-      const redirectUri = `http://127.0.0.1:${oauthPort}/authorize`;
-      const loginUrl = generateLoginUrl(oauthState.loginTraceId!, redirectUri);
-
-      // Open login URL in browser
-      await shell.openExternal(loginUrl);
-
-      // Poll for completion
-      while (true) {
-        await delay(2000);
-
-        if (loginAttemptId !== bustlyLoginAttemptId) {
-          writeMainInfo("[Bustly Login] Login superseded by a newer attempt");
-          return { success: false, canceled: true };
-        }
-
-        if (bustlyLoginCancelled) {
-          writeMainInfo("[Bustly Login] Login canceled by user");
-          stopOAuthCallbackServer();
-          return { success: false, canceled: true };
-        }
-
-        const code = BustlyOAuth.consumeBustlyAuthCode();
-
-        if (code) {
-          // Got the code, now exchange for token
-          const apiResponse = await exchangeToken(code);
-          writeMainInfo(
-            `[Bustly Login] Token exchange response received user=${apiResponse.data.userEmail} workspace=${apiResponse.data.workspaceId} hasSupabaseSession=${Boolean(apiResponse.data.extras?.supabase_session?.access_token)}`,
-          );
-
-          const supabaseSession = apiResponse.data.extras?.supabase_session;
-          if (!supabaseSession?.access_token) {
-            throw new Error("Missing Supabase access token in API response");
-          }
-          if (!supabaseSession?.refresh_token) {
-            throw new Error("Missing Supabase refresh token in API response");
-          }
-
-          // Read optional legacy supabase bootstrap config from API extras.
-          // This is only for filling oauth supabase fields; it must not control skill enabling.
-          const searchDataConfig = apiResponse.data.extras?.["bustly-search-data"];
-          const filteredSkills = (apiResponse.data.skills ?? []).filter((skill) =>
-            ![
-              "search-data",
-              "bustly-search-data",
-              "bustly_search_data",
-              "shopify-api",
-              "shopify_api",
-            ].includes(skill),
-          );
-
-          // Complete login - store user info plus Supabase session in bustlyOauth.json
-          BustlyOAuth.completeBustlyLogin({
-            user: {
-              userId: apiResponse.data.userId,
-              userName: apiResponse.data.userName,
-              userEmail: apiResponse.data.userEmail,
-              userAvatarUrl:
-                supabaseSession.user?.user_metadata?.avatar_url?.trim()
-                || supabaseSession.user?.user_metadata?.picture?.trim()
-                || undefined,
-              userAccessToken: supabaseSession.access_token,
-              userRefreshToken: supabaseSession.refresh_token,
-              sessionExpiresIn: supabaseSession.expires_in,
-              sessionExpiresAt: supabaseSession.expires_at,
-              sessionTokenType: supabaseSession.token_type,
-              workspaceId: apiResponse.data.workspaceId,
-              skills: filteredSkills,
-            },
-            supabase: searchDataConfig ? {
-              url: searchDataConfig.search_DATA_SUPABASE_URL ?? "",
-              anonKey: searchDataConfig.search_DATA_SUPABASE_ANON_KEY ?? "",
-            } : undefined,
-          });
-          syncSentryBustlyScope();
-
-          // Stop OAuth callback server
-          stopOAuthCallbackServer();
-
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send("bustly-login-refresh");
-          }
-          // Keep configured workspace header/token source aligned with latest login state.
-          try {
-            syncBustlyConfigFile(resolveElectronConfigPath());
-          } catch (syncError) {
-            writeMainWarn("[Bustly Login] Failed to sync bustly provider config:", syncError);
-          }
-
-          writeMainInfo("[Bustly Login] Login successful");
-          void (async () => {
-            try {
-              writeMainInfo("[Bustly Login] Bootstrapping local desktop session");
-              await bootstrapDesktopSession();
-            } catch (bootstrapError) {
-              writeMainError("[Bustly Login] Bootstrap error:", bootstrapError);
-            } finally {
-              if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send("bustly-login-refresh");
-              }
-            }
-          })();
-
-          return { success: true };
-        }
-
-      }
-    } catch (error) {
-      writeMainError("[Bustly Login] Error:", error);
-      // Stop OAuth callback server on error
-      stopOAuthCallbackServer();
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    } finally {
-      bustlyLoginCancelled = false;
-    }
-  });
-
-  ipcMain.handle("bustly-cancel-login", async () => {
-    bustlyLoginCancelled = true;
-    cancelOAuthFlow();
-    return { success: true };
-  });
-
-  // Bustly OAuth logout
-  ipcMain.handle("bustly-logout", async () => {
-    try {
-      writeMainInfo("[Bustly Logout] Logging out");
-      BustlyOAuth.logoutBustly();
-      syncSentryBustlyScope();
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("bustly-login-refresh");
-      }
-      writeMainInfo("[Bustly Logout] Logged out successfully");
-
-      return { success: true };
-    } catch (error) {
-      writeMainError("[Bustly Logout] Error:", error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  });
-
   ipcMain.handle("bustly-open-settings", async () => {
     try {
       const url = buildBustlyAdminUrl({ setting_modal: "profile" });
@@ -3474,22 +3238,6 @@ function setupIpcHandlers(): void {
       return { success: true };
     } catch (error) {
       writeMainError("[Bustly Settings] Error:", error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  });
-
-  ipcMain.handle("bustly-report-issue", async () => {
-    try {
-      const archivePath = await createBustlyIssueReportArchive();
-      return {
-        success: true,
-        archivePath,
-      };
-    } catch (error) {
-      writeMainError("[Bustly Report Issue] Error:", error);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -3711,14 +3459,6 @@ void app.whenReady().then(async () => {
     writeMainLog(`[Init] bustlyOauth.json missing; keeping stateDir=${stateDir}`);
   } else {
     writeMainLog(`[Init] bustlyOauth.json found at ${bustlyOauthPath}`);
-    try {
-      syncBustlyConfigFile(resolveElectronConfigPath());
-      writeMainLog("[Init] Synced openclaw.json to bustly-only provider config");
-    } catch (error) {
-      writeMainLog(
-        `[Init] Failed to sync bustly provider config: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
   }
 
   setupIpcHandlers();
@@ -3737,38 +3477,32 @@ void app.whenReady().then(async () => {
   writeMainLog(`fullyInitialized=${fullyInitialized} bustlyLoggedIn=${bustlyLoggedIn}`);
   const needsInit = !fullyInitialized;
   needsOnboardAtLaunch = needsInit && !bustlyLoggedIn;
+  let shouldAutoStartGateway = !needsInit;
 
   ensureWindow();
 
   if (needsInit) {
     if (bustlyLoggedIn) {
-      writeMainLog("Bustly session found; bootstrapping desktop session.");
+      writeMainLog("Bustly session found; initializing desktop config before starting gateway.");
       try {
-        await bootstrapDesktopSession();
-        writeMainLog("Desktop session bootstrap complete");
+        const workspaceId = resolveBustlyWorkspaceIdFromOAuthState();
+        const result = await initializeOpenClaw({
+          workspace: workspaceId ? resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId) : undefined,
+        });
+        if (!result.success) {
+          throw new Error(result.error ?? "Failed to initialize OpenClaw");
+        }
+        applyInitializationResult(result);
+        shouldAutoStartGateway = true;
+        writeMainLog("Desktop config initialization complete");
       } catch (error) {
-        writeMainError("[Init] Failed to bootstrap desktop session:", error);
+        writeMainError("[Init] Failed to initialize desktop config for Bustly session:", error);
       }
     } else {
       writeMainLog("Skipping auto-initialization; waiting for login.");
     }
   } else {
     writeMainLog("Configuration already exists and is valid");
-    if (bustlyLoggedIn) {
-      const workspaceId = resolveBustlyWorkspaceIdFromOAuthState();
-      if (workspaceId && await hasMissingBustlyWorkspaceSetup(workspaceId)) {
-        try {
-          await synchronizeBustlyWorkspaceContext();
-          writeMainLog("Synchronized Bustly workspace context for missing main session or preset agents");
-        } catch (error) {
-          writeMainLog(
-            `Bustly workspace sync failed while restoring main session or preset agents: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      } else {
-        writeMainLog("Skipped Bustly workspace sync; main session and preset agents already exist");
-      }
-    }
     // Load existing config to get port and token
     const existingConfig = loadGatewayConfig();
     if (existingConfig) {
@@ -3780,7 +3514,7 @@ void app.whenReady().then(async () => {
     }
   }
 
-  if (!needsInit) {
+  if (shouldAutoStartGateway) {
     // Auto-start gateway
     writeMainLog("Gateway auto-starting");
     try {

@@ -7,6 +7,7 @@ import {
   createBustlyWorkspaceAgent,
   createBustlyWorkspaceAgentSession,
   deleteBustlyWorkspaceAgent,
+  ensureBustlyWorkspacePresetAgents,
   listBustlyWorkspaceAgentSessions,
   listBustlyWorkspaceAgents,
   updateBustlyWorkspaceAgent,
@@ -201,5 +202,41 @@ describe("workspace-agents", () => {
     );
     expect(existsSync(workspaceDir)).toBe(false);
     expect(existsSync(agentStateDir)).toBe(false);
+  });
+
+  it("preserves the full workspace UUID when creating missing preset agents", async () => {
+    const fullWorkspaceId = "412d0ede-8926-4f70-a611-b3b466596399";
+    const normalizedWorkspaceId = "412d0ede";
+    const seedConfig: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: `bustly-${normalizedWorkspaceId}-overview`,
+            name: "Overview",
+            workspace: path.join(stateDir, "workspaces", normalizedWorkspaceId, "agents", "overview"),
+            default: true,
+          },
+        ],
+      },
+    };
+    writeFileSync(configPath, JSON.stringify(seedConfig, null, 2));
+
+    await ensureBustlyWorkspacePresetAgents({
+      workspaceId: fullWorkspaceId,
+      workspaceName: "Workspace One",
+      presets: [
+        { slug: "overview", label: "Overview", isMain: true },
+        { slug: "marketing", label: "Marketing", icon: "TrendUp" },
+      ],
+      configPath,
+      env: process.env,
+    });
+
+    expect(bootstrapMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: fullWorkspaceId,
+        workspaceDir: path.join(stateDir, "workspaces", normalizedWorkspaceId, "agents", "marketing"),
+      }),
+    );
   });
 });

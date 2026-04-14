@@ -15,6 +15,13 @@ import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import OnboardContainer from "./OnboardContainer";
 import bustlyWordmark from "../../assets/imgs/bustly_wordmark.png";
+import {
+  cancelBustlyLogin,
+  initializeBustlyGatewayIfNeeded,
+  logoutBustly,
+  pollBustlyLogin,
+  startBustlyLogin,
+} from "../../lib/bustly-gateway";
 import { useAppState } from "../../providers/AppStateProvider";
 
 type BustlyLoginPageProps = {
@@ -85,11 +92,13 @@ export default function BustlyLoginPage({
   showSignOut = true,
   onLoggedOut,
 }: BustlyLoginPageProps) {
-  const { loggedIn, checking, gatewayPhase } = useAppState();
+  const { loggedIn, checking, gatewayPhase, initialized, refreshAppState } = useAppState();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const autoContinueFiredRef = useRef(false);
+  const pendingLoginTraceIdRef = useRef<string | null>(null);
+  const loginRunIdRef = useRef(0);
 
   useEffect(() => {
     if (!autoContinue || !loggedIn || checking) {
@@ -103,51 +112,78 @@ export default function BustlyLoginPage({
   }, [autoContinue, checking, loggedIn, onContinue]);
 
   useEffect(() => {
+    if (!loggedIn) {
+      return;
+    }
+    pendingLoginTraceIdRef.current = null;
+  }, [loggedIn]);
+
+  useEffect(() => {
     const interval = window.setInterval(() => {
       setActiveIndex((prev) => (prev + 1) % HOME_CAROUSEL_ITEMS.length);
     }, 2500);
     return () => window.clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    return () => {
+      loginRunIdRef.current += 1;
+      const pendingLoginTraceId = pendingLoginTraceIdRef.current;
+      pendingLoginTraceIdRef.current = null;
+      if (pendingLoginTraceId) {
+        void cancelBustlyLogin(pendingLoginTraceId).catch(() => {});
+      }
+    };
+  }, []);
+
   const handleBustlyLogin = useCallback(async () => {
-    if (!window.electronAPI) {return;}
     setLoading(true);
     setError(null);
+    const runId = loginRunIdRef.current + 1;
+    loginRunIdRef.current = runId;
 
     try {
-      const result = await window.electronAPI.bustlyLogin();
-      if (result.success) {
-        onContinue();
-      } else if (result.canceled) {
-        setError(null);
-      } else {
-        setError(result.error || "Login failed");
+      if (!initialized) {
+        await initializeBustlyGatewayIfNeeded();
+        await refreshAppState();
+      }
+
+      const { loginTraceId } = await startBustlyLogin();
+      pendingLoginTraceIdRef.current = loginTraceId;
+
+      while (loginRunIdRef.current === runId) {
+        const result = await pollBustlyLogin(loginTraceId);
+        if (!result.pending) {
+          pendingLoginTraceIdRef.current = null;
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 1_000));
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (loginRunIdRef.current === runId) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setLoading(false);
+      if (loginRunIdRef.current === runId) {
+        setLoading(false);
+      }
     }
-  }, [onContinue]);
+  }, [initialized, refreshAppState]);
 
   const handleBustlyLogout = useCallback(async () => {
-    if (!window.electronAPI) {return;}
     setLoading(true);
     setError(null);
 
     try {
-      const result = await window.electronAPI.bustlyLogout();
-      if (result.success) {
-        onLoggedOut?.();
-      } else {
-        setError(result.error || "Logout failed");
-      }
+      await logoutBustly();
+      await refreshAppState();
+      onLoggedOut?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [onLoggedOut]);
+  }, [onLoggedOut, refreshAppState]);
 
   return (
     <OnboardContainer className="h-full w-full max-w-none px-0 py-0">
@@ -179,7 +215,7 @@ export default function BustlyLoginPage({
             {!loggedIn || showContinueWhenLoggedIn ? (
               <button
                 onClick={loggedIn ? onContinue : handleBustlyLogin}
-                disabled={checking}
+                disabled={checking || loading}
                 className="group flex w-full items-center justify-center gap-2 rounded-xl bg-[#1A162F] px-4 py-3.5 text-base font-bold text-white shadow-lg transition-all hover:-translate-y-0.5 hover:bg-[#1A162F]/90 hover:shadow-xl disabled:opacity-80"
               >
                 {loggedIn ? (

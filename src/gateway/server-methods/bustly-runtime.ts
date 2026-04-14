@@ -1,6 +1,7 @@
 import { readBustlyOAuthState } from "../../bustly-oauth.js";
 import {
   applyBustlyRuntimeManifest,
+  bootstrapBustlyRuntime,
   getBustlyRuntimeHealthSnapshot,
   type BustlyRuntimePresetAgent,
 } from "../../bustly/runtime-manifest.js";
@@ -89,6 +90,54 @@ export const bustlyRuntimeHandlers: GatewayRequestHandlers = {
           agentId: applied.agentId,
           workspaceDir: applied.workspaceDir,
           presetAgentsApplied: applied.presetAgentsApplied,
+        },
+        undefined,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const errorCode = message.includes("workspaceId") ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE;
+      respond(
+        false,
+        undefined,
+        errorShape(errorCode, message),
+      );
+    }
+  },
+  "bustly.runtime.bootstrap": async ({ params, respond }) => {
+    try {
+      const workspaceId = resolveWorkspaceIdParam(params);
+      const workspaceName =
+        typeof params.workspaceName === "string" ? params.workspaceName.trim() : undefined;
+      const agentName = typeof params.agentName === "string" ? params.agentName.trim() : undefined;
+      const selectedModelInput =
+        typeof params.selectedModel === "string"
+          ? params.selectedModel.trim()
+          : typeof params.model === "string"
+            ? params.model.trim()
+            : undefined;
+      const userAgent = typeof params.userAgent === "string" ? params.userAgent.trim() : undefined;
+      const baseUrl = typeof params.baseUrl === "string" ? params.baseUrl.trim() : undefined;
+      const presetAgents = Array.isArray(params.presetAgents)
+        ? normalizePresetAgentsInput(params.presetAgents)
+        : undefined;
+
+      const bootstrapped = await bootstrapBustlyRuntime({
+        workspaceId: workspaceId || undefined,
+        workspaceName,
+        agentName,
+        selectedModelInput,
+        userAgent,
+        baseUrl,
+        presetAgents,
+      });
+
+      respond(
+        true,
+        {
+          workspaceId: bootstrapped.workspaceId,
+          agentId: bootstrapped.agentId,
+          workspaceDir: bootstrapped.workspaceDir,
+          presetAgentsApplied: bootstrapped.presetAgentsApplied,
         },
         undefined,
       );

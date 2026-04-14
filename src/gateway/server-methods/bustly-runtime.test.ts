@@ -6,11 +6,13 @@ const {
   readBustlyOAuthStateMock,
   getBustlyRuntimeHealthSnapshotMock,
   applyBustlyRuntimeManifestMock,
+  bootstrapBustlyRuntimeMock,
   createBustlyIssueReportArchiveMock,
 } = vi.hoisted(() => ({
   readBustlyOAuthStateMock: vi.fn(),
   getBustlyRuntimeHealthSnapshotMock: vi.fn(),
   applyBustlyRuntimeManifestMock: vi.fn(),
+  bootstrapBustlyRuntimeMock: vi.fn(),
   createBustlyIssueReportArchiveMock: vi.fn(),
 }));
 
@@ -21,6 +23,7 @@ vi.mock("../../bustly-oauth.js", () => ({
 vi.mock("../../bustly/runtime-manifest.js", () => ({
   getBustlyRuntimeHealthSnapshot: () => getBustlyRuntimeHealthSnapshotMock(),
   applyBustlyRuntimeManifest: (params: unknown) => applyBustlyRuntimeManifestMock(params),
+  bootstrapBustlyRuntime: (params: unknown) => bootstrapBustlyRuntimeMock(params),
 }));
 
 vi.mock("../../bustly/issue-report.js", () => ({
@@ -81,6 +84,7 @@ describe("gateway bustly.runtime methods", () => {
     readBustlyOAuthStateMock.mockReset();
     getBustlyRuntimeHealthSnapshotMock.mockReset();
     applyBustlyRuntimeManifestMock.mockReset();
+    bootstrapBustlyRuntimeMock.mockReset();
     createBustlyIssueReportArchiveMock.mockReset();
   });
 
@@ -161,6 +165,46 @@ describe("gateway bustly.runtime methods", () => {
         agentId: "bustly-workspace-from-oauth-overview",
         workspaceDir: "/tmp/workspaces/workspace-from-oauth/agents/overview",
         presetAgentsApplied: 1,
+      },
+      error: undefined,
+    });
+  });
+
+  it("bootstraps runtime with shared remote presets when preset agents are omitted", async () => {
+    readBustlyOAuthStateMock.mockReturnValue({
+      user: {
+        workspaceId: "workspace-from-oauth",
+      },
+    });
+    bootstrapBustlyRuntimeMock.mockResolvedValue({
+      workspaceId: "workspace-from-oauth",
+      agentId: "bustly-workspace-from-oauth-overview",
+      workspaceDir: "/tmp/workspaces/workspace-from-oauth/agents/overview",
+      presetAgentsApplied: 2,
+    });
+    const respond = await invoke(
+      bustlyRuntimeHandlers,
+      "bustly.runtime.bootstrap",
+      {
+        model: "bustly/chat.ultra",
+      },
+    );
+    expect(bootstrapBustlyRuntimeMock).toHaveBeenCalledWith({
+      workspaceId: "workspace-from-oauth",
+      workspaceName: undefined,
+      agentName: undefined,
+      selectedModelInput: "bustly/chat.ultra",
+      userAgent: undefined,
+      baseUrl: undefined,
+      presetAgents: undefined,
+    });
+    expect(respond).toEqual({
+      ok: true,
+      result: {
+        workspaceId: "workspace-from-oauth",
+        agentId: "bustly-workspace-from-oauth-overview",
+        workspaceDir: "/tmp/workspaces/workspace-from-oauth/agents/overview",
+        presetAgentsApplied: 2,
       },
       error: undefined,
     });

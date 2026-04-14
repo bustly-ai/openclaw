@@ -19,7 +19,6 @@ function AppShell() {
     gatewayMessage,
     gatewayCanRestoreLastGoodConfig,
     gatewayReady,
-    refreshAppState,
     restoreGatewayLastGoodConfig,
   } = useAppState();
   const { showGlobalLoading, hideGlobalLoading } = useGlobalLoader();
@@ -41,9 +40,11 @@ function AppShell() {
     !isBustlyLoginWindow &&
     loggedIn &&
     !hasCompletedInitialGatewayBootRef.current &&
-    gatewayPhase !== "error";
+    (gatewayPhase === "starting" || gatewayPhase === "checking");
   const shouldShowGatewayRecovery =
     Boolean(error?.trim()) && gatewayCanRestoreLastGoodConfig;
+  const shouldShowAppLoading =
+    ((!loggedIn && checking) || showGatewayLoading || Boolean(error?.trim()));
   const appLoadingMessage = shouldShowGatewayRecovery
     ? "Bustly configuration is corrupted. Restore from backup?"
     : (error?.trim() || gatewayMessage?.trim() || "Loading...");
@@ -61,7 +62,7 @@ function AppShell() {
       : undefined;
 
   useEffect(() => {
-    if (checking || showGatewayLoading || Boolean(error?.trim())) {
+    if (shouldShowAppLoading) {
       showGlobalLoading(appLoadingMessage, "app-shell", appLoadingTone, 0, appLoadingActions);
       return;
     }
@@ -73,23 +74,23 @@ function AppShell() {
     checking,
     error,
     hideGlobalLoading,
+    loggedIn,
+    shouldShowAppLoading,
     showGatewayLoading,
     showGlobalLoading,
   ]);
 
   const renderLoginRoute = () => {
-    if (checking) {
-      return null;
-    }
     if (loggedIn) {
       return <Navigate to="/chat" replace />;
     }
+    if (checking) {
+      return null;
+    }
     return (
       <BustlyLoginPage
-        onContinue={() => {
-          void refreshAppState();
-        }}
-        autoContinue
+        onContinue={() => {}}
+        autoContinue={false}
         showSignOut={false}
         showContinueWhenLoggedIn={false}
       />
@@ -97,23 +98,26 @@ function AppShell() {
   };
 
   const renderProtectedRoute = (element: ReactElement) => {
+    if (loggedIn) {
+      return element;
+    }
     if (checking) {
       return null;
     }
     if (!loggedIn) {
       return <Navigate to="/bustly-login" replace />;
     }
-    return element;
+    return null;
   };
 
   const renderDefault = () => {
+    if (loggedIn) {
+      return <Navigate to="/chat" replace />;
+    }
     if (checking) {
       return null;
     }
-    if (!loggedIn) {
-      return <Navigate to="/bustly-login" replace />;
-    }
-    return <Navigate to="/chat" replace />;
+    return <Navigate to="/bustly-login" replace />;
   };
 
   const isClientRoute = pathname === "/chat" || pathname === "/skill";

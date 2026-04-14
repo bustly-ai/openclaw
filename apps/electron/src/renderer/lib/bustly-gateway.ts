@@ -16,6 +16,11 @@ export type BustlySessionLabelUpdatedPayload = {
   updatedAt: number | null;
 };
 
+type BustlyLoginStartResult = {
+  loginUrl: string;
+  loginTraceId: string;
+};
+
 let sharedEventClient: GatewayBrowserClient | null = null;
 let sharedEventClientStarting = false;
 const sharedEventListeners = new Set<GatewayEventListener>();
@@ -34,6 +39,17 @@ async function ensureGatewayConnectConfig(): Promise<GatewayConnectConfig> {
     throw new Error("Gateway token missing in config; cannot connect.");
   }
   return connection;
+}
+
+export async function initializeBustlyGatewayIfNeeded(): Promise<void> {
+  const gatewayStatus = await window.electronAPI.gatewayStatus();
+  if (gatewayStatus.initialized) {
+    return;
+  }
+  const result = await window.electronAPI.openclawInit();
+  if (!result.success) {
+    throw new Error(result.error ?? "Failed to initialize OpenClaw.");
+  }
 }
 
 export async function requestBustlyGatewayMethod<T>(params: GatewayMethodRequest): Promise<T> {
@@ -170,18 +186,44 @@ export async function getBustlySupabaseConfig(): Promise<BustlySupabaseConfig | 
 }
 
 export async function isBustlyLoggedIn(): Promise<boolean> {
-  const result = await requestBustlyGatewayMethod<{ loggedIn?: boolean }>({
-    method: "oauth.is-logged-in",
-    scope: "bustly-oauth",
-  });
+  const result = await window.electronAPI.bustlyIsLoggedIn();
+  if (!result.success) {
+    throw new Error(result.error || "Failed to check Bustly login status.");
+  }
   return result.loggedIn === true;
 }
 
+export async function startBustlyLogin(): Promise<BustlyLoginStartResult> {
+  const result = await window.electronAPI.bustlyLogin();
+  if (!result.success || !result.loginTraceId) {
+    throw new Error(result.error || "Failed to start Bustly login.");
+  }
+  return {
+    loginTraceId: result.loginTraceId,
+    loginUrl: "",
+  };
+}
+
+export async function pollBustlyLogin(loginTraceId: string): Promise<{ pending: boolean }> {
+  const result = await window.electronAPI.bustlyPollLogin(loginTraceId);
+  if (!result.success) {
+    throw new Error(result.error || "Failed to poll Bustly login.");
+  }
+  return { pending: result.pending };
+}
+
+export async function cancelBustlyLogin(loginTraceId?: string): Promise<void> {
+  const result = await window.electronAPI.bustlyCancelLogin(loginTraceId);
+  if (!result.success) {
+    throw new Error(result.error || "Failed to cancel Bustly login.");
+  }
+}
+
 export async function getBustlyUserInfo(): Promise<BustlyUserInfo | null> {
-  const result = await requestBustlyGatewayMethod<{ user?: BustlyUserInfo | null }>({
-    method: "oauth.get-user-info",
-    scope: "bustly-oauth",
-  });
+  const result = await window.electronAPI.bustlyGetUserInfo();
+  if (!result.success) {
+    throw new Error(result.error || "Failed to load Bustly user info.");
+  }
   return result.user ?? null;
 }
 
@@ -193,6 +235,24 @@ export async function getActiveBustlyWorkspace(): Promise<{
   return await requestBustlyGatewayMethod({
     method: "bustly.workspace.get-active",
     scope: "bustly-workspace",
+  });
+}
+
+export async function bootstrapBustlyRuntime(params?: {
+  workspaceId?: string;
+  workspaceName?: string;
+  agentName?: string;
+  selectedModel?: string;
+}): Promise<{
+  workspaceId: string;
+  agentId: string;
+  workspaceDir: string;
+  presetAgentsApplied: number;
+}> {
+  return await requestBustlyGatewayMethod({
+    method: "bustly.runtime.bootstrap",
+    payload: params ?? {},
+    scope: "bustly-runtime",
   });
 }
 
@@ -326,5 +386,23 @@ export async function installGlobalSkillCatalogItem(skillKey: string): Promise<v
     method: "skills.catalog.install",
     payload: { skillKey },
     scope: `skills-catalog-install-${skillKey}`,
+  });
+}
+
+export async function logoutBustly(): Promise<void> {
+  const result = await window.electronAPI.bustlyLogout();
+  if (!result.success) {
+    throw new Error(result.error || "Failed to sign out from Bustly.");
+  }
+}
+
+export async function reportBustlyIssue(): Promise<{
+  archivePath: string;
+  stateDir: string;
+  outputDir: string;
+}> {
+  return await requestBustlyGatewayMethod({
+    method: "bustly.runtime.report-issue",
+    scope: "bustly-runtime",
   });
 }

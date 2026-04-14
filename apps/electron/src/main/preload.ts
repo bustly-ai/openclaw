@@ -69,6 +69,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   resolveChatImagePreview: (path: string) => ipcRenderer.invoke("resolve-chat-image-preview", path),
   resolveChatMediaPreview: (path: string) => ipcRenderer.invoke("resolve-chat-media-preview", path),
   openLocalPath: (path: string) => ipcRenderer.invoke("open-local-path", path),
+  openExternalUrl: (url: string) => ipcRenderer.invoke("open-external-url", url),
 
   // App info
   getAppInfo: () => ipcRenderer.invoke("get-app-info"),
@@ -80,11 +81,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Onboarding
   bustlyLogin: () => ipcRenderer.invoke("bustly-login"),
-  bustlyCancelLogin: () => ipcRenderer.invoke("bustly-cancel-login"),
+  bustlyPollLogin: (loginTraceId: string) => ipcRenderer.invoke("bustly-poll-login", loginTraceId),
+  bustlyCancelLogin: (loginTraceId?: string) => ipcRenderer.invoke("bustly-cancel-login", loginTraceId),
+  bustlyIsLoggedIn: () => ipcRenderer.invoke("bustly-is-logged-in"),
+  bustlyGetUserInfo: () => ipcRenderer.invoke("bustly-get-user-info"),
   bustlyLogout: () => ipcRenderer.invoke("bustly-logout"),
   bustlyOpenLogin: () => ipcRenderer.invoke("bustly-open-login"),
   bustlyOpenSettings: () => ipcRenderer.invoke("bustly-open-settings"),
-  bustlyReportIssue: () => ipcRenderer.invoke("bustly-report-issue"),
   bustlyOpenWorkspaceSettings: (workspaceId: string) =>
     ipcRenderer.invoke("bustly-open-workspace-settings", workspaceId),
   bustlyOpenWorkspaceInvite: (workspaceId: string) =>
@@ -128,15 +131,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("window-native-fullscreen", listener);
     return () => ipcRenderer.removeListener("window-native-fullscreen", listener);
   },
-  onBustlyLoginRefresh: (callback: () => void) => {
-    const listener = () => callback();
-    ipcRenderer.on("bustly-login-refresh", listener);
-    return () => ipcRenderer.removeListener("bustly-login-refresh", listener);
-  },
   onDeepLink: (callback: (payload: { url: string; route: string | null; workspaceId: string | null }) => void) => {
     const listener = (_event: unknown, payload: { url: string; route: string | null; workspaceId: string | null }) =>
       callback(payload);
     ipcRenderer.on("deep-link", listener);
     return () => ipcRenderer.removeListener("deep-link", listener);
+  },
+  onBustlyLoginRefresh: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on("bustly-login-refresh", listener);
+    return () => ipcRenderer.removeListener("bustly-login-refresh", listener);
   },
 });

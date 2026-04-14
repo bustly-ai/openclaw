@@ -1,7 +1,7 @@
 import {
   resolveActiveBustlyWorkspaceBinding,
-  setActiveBustlyWorkspace,
 } from "../../bustly/workspace-runtime.js";
+import { bootstrapBustlyRuntime } from "../../bustly/runtime-manifest.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -53,7 +53,7 @@ export const bustlyWorkspaceHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const binding = await setActiveBustlyWorkspace({
+      const binding = await bootstrapBustlyRuntime({
         workspaceId,
         workspaceName,
         allowCreateConfig: true,

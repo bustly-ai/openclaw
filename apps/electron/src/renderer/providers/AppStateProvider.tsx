@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { isBustlyLoggedIn } from "../lib/bustly-gateway";
+import { bootstrapBustlyRuntime, isBustlyLoggedIn } from "../lib/bustly-gateway";
 import { GatewayBrowserClient } from "../lib/gateway-client";
 import { createGatewayInstanceId } from "../lib/gateway-instance-id";
 
@@ -83,6 +83,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const ensurePromiseRef = useRef<Promise<boolean> | null>(null);
   const ensureRunIdRef = useRef(0);
+  const previousLoggedInRef = useRef(false);
+  const runtimeBootstrapKeyRef = useRef<string | null>(null);
 
   const refreshAppState = useCallback(async () => {
     if (!window.electronAPI) {
@@ -176,11 +178,27 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
                 if (isStale()) {
                   return false;
                 }
+                const runtimeBootstrapKey =
+                  status.running && loggedIn && initialized
+                    ? `${status.pid ?? 0}:logged-in`
+                    : null;
+                if (runtimeBootstrapKey && runtimeBootstrapKeyRef.current !== runtimeBootstrapKey) {
+                  setGatewayPhase("checking");
+                  setGatewayMessage("Preparing workspace...");
+                  await bootstrapBustlyRuntime();
+                  if (isStale()) {
+                    return false;
+                  }
+                  runtimeBootstrapKeyRef.current = runtimeBootstrapKey;
+                }
                 setGatewayPhase("ready");
                 setGatewayMessage(null);
                 return true;
               }
             } catch (err) {
+              if (runtimeBootstrapKeyRef.current && loggedIn && initialized) {
+                runtimeBootstrapKeyRef.current = null;
+              }
               lastError = err instanceof Error ? err.message : String(err);
             }
           } else {
@@ -207,7 +225,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       ensurePromiseRef.current = null;
     });
     return ensurePromiseRef.current;
-  }, []);
+  }, [initialized, loggedIn]);
 
   const restoreGatewayLastGoodConfig = useCallback(async () => {
     if (!window.electronAPI?.gatewayRestoreLastGoodConfig) {
@@ -232,18 +250,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refreshAppState();
-  }, [refreshAppState]);
-
-  useEffect(() => {
-    if (!window.electronAPI?.onBustlyLoginRefresh) {
-      return;
-    }
-    const unsubscribe = window.electronAPI.onBustlyLoginRefresh(() => {
-      void refreshAppState();
-    });
-    return () => {
-      unsubscribe?.();
-    };
   }, [refreshAppState]);
 
   useEffect(() => {
@@ -289,6 +295,34 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [ensureGatewayReady, refreshAppState]);
 
   useEffect(() => {
+    if (!window.electronAPI?.onBustlyLoginRefresh) {
+      return;
+    }
+    return window.electronAPI.onBustlyLoginRefresh(() => {
+      void refreshAppState();
+    });
+  }, [refreshAppState]);
+
+  useEffect(() => {
+    const wasLoggedIn = previousLoggedInRef.current;
+    previousLoggedInRef.current = loggedIn;
+    if (!wasLoggedIn && loggedIn && initialized) {
+      runtimeBootstrapKeyRef.current = null;
+      setGatewayPhase("idle");
+      setGatewayMessage(null);
+    }
+    if (wasLoggedIn && !loggedIn) {
+      runtimeBootstrapKeyRef.current = null;
+    }
+  }, [initialized, loggedIn]);
+
+  useEffect(() => {
+    if (!loggedIn || !initialized) {
+      runtimeBootstrapKeyRef.current = null;
+    }
+  }, [initialized, loggedIn]);
+
+  useEffect(() => {
     if (checking || !loggedIn || !initialized) {
       return;
     }
@@ -310,7 +344,22 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           return;
         }
         setGatewayStatus(status);
-        if (!loggedIn || !initialized) {
+        let nextLoggedIn = loggedIn;
+        if (initialized) {
+          nextLoggedIn = await isBustlyLoggedIn().catch(() => false);
+          if (cancelled) {
+            return;
+          }
+          setLoggedIn(nextLoggedIn);
+          if (!nextLoggedIn) {
+            setGatewayPhase("idle");
+            setGatewayMessage(null);
+          }
+        } else if (loggedIn) {
+          setLoggedIn(false);
+          nextLoggedIn = false;
+        }
+        if (!nextLoggedIn || !initialized) {
           return;
         }
         if (!status.running && gatewayPhase === "ready") {

@@ -677,7 +677,8 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
     const agentId = buildBustlyWorkspaceAgentId(normalizedWorkspaceId, preset.slug);
     if (!workspaceAgentIds.has(agentId)) {
       await createBustlyWorkspaceAgent({
-        workspaceId: normalizedWorkspaceId,
+        // Keep the full workspace UUID for bootstrap/Supabase lookups.
+        workspaceId: params.workspaceId,
         workspaceName: params.workspaceName,
         agentName: preset.slug,
         displayName: preset.label,

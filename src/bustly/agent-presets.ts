@@ -1,6 +1,8 @@
-import { normalizeBustlyAgentName, DEFAULT_BUSTLY_AGENT_NAME } from "../shared/bustly-agent.js";
-import { mainHttpFetch } from "./http-client.js";
-import { writeMainWarn } from "./logger.js";
+import { resolveFetch } from "../infra/fetch.js";
+import {
+  DEFAULT_BUSTLY_AGENT_NAME,
+  normalizeBustlyAgentName,
+} from "./workspace-agent.js";
 
 export type BustlyRemoteUseCase = {
   icon: string;
@@ -23,6 +25,12 @@ export type BustlyRemoteAgentPreset = {
 type BustlyRemoteAgentConfig = {
   version?: number;
   agents?: unknown;
+};
+
+type BustlyAgentPresetLoaderOptions = {
+  env?: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
+  onWarn?: (message: string, extra?: unknown) => void;
 };
 
 let presetsPromise: Promise<BustlyRemoteAgentPreset[]> | null = null;
@@ -159,12 +167,20 @@ function cloneFallbackPresets(): BustlyRemoteAgentPreset[] {
   }));
 }
 
-function logPresetWarning(message: string, extra?: unknown): void {
-  if (extra === undefined) {
-    writeMainWarn(`[Bustly Agent Presets] ${message}`);
+function logPresetWarning(
+  options: BustlyAgentPresetLoaderOptions,
+  message: string,
+  extra?: unknown,
+): void {
+  if (options.onWarn) {
+    options.onWarn(message, extra);
     return;
   }
-  writeMainWarn(`[Bustly Agent Presets] ${message}`, extra);
+  if (extra === undefined) {
+    console.warn(`[Bustly Agent Presets] ${message}`);
+    return;
+  }
+  console.warn(`[Bustly Agent Presets] ${message}`, extra);
 }
 
 function resolveAgentConfigUrl(env: NodeJS.ProcessEnv = process.env): string {
@@ -190,7 +206,9 @@ function validatePresets(raw: BustlyRemoteAgentConfig): BustlyRemoteAgentPreset[
     const slug = normalizeBustlyAgentName(typeof candidate.slug === "string" ? candidate.slug : "");
     const label = typeof candidate.label === "string" ? candidate.label.trim() : "";
     const icon = typeof candidate.icon === "string" ? candidate.icon.trim() : "";
-    const order = typeof candidate.order === "number" && Number.isFinite(candidate.order) ? candidate.order : null;
+    const order = typeof candidate.order === "number" && Number.isFinite(candidate.order)
+      ? candidate.order
+      : null;
     if (!slug || !label || !icon || order == null) {
       continue;
     }
@@ -231,23 +249,34 @@ function validatePresets(raw: BustlyRemoteAgentConfig): BustlyRemoteAgentPreset[
   return presets.toSorted((left, right) => left.order - right.order);
 }
 
+async function fetchRemotePresetConfig(
+  url: string,
+  options: BustlyAgentPresetLoaderOptions,
+): Promise<BustlyRemoteAgentConfig> {
+  const fetcher = resolveFetch(options.fetchImpl);
+  if (!fetcher) {
+    throw new Error("No fetch implementation available for Bustly agent config.");
+  }
+  const response = await fetcher(url, {
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch Bustly agent config: ${response.status} ${response.statusText}`);
+  }
+  return await response.json() as BustlyRemoteAgentConfig;
+}
+
 export async function loadBustlyRemoteAgentPresets(
-  env: NodeJS.ProcessEnv = process.env,
+  options: BustlyAgentPresetLoaderOptions = {},
 ): Promise<BustlyRemoteAgentPreset[]> {
   if (!presetsPromise) {
     presetsPromise = (async () => {
       try {
-        const response = await mainHttpFetch(resolveAgentConfigUrl(env), {
-          label: "Bustly Agent Presets",
-          timeoutMs: 15_000,
-        });
-        if (!response.ok) {
-          throw new Error(`Failed to fetch Bustly agent config: ${response.status} ${response.statusText}`);
-        }
-        const parsed = (await response.json()) as BustlyRemoteAgentConfig;
+        const env = options.env ?? process.env;
+        const parsed = await fetchRemotePresetConfig(resolveAgentConfigUrl(env), options);
         return validatePresets(parsed);
       } catch (error) {
-        logPresetWarning("remote config unavailable; using bundled fallback presets", {
+        logPresetWarning(options, "remote config unavailable; using bundled fallback presets", {
           error: error instanceof Error ? error.message : String(error),
         });
         return cloneFallbackPresets();
@@ -258,16 +287,16 @@ export async function loadBustlyRemoteAgentPresets(
 }
 
 export async function loadEnabledBustlyRemoteAgentPresets(
-  env: NodeJS.ProcessEnv = process.env,
+  options: BustlyAgentPresetLoaderOptions = {},
 ): Promise<BustlyRemoteAgentPreset[]> {
-  const presets = await loadBustlyRemoteAgentPresets(env);
+  const presets = await loadBustlyRemoteAgentPresets(options);
   return presets.filter((entry) => entry.enabled !== false);
 }
 
 export async function loadBustlyMainAgentPreset(
-  env: NodeJS.ProcessEnv = process.env,
+  options: BustlyAgentPresetLoaderOptions = {},
 ): Promise<BustlyRemoteAgentPreset> {
-  const presets = await loadEnabledBustlyRemoteAgentPresets(env);
+  const presets = await loadEnabledBustlyRemoteAgentPresets(options);
   return (
     presets.find((entry) => entry.isMain) ??
     presets.find((entry) => entry.slug === DEFAULT_BUSTLY_AGENT_NAME) ??
