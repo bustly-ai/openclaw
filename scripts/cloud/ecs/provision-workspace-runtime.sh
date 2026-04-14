@@ -33,6 +33,10 @@ Usage:
     [--bustly-jwt-secret <secret>] \
     [--bustly-oauth-state-b64 <base64_json>] \
     [--bustly-user-access-token <token>] \
+    [--bustly-refresh-token <token>] \
+    [--bustly-legacy-supabase-refresh-token <token>] \
+    [--bustly-supabase-access-token-expires-at <epoch_seconds>] \
+    [--bustly-session-id <session_id>] \
     [--bustly-login-trace-id <trace_id>]
 USAGE
 }
@@ -101,6 +105,10 @@ BUSTLY_USER_EMAIL="${BUSTLY_USER_EMAIL:-}"
 BUSTLY_JWT_SECRET="${BUSTLY_JWT_SECRET:-}"
 BUSTLY_OAUTH_STATE_B64=""
 BUSTLY_USER_ACCESS_TOKEN=""
+BUSTLY_REFRESH_TOKEN="${BUSTLY_REFRESH_TOKEN:-}"
+BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN="${BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN:-}"
+BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT="${BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT:-}"
+BUSTLY_SESSION_ID="${BUSTLY_SESSION_ID:-}"
 BUSTLY_LOGIN_TRACE_ID=""
 ROUTING_MODE="path"
 RUNTIME_DOMAIN_SUFFIX="${RUNTIME_DOMAIN_SUFFIX:-}"
@@ -219,6 +227,22 @@ while [[ $# -gt 0 ]]; do
       BUSTLY_USER_ACCESS_TOKEN="${2:-}"
       shift 2
       ;;
+    --bustly-refresh-token)
+      BUSTLY_REFRESH_TOKEN="${2:-}"
+      shift 2
+      ;;
+    --bustly-legacy-supabase-refresh-token)
+      BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN="${2:-}"
+      shift 2
+      ;;
+    --bustly-supabase-access-token-expires-at)
+      BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT="${2:-}"
+      shift 2
+      ;;
+    --bustly-session-id)
+      BUSTLY_SESSION_ID="${2:-}"
+      shift 2
+      ;;
     --bustly-login-trace-id)
       BUSTLY_LOGIN_TRACE_ID="${2:-}"
       shift 2
@@ -326,12 +350,31 @@ fi
 
 if [[ -z "$BUSTLY_OAUTH_STATE_B64" && -n "$BUSTLY_USER_ACCESS_TOKEN" && -n "$BUSTLY_SUPABASE_URL" && -n "$BUSTLY_SUPABASE_ANON_KEY" ]]; then
   BUSTLY_OAUTH_STATE_B64="$(
-    python3 - "$WORKSPACE_ID" "$BUSTLY_USER_ACCESS_TOKEN" "$BUSTLY_SUPABASE_URL" "$BUSTLY_SUPABASE_ANON_KEY" "$BUSTLY_USER_ID" "$BUSTLY_USER_NAME" "$BUSTLY_USER_EMAIL" <<'PY'
+    python3 - "$WORKSPACE_ID" "$BUSTLY_USER_ACCESS_TOKEN" "$BUSTLY_SUPABASE_URL" "$BUSTLY_SUPABASE_ANON_KEY" "$BUSTLY_USER_ID" "$BUSTLY_USER_NAME" "$BUSTLY_USER_EMAIL" "$BUSTLY_REFRESH_TOKEN" "$BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN" "$BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT" "$BUSTLY_SESSION_ID" <<'PY'
 import base64
 import json
 import sys
 
-workspace_id, access_token, supabase_url, supabase_anon_key, user_id, user_name, user_email = sys.argv[1:8]
+(
+    workspace_id,
+    access_token,
+    supabase_url,
+    supabase_anon_key,
+    user_id,
+    user_name,
+    user_email,
+    bustly_refresh_token,
+    legacy_supabase_refresh_token,
+    supabase_access_token_expires_at,
+    bustly_session_id,
+) = sys.argv[1:12]
+
+expires_at = None
+if supabase_access_token_expires_at.strip():
+    try:
+        expires_at = int(supabase_access_token_expires_at)
+    except Exception:
+        expires_at = None
 state = {
     "loginTraceId": f"cloud-{workspace_id[:12]}",
     "user": {
@@ -339,6 +382,11 @@ state = {
         "userName": user_name,
         "userEmail": user_email,
         "userAccessToken": access_token,
+        "supabaseAccessToken": access_token,
+        "supabaseAccessTokenExpiresAt": expires_at,
+        "bustlyRefreshToken": bustly_refresh_token or None,
+        "legacySupabaseRefreshToken": legacy_supabase_refresh_token or None,
+        "bustlySessionId": bustly_session_id or None,
         "workspaceId": workspace_id,
     },
     "supabase": {
@@ -368,7 +416,7 @@ except Exception:
     raise SystemExit(0)
 user = data.get("user") or {}
 supabase = data.get("supabase") or {}
-token = (user.get("userAccessToken") or "").strip()
+token = ((user.get("supabaseAccessToken") or user.get("userAccessToken")) or "").strip()
 if not token:
     print("")
     raise SystemExit(0)
@@ -379,6 +427,11 @@ minimal = {
         "userName": user.get("userName") or "",
         "userEmail": user.get("userEmail") or "",
         "userAccessToken": token,
+        "supabaseAccessToken": token,
+        "supabaseAccessTokenExpiresAt": user.get("supabaseAccessTokenExpiresAt"),
+        "bustlyRefreshToken": user.get("bustlyRefreshToken"),
+        "legacySupabaseRefreshToken": user.get("legacySupabaseRefreshToken") or user.get("userRefreshToken"),
+        "bustlySessionId": user.get("bustlySessionId"),
         "workspaceId": workspace_id,
     },
     "supabase": {
@@ -406,7 +459,8 @@ try:
 except Exception:
     print("")
     raise SystemExit(0)
-print((((state.get("user") or {}).get("userAccessToken")) or "").strip())
+user = state.get("user") or {}
+print(((user.get("supabaseAccessToken") or user.get("userAccessToken")) or "").strip())
 PY
   )"
 fi
@@ -534,6 +588,10 @@ cat >"$TASK_DEF_FILE" <<JSON
         {"name": "BUSTLY_WORKSPACE_ID", "value": "${WORKSPACE_ID}"},
         {"name": "BUSTLY_OAUTH_STATE_B64", "value": "${BUSTLY_OAUTH_STATE_B64}"},
         {"name": "BUSTLY_USER_ACCESS_TOKEN", "value": "${BUSTLY_USER_ACCESS_TOKEN}"},
+        {"name": "BUSTLY_REFRESH_TOKEN", "value": "${BUSTLY_REFRESH_TOKEN}"},
+        {"name": "BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN", "value": "${BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN}"},
+        {"name": "BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT", "value": "${BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT}"},
+        {"name": "BUSTLY_SESSION_ID", "value": "${BUSTLY_SESSION_ID}"},
         {"name": "BUSTLY_LOGIN_TRACE_ID", "value": "${BUSTLY_LOGIN_TRACE_ID}"},
         {"name": "BUSTLY_API_BASE_URL", "value": "${BUSTLY_API_BASE_URL}"},
         {"name": "BUSTLY_WEB_BASE_URL", "value": "${BUSTLY_WEB_BASE_URL}"},

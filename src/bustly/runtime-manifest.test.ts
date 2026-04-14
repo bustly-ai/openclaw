@@ -30,6 +30,10 @@ const {
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => oauthStateRef.current),
+  getBustlyAccessToken: vi.fn(
+    (state: BustlyOAuthState | null | undefined) =>
+      state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "",
+  ),
 }));
 
 vi.mock("./workspace-runtime.js", () => ({

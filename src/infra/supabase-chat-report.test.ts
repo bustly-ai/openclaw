@@ -13,6 +13,13 @@ const sessionMocks = vi.hoisted(() => ({
   resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
 }));
 
+function readJsonBody(body: unknown): unknown {
+  if (typeof body !== "string") {
+    throw new Error("expected string body");
+  }
+  return JSON.parse(body);
+}
+
 vi.mock("node:fs/promises", () => ({
   default: {
     readFile: fsMocks.readFile,
@@ -21,6 +28,10 @@ vi.mock("node:fs/promises", () => ({
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: oauthMocks.readBustlyOAuthState,
+  readBustlyOAuthStateEnsuringFreshToken: oauthMocks.readBustlyOAuthState,
+  getBustlyAccessToken: (
+    state: { user?: { supabaseAccessToken?: string; userAccessToken?: string } } | null | undefined,
+  ) => state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "",
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -40,7 +51,10 @@ describe("reportSessionCompletionToSupabase", () => {
     oauthMocks.readBustlyOAuthState.mockReset();
     sessionMocks.loadSessionStore.mockReset();
     sessionMocks.resolveStorePath.mockClear();
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 201 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 201 })),
+    );
   });
 
   it("writes request metrics onto each assistant row in order", async () => {
@@ -118,7 +132,7 @@ describe("reportSessionCompletionToSupabase", () => {
     const fetchMock = vi.mocked(global.fetch);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const [, init] = fetchMock.mock.calls[1] ?? [];
-    const body = JSON.parse(String(init?.body)) as Array<{
+    const body = readJsonBody(init?.body) as Array<{
       role?: string | null;
       metadata?: Record<string, unknown>;
     }>;
@@ -175,7 +189,7 @@ describe("reportSessionCompletionToSupabase", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(sessionMocks.loadSessionStore).not.toHaveBeenCalled();
     const [, init] = fetchMock.mock.calls[1] ?? [];
-    const body = JSON.parse(String(init?.body)) as Array<{
+    const body = readJsonBody(init?.body) as Array<{
       session_id?: string;
       session_key?: string;
       metadata?: Record<string, unknown>;
@@ -253,7 +267,7 @@ describe("reportSessionCompletionToSupabase", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const [, postInit] = fetchMock.mock.calls[1] ?? [];
-    const body = JSON.parse(String(postInit?.body)) as Array<{
+    const body = readJsonBody(postInit?.body) as Array<{
       message_id?: string;
       metadata?: Record<string, unknown>;
     }>;

@@ -7,6 +7,10 @@ CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-${STATE_DIR}/openclaw.json}"
 WORKSPACE_ID="${BUSTLY_WORKSPACE_ID:-}"
 OAUTH_STATE_B64="${BUSTLY_OAUTH_STATE_B64:-}"
 USER_ACCESS_TOKEN="${BUSTLY_USER_ACCESS_TOKEN:-}"
+REFRESH_TOKEN="${BUSTLY_REFRESH_TOKEN:-}"
+LEGACY_SUPABASE_REFRESH_TOKEN="${BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN:-}"
+SUPABASE_ACCESS_TOKEN_EXPIRES_AT="${BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT:-}"
+SESSION_ID="${BUSTLY_SESSION_ID:-}"
 LOGIN_TRACE_ID="${BUSTLY_LOGIN_TRACE_ID:-}"
 
 if [[ -n "$OAUTH_STATE_B64" ]]; then
@@ -37,16 +41,55 @@ elif [[ -n "$USER_ACCESS_TOKEN" && -n "$WORKSPACE_ID" ]]; then
 
   mkdir -p "$(dirname "$OAUTH_PATH")"
   umask 077
+  OAUTH_PATH="$OAUTH_PATH" \
+  BUSTLY_LOGIN_TRACE_ID="$LOGIN_TRACE_ID" \
+  BUSTLY_WORKSPACE_ID="$WORKSPACE_ID" \
+  BUSTLY_USER_ACCESS_TOKEN="$USER_ACCESS_TOKEN" \
+  BUSTLY_REFRESH_TOKEN="$REFRESH_TOKEN" \
+  BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN="$LEGACY_SUPABASE_REFRESH_TOKEN" \
+  BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT="$SUPABASE_ACCESS_TOKEN_EXPIRES_AT" \
+  BUSTLY_SESSION_ID="$SESSION_ID" \
+  node <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
 
-  cat >"$OAUTH_PATH" <<JSON
-{
-  "loginTraceId": "${LOGIN_TRACE_ID}",
-  "user": {
-    "userAccessToken": "${USER_ACCESS_TOKEN}",
-    "workspaceId": "${WORKSPACE_ID}"
+const oauthPath = process.env.OAUTH_PATH;
+const loginTraceId = (process.env.BUSTLY_LOGIN_TRACE_ID || "").trim();
+const workspaceId = (process.env.BUSTLY_WORKSPACE_ID || "").trim();
+const accessToken = (process.env.BUSTLY_USER_ACCESS_TOKEN || "").trim();
+const refreshToken = (process.env.BUSTLY_REFRESH_TOKEN || "").trim();
+const legacySupabaseRefreshToken = (
+  process.env.BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN || ""
+).trim();
+const sessionId = (process.env.BUSTLY_SESSION_ID || "").trim();
+const expiresAtRaw = (process.env.BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT || "").trim();
+
+let expiresAt;
+if (expiresAtRaw) {
+  const parsed = Number(expiresAtRaw);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    expiresAt = parsed;
   }
 }
-JSON
+
+const state = {
+  loginTraceId,
+  user: {
+    userAccessToken: accessToken,
+    supabaseAccessToken: accessToken,
+    workspaceId,
+    ...(expiresAt ? { supabaseAccessTokenExpiresAt: expiresAt } : {}),
+    ...(refreshToken ? { bustlyRefreshToken: refreshToken } : {}),
+    ...(legacySupabaseRefreshToken
+      ? { legacySupabaseRefreshToken }
+      : {}),
+    ...(sessionId ? { bustlySessionId: sessionId } : {}),
+  },
+};
+
+fs.mkdirSync(path.dirname(oauthPath), { recursive: true });
+fs.writeFileSync(oauthPath, JSON.stringify(state, null, 2));
+NODE
 fi
 
 if [[ "${OPENCLAW_CLOUD_CONTROL_UI_HOST_FALLBACK:-1}" == "1" ]]; then

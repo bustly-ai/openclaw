@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../bustly-oauth.js", () => ({
   readBustlyOAuthState: () => mocks.readBustlyOAuthState(),
+  getBustlyAccessToken: (
+    state: { user?: { supabaseAccessToken?: string; userAccessToken?: string } } | null | undefined,
+  ) => state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "",
 }));
 
 vi.mock("../../bustly/workspace-agents.js", () => ({

@@ -1,6 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { readBustlyOAuthState, setActiveWorkspaceId } from "../bustly-oauth.js";
+import {
+  getBustlyAccessToken,
+  readBustlyOAuthState,
+  readBustlyOAuthStateEnsuringFreshToken,
+  setActiveWorkspaceId,
+} from "../bustly-oauth.js";
 import { applyAgentConfig, listAgentEntries } from "../commands/agents.config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
@@ -284,12 +289,12 @@ export async function ensureBustlyCloudReady(params?: {
       baseUrl: params?.baseUrl,
     });
   }
-  const state = readBustlyOAuthState();
-  const userAccessToken = state?.user?.userAccessToken?.trim() ?? "";
+  const state = await readBustlyOAuthStateEnsuringFreshToken();
+  const userAccessToken = getBustlyAccessToken(state);
   const workspaceId = state?.user?.workspaceId?.trim() ?? "";
   if (!userAccessToken) {
     throw new Error(
-      "No Bustly token found in ~/.bustly/bustlyOauth.json (user.userAccessToken). Please sign in first.",
+      "No Bustly token found in ~/.bustly/bustlyOauth.json (user.supabaseAccessToken/user.userAccessToken). Please sign in first.",
     );
   }
   if (!workspaceId) {

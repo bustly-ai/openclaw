@@ -88,6 +88,11 @@ type BustlyTokenApiResponse = {
   status: string;
   data: {
     accessToken: string;
+    refreshToken?: string;
+    bustlySessionId?: string;
+    supabaseAccessToken?: string;
+    supabaseAccessTokenExpiresAt?: number;
+    capabilities?: string[];
     workspaceId: string;
     userId: string;
     userName: string;
@@ -239,14 +244,15 @@ async function handleBustlyOAuthCallbackHttpRequest(
     }
 
     const searchDataConfig = apiResponse.data.extras?.["bustly-search-data"];
-    const filteredSkills = (apiResponse.data.skills ?? []).filter((skill) =>
-      ![
-        "search-data",
-        "bustly-search-data",
-        "bustly_search_data",
-        "shopify-api",
-        "shopify_api",
-      ].includes(skill),
+    const filteredSkills = (apiResponse.data.skills ?? []).filter(
+      (skill) =>
+        ![
+          "search-data",
+          "bustly-search-data",
+          "bustly_search_data",
+          "shopify-api",
+          "shopify_api",
+        ].includes(skill),
     );
     BustlyOAuth.completeBustlyLogin({
       user: {
@@ -254,10 +260,16 @@ async function handleBustlyOAuthCallbackHttpRequest(
         userName: apiResponse.data.userName,
         userEmail: apiResponse.data.userEmail,
         userAvatarUrl:
-          supabaseSession?.user?.user_metadata?.avatar_url?.trim()
-          || supabaseSession?.user?.user_metadata?.picture?.trim()
-          || undefined,
+          supabaseSession?.user?.user_metadata?.avatar_url?.trim() ||
+          supabaseSession?.user?.user_metadata?.picture?.trim() ||
+          undefined,
         userAccessToken: supabaseAccessToken,
+        bustlySessionId: apiResponse.data.bustlySessionId?.trim() || undefined,
+        supabaseAccessToken: apiResponse.data.supabaseAccessToken?.trim() || supabaseAccessToken,
+        supabaseAccessTokenExpiresAt:
+          apiResponse.data.supabaseAccessTokenExpiresAt ?? supabaseSession?.expires_at,
+        bustlyRefreshToken: apiResponse.data.refreshToken?.trim() || undefined,
+        capabilities: apiResponse.data.capabilities ?? [],
         userRefreshToken: supabaseSession?.refresh_token,
         sessionExpiresIn: supabaseSession?.expires_in,
         sessionExpiresAt: supabaseSession?.expires_at,

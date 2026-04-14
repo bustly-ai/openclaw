@@ -1,6 +1,6 @@
 import path from "node:path";
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
-import { readBustlyOAuthState } from "../bustly-oauth.js";
+import { getBustlyAccessToken, readBustlyOAuthStateEnsuringFreshToken } from "../bustly-oauth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
@@ -145,8 +145,6 @@ export async function resolveApiKeyForProvider(params: {
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
   const normalizedProvider = normalizeProviderId(provider);
   const isBustlyProvider = normalizedProvider === "bustly";
-  const resolveBustlyUserAccessToken = () =>
-    normalizeOptionalSecretInput(readBustlyOAuthState()?.user?.userAccessToken);
 
   if (profileId) {
     const resolved = await resolveApiKeyForProfile({
@@ -165,11 +163,15 @@ export async function resolveApiKeyForProvider(params: {
       };
     }
     if (isBustlyProvider) {
-      const accessToken = resolveBustlyUserAccessToken();
+      const state = await readBustlyOAuthStateEnsuringFreshToken();
+      const accessToken = normalizeOptionalSecretInput(getBustlyAccessToken(state));
       if (accessToken) {
+        const source = state?.user?.supabaseAccessToken?.trim()
+          ? "bustlyOauth.json:user.supabaseAccessToken"
+          : "bustlyOauth.json:user.userAccessToken";
         return {
           apiKey: accessToken,
-          source: "bustlyOauth.json:user.userAccessToken",
+          source,
           mode: "token",
         };
       }
@@ -184,17 +186,21 @@ export async function resolveApiKeyForProvider(params: {
 
   // Bustly login state in bustlyOauth.json is the source of truth.
   if (isBustlyProvider) {
-    const accessToken = resolveBustlyUserAccessToken();
+    const state = await readBustlyOAuthStateEnsuringFreshToken();
+    const accessToken = normalizeOptionalSecretInput(getBustlyAccessToken(state));
     if (accessToken) {
+      const source = state?.user?.supabaseAccessToken?.trim()
+        ? "bustlyOauth.json:user.supabaseAccessToken"
+        : "bustlyOauth.json:user.userAccessToken";
       return {
         apiKey: accessToken,
-        source: "bustlyOauth.json:user.userAccessToken",
+        source,
         mode: "token",
       };
     }
     throw new Error(
       [
-        "No Bustly token found in ~/.bustly/bustlyOauth.json (user.userAccessToken).",
+        "No Bustly token found in ~/.bustly/bustlyOauth.json (user.supabaseAccessToken/user.userAccessToken).",
         "Please sign in from the Bustly desktop app.",
       ].join(" "),
     );

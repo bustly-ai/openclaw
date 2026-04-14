@@ -27,6 +27,11 @@ const { oauthStateRef, setActiveWorkspaceIdMock, bootstrapMock, fetchAndApplyMan
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => oauthStateRef.current),
+  readBustlyOAuthStateEnsuringFreshToken: vi.fn(async () => oauthStateRef.current),
+  getBustlyAccessToken: vi.fn(
+    (state: BustlyOAuthState | null | undefined) =>
+      state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "",
+  ),
   setActiveWorkspaceId: (workspaceId: string) => setActiveWorkspaceIdMock(workspaceId),
 }));
 
@@ -127,6 +132,34 @@ describe("workspace-runtime", () => {
     };
     expect(config.agents?.defaults?.workspace).toBe(binding.workspaceDir);
     expect(Object.keys(config.models?.providers ?? {})).toEqual(["bustly"]);
+  });
+
+  it("accepts v13 owner session shape during cloud preflight", async () => {
+    oauthStateRef.current = {
+      deviceId: "device-1",
+      callbackPort: 17900,
+      user: {
+        userId: "u-1",
+        userName: "Tester",
+        userEmail: "tester@example.com",
+        supabaseAccessToken: "token-1",
+        supabaseAccessTokenExpiresAt: 1777001200,
+        bustlyRefreshToken: "refresh-1",
+        workspaceId: "workspace-1",
+        skills: [],
+      },
+      supabase: {
+        url: "https://example.supabase.co",
+        anonKey: "anon-key",
+      },
+    };
+
+    const binding = await ensureBustlyCloudReady({
+      userAgent: "cloud-test-agent",
+    });
+
+    expect(binding.workspaceId).toBe("workspace-1");
+    expect(bootstrapMock).toHaveBeenCalledTimes(1);
   });
 
   it("prefers control plane manifest preflight in cloud runtime mode", async () => {

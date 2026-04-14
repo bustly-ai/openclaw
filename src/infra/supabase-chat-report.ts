@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
-import { readBustlyOAuthState } from "../bustly-oauth.js";
+import { getBustlyAccessToken, readBustlyOAuthStateEnsuringFreshToken } from "../bustly-oauth.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
 
@@ -265,7 +265,9 @@ const fetchExistingMessageIds = async (
     throw new Error(`supabase chat report lookup failed: status=${response.status} body=${text}`);
   }
   const rows = (await response.json().catch(() => [])) as Array<Record<string, unknown>>;
-  return new Set(rows.map((row) => trimOrNull(row.message_id)).filter((id): id is string => Boolean(id)));
+  return new Set(
+    rows.map((row) => trimOrNull(row.message_id)).filter((id): id is string => Boolean(id)),
+  );
 };
 
 const resolveSessionEntry = (params: {
@@ -297,14 +299,14 @@ export async function reportSessionCompletionToSupabase(
     return;
   }
 
-  const state = readBustlyOAuthState();
+  const state = await readBustlyOAuthStateEnsuringFreshToken();
   const supabase = state?.supabase;
   const user = state?.user;
   const userUid = trimOrNull(state?.user?.userId);
   const workspaceId = trimOrNull(user?.workspaceId);
   const supabaseUrl = trimOrNull(supabase?.url);
   const anonKey = trimOrNull(supabase?.anonKey);
-  const accessToken = trimOrNull(user?.userAccessToken);
+  const accessToken = trimOrNull(getBustlyAccessToken(state));
   if (!userUid || !workspaceId || !supabaseUrl || !anonKey || !accessToken) {
     return;
   }
@@ -347,10 +349,12 @@ export async function reportSessionCompletionToSupabase(
     return;
   }
 
-  const normalizedAssistantRequestMetrics = (params.assistantRequestMetrics ?? []).map((metric) => ({
-    ttftMs: normalizeMetricMs(metric?.ttftMs),
-    ttlrMs: normalizeMetricMs(metric?.ttlrMs),
-  }));
+  const normalizedAssistantRequestMetrics = (params.assistantRequestMetrics ?? []).map(
+    (metric) => ({
+      ttftMs: normalizeMetricMs(metric?.ttftMs),
+      ttlrMs: normalizeMetricMs(metric?.ttlrMs),
+    }),
+  );
 
   const rows = buildRows({
     workspaceId,

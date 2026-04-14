@@ -258,6 +258,28 @@ export type BustlyOAuthState = {
     userEmail: string;
     /** Supabase access token used as Bustly user JWT for gateway auth. */
     userAccessToken?: string;
+    /** Hosted Bustly session id for backend-managed refresh. */
+    bustlySessionId?: string;
+    /** Canonical Supabase access token for Bustly data access. */
+    supabaseAccessToken?: string;
+    /** Canonical Supabase access token expiration (seconds since epoch). */
+    supabaseAccessTokenExpiresAt?: number;
+    /** Bustly refresh token for backend-managed refresh. */
+    bustlyRefreshToken?: string;
+    /** Legacy Supabase refresh token for compatibility fallback. */
+    legacySupabaseRefreshToken?: string;
+    /** @deprecated Legacy refresh token kept for compatibility. */
+    userRefreshToken?: string;
+    /** @deprecated Legacy expires-in field kept for compatibility. */
+    sessionExpiresIn?: number;
+    /** @deprecated Legacy expires-at field kept for compatibility. */
+    sessionExpiresAt?: number;
+    /** @deprecated Legacy token type kept for compatibility. */
+    sessionTokenType?: string;
+    /** Optional user avatar url. */
+    userAvatarUrl?: string;
+    /** Optional backend capabilities granted to this session. */
+    capabilities?: string[];
     /** Workspace ID. */
     workspaceId: string;
     /** Assigned skills. */

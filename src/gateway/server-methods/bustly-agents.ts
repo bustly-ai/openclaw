@@ -1,4 +1,4 @@
-import { readBustlyOAuthState } from "../../bustly-oauth.js";
+import { getBustlyAccessToken, readBustlyOAuthState } from "../../bustly-oauth.js";
 import {
   createBustlyWorkspaceAgent,
   createBustlyWorkspaceAgentSession,
@@ -38,10 +38,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },
@@ -61,11 +58,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         return;
       }
       if (!name) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "name is required"),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "name is required"));
         return;
       }
       const created = await createBustlyWorkspaceAgent({
@@ -88,10 +81,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },
@@ -110,11 +100,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         return;
       }
       if (!agentId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"));
         return;
       }
       await updateBustlyWorkspaceAgent({
@@ -136,10 +122,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },
@@ -156,11 +139,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         return;
       }
       if (!agentId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"));
         return;
       }
       await deleteBustlyWorkspaceAgent({
@@ -180,10 +159,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },
@@ -200,11 +176,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         return;
       }
       if (!agentId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"));
         return;
       }
       respond(
@@ -219,10 +191,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },
@@ -240,11 +209,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         return;
       }
       if (!agentId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"));
         return;
       }
       const created = await createBustlyWorkspaceAgentSession({
@@ -268,10 +233,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },
@@ -280,7 +242,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       const state = readBustlyOAuthState();
       const supabase = state?.supabase;
       const user = state?.user;
-      const accessToken = user?.userAccessToken?.trim() || "";
+      const accessToken = getBustlyAccessToken(state);
       const workspaceId = user?.workspaceId?.trim() || "";
       if (!supabase?.url || !supabase.anonKey || !accessToken) {
         respond(true, null, undefined);
@@ -303,10 +265,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },

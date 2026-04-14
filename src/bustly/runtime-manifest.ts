@@ -1,4 +1,4 @@
-import { readBustlyOAuthState } from "../bustly-oauth.js";
+import { getBustlyAccessToken, readBustlyOAuthState } from "../bustly-oauth.js";
 import { fetchBustlyRuntimeManifest } from "./control-plane-runtime.js";
 import { ensureBustlyWorkspacePresetAgents } from "./workspace-agents.js";
 import type { BustlyWorkspaceBinding } from "./workspace-runtime.js";
@@ -48,7 +48,7 @@ export function getBustlyRuntimeHealthSnapshot(): {
 } {
   const state = readBustlyOAuthState();
   const workspaceId = state?.user?.workspaceId?.trim() ?? "";
-  const accessToken = state?.user?.userAccessToken?.trim() ?? "";
+  const accessToken = getBustlyAccessToken(state);
   return {
     loggedIn: Boolean(accessToken),
     workspaceId,

@@ -3,9 +3,9 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { loadWorkspaceTemplate } from "../agents/workspace.js";
+import { getBustlyAccessToken, readBustlyOAuthStateEnsuringFreshToken } from "../bustly-oauth.js";
 import type { BustlyOAuthState } from "../config/types.base.js";
 import { normalizeBustlyAgentName } from "./workspace-agent.js";
-import { readBustlyOAuthState } from "../bustly-oauth.js";
 
 const MANAGED_MARKER = "<!-- Managed by Bustly bootstrap. Edit with care. -->";
 const CONTEXT_VERSION = 1;
@@ -272,7 +272,7 @@ export type BustlyBootstrapContext = {
 function createSupabaseClient(state: BustlyOAuthState): SupabaseClient {
   const url = state.supabase?.url?.trim();
   const anonKey = state.supabase?.anonKey?.trim();
-  const accessToken = state.user?.userAccessToken?.trim();
+  const accessToken = getBustlyAccessToken(state);
   if (!url || !anonKey || !accessToken) {
     throw new Error("Missing Bustly Supabase credentials for workspace bootstrap.");
   }
@@ -364,7 +364,9 @@ function dedupeStorefronts(stores: CommerceStore[]): CommerceStore[] {
       continue;
     }
     const score = (entry: CommerceStore) =>
-      Number(Boolean(entry.url)) + Number(Boolean(entry.timezone)) + Number(Boolean(entry.currency));
+      Number(Boolean(entry.url)) +
+      Number(Boolean(entry.timezone)) +
+      Number(Boolean(entry.currency));
     if (score(store) > score(existing)) {
       byKey.set(key, store);
     }
@@ -390,7 +392,9 @@ function renderMarketingPlatforms(platforms: MarketingPlatform[]): string {
         platform.platform,
         platform.accountLabel,
         `status=${platform.status}`,
-        platform.source === "local" ? "source=local-skill-credentials" : "source=workspace-integration",
+        platform.source === "local"
+          ? "source=local-skill-credentials"
+          : "source=workspace-integration",
       ].join(" "),
     ),
   );
@@ -419,10 +423,7 @@ function summarizePlatforms(platforms: string[], fallback: string): string {
   return unique.map(titleCasePlatform).join(", ");
 }
 
-function getShopInfoString(
-  pulse: WorkspacePulseRow | null,
-  keys: string[],
-): string | null {
+function getShopInfoString(pulse: WorkspacePulseRow | null, keys: string[]): string | null {
   const shopInfo = pulse?.shop_info;
   if (!shopInfo || typeof shopInfo !== "object") {
     return null;
@@ -499,7 +500,7 @@ async function buildBustlyBootstrapContext(params: {
   workspaceId: string;
   workspaceName?: string;
 }): Promise<BustlyBootstrapContext> {
-  const state = readBustlyOAuthState();
+  const state = await readBustlyOAuthStateEnsuringFreshToken();
   if (!state?.user?.userId) {
     throw new Error("Missing Bustly OAuth user for workspace bootstrap.");
   }
@@ -511,49 +512,57 @@ async function buildBustlyBootstrapContext(params: {
 
   const [workspace, membershipRows, memberRows, integrations, billingRows, pulseRows] =
     await Promise.all([
-    fetchSingle<WorkspaceRow>(
-      client.from("workspaces").select("id, name, logo_url, owner_id, settings, status").eq("id", workspaceId).maybeSingle(),
-      "workspaces lookup failed",
-    ),
-    fetchMany<WorkspaceMemberRow>(
-      client
-        .from("workspace_members")
-        .select("role, status, joined_at")
-        .eq("workspace_id", workspaceId)
-        .eq("user_id", userId)
-        .limit(1),
-      "workspace_members lookup failed",
-    ),
-    fetchMany(
-      client.from("workspace_members").select("workspace_id").eq("workspace_id", workspaceId).eq("status", "ACTIVE"),
-      "workspace_members count lookup failed",
-    ),
-    fetchMany<WorkspaceIntegrationRow>(
-      client
-        .from("workspace_integrations")
-        .select("id, platform, status, connected_at, last_synced_at, error_message")
-        .eq("workspace_id", workspaceId)
-        .order("created_at", { ascending: true }),
-      "workspace_integrations lookup failed",
-    ),
-    fetchMany<WorkspaceBillingWindowRow>(
-      client
-        .from("workspace_billing_windows")
-        .select("valid_from, valid_to, internal_budget_microusd, internal_used_microusd, status")
-        .eq("workspace_id", workspaceId)
-        .order("valid_to", { ascending: false })
-        .limit(1),
-      "workspace_billing_windows lookup failed",
-    ),
-    fetchMany<WorkspacePulseRow>(
-      client
-        .from("workspace_pulse_status")
-        .select("timezone, report_utc_hour, shop_info, status, report_status")
-        .eq("workspace_id", workspaceId)
-        .limit(1),
-      "workspace_pulse_status lookup failed",
-    ),
-  ]);
+      fetchSingle<WorkspaceRow>(
+        client
+          .from("workspaces")
+          .select("id, name, logo_url, owner_id, settings, status")
+          .eq("id", workspaceId)
+          .maybeSingle(),
+        "workspaces lookup failed",
+      ),
+      fetchMany<WorkspaceMemberRow>(
+        client
+          .from("workspace_members")
+          .select("role, status, joined_at")
+          .eq("workspace_id", workspaceId)
+          .eq("user_id", userId)
+          .limit(1),
+        "workspace_members lookup failed",
+      ),
+      fetchMany(
+        client
+          .from("workspace_members")
+          .select("workspace_id")
+          .eq("workspace_id", workspaceId)
+          .eq("status", "ACTIVE"),
+        "workspace_members count lookup failed",
+      ),
+      fetchMany<WorkspaceIntegrationRow>(
+        client
+          .from("workspace_integrations")
+          .select("id, platform, status, connected_at, last_synced_at, error_message")
+          .eq("workspace_id", workspaceId)
+          .order("created_at", { ascending: true }),
+        "workspace_integrations lookup failed",
+      ),
+      fetchMany<WorkspaceBillingWindowRow>(
+        client
+          .from("workspace_billing_windows")
+          .select("valid_from, valid_to, internal_budget_microusd, internal_used_microusd, status")
+          .eq("workspace_id", workspaceId)
+          .order("valid_to", { ascending: false })
+          .limit(1),
+        "workspace_billing_windows lookup failed",
+      ),
+      fetchMany<WorkspacePulseRow>(
+        client
+          .from("workspace_pulse_status")
+          .select("timezone, report_utc_hour, shop_info, status, report_status")
+          .eq("workspace_id", workspaceId)
+          .limit(1),
+        "workspace_pulse_status lookup failed",
+      ),
+    ]);
 
   if (!workspace) {
     throw new Error(`Workspace ${workspaceId} not found for bootstrap.`);
@@ -573,12 +582,18 @@ async function buildBustlyBootstrapContext(params: {
     klaviyoMappings,
     aliexpressMappings,
   ] = await Promise.all([
-      fetchManyOptional<ShopifyMappingRow>(
-        client.from("workspace_shopify_mappings").select("shopify_shop_id, role, status").eq("workspace_id", workspaceId),
-        { label: "workspace_shopify_mappings lookup failed", warnings },
-      ),
+    fetchManyOptional<ShopifyMappingRow>(
+      client
+        .from("workspace_shopify_mappings")
+        .select("shopify_shop_id, role, status")
+        .eq("workspace_id", workspaceId),
+      { label: "workspace_shopify_mappings lookup failed", warnings },
+    ),
     fetchManyOptional<BigCommerceMappingRow>(
-      client.from("workspace_bigcommerce_mappings").select("store_hash, role, status").eq("workspace_id", workspaceId),
+      client
+        .from("workspace_bigcommerce_mappings")
+        .select("store_hash, role, status")
+        .eq("workspace_id", workspaceId),
       { label: "workspace_bigcommerce_mappings lookup failed", warnings },
     ),
     fetchManyOptional<WooMappingRow>(
@@ -589,15 +604,24 @@ async function buildBustlyBootstrapContext(params: {
       { label: "workspace_woocommerce_mappings lookup failed", warnings },
     ),
     fetchManyOptional<MagentoMappingRow>(
-      client.from("workspace_magento_mappings").select("magento_account_id, role, status").eq("workspace_id", workspaceId),
+      client
+        .from("workspace_magento_mappings")
+        .select("magento_account_id, role, status")
+        .eq("workspace_id", workspaceId),
       { label: "workspace_magento_mappings lookup failed", warnings },
     ),
     fetchManyOptional<GoogleAdsMappingRow>(
-      client.from("workspace_google_ads_mappings").select("customer_id, role, status").eq("workspace_id", workspaceId),
+      client
+        .from("workspace_google_ads_mappings")
+        .select("customer_id, role, status")
+        .eq("workspace_id", workspaceId),
       { label: "workspace_google_ads_mappings lookup failed", warnings },
     ),
     fetchManyOptional<KlaviyoMappingRow>(
-      client.from("workspace_klaviyo_mappings").select("klaviyo_account_id, role, status").eq("workspace_id", workspaceId),
+      client
+        .from("workspace_klaviyo_mappings")
+        .select("klaviyo_account_id, role, status")
+        .eq("workspace_id", workspaceId),
       { label: "workspace_klaviyo_mappings lookup failed", warnings },
     ),
     fetchManyOptional<AliExpressMappingRow>(
@@ -624,79 +648,98 @@ async function buildBustlyBootstrapContext(params: {
   );
 
   const shopifyIds = connectedShopifyMappings.map((row) => row.shopify_shop_id).filter(Boolean);
-  const bigCommerceHashes = connectedBigCommerceMappings.map((row) => row.store_hash).filter(Boolean);
-  const wooIds = connectedWooMappings.map((row) => row.woocommerce_account_id).filter(Boolean) as string[];
+  const bigCommerceHashes = connectedBigCommerceMappings
+    .map((row) => row.store_hash)
+    .filter(Boolean);
+  const wooIds = connectedWooMappings
+    .map((row) => row.woocommerce_account_id)
+    .filter(Boolean) as string[];
   const magentoIds = connectedMagentoMappings.map((row) => row.magento_account_id).filter(Boolean);
-  const googleCustomerIds = connectedGoogleAdsMappings.map((row) => row.customer_id).filter(Boolean);
-  const klaviyoAccountIds = connectedKlaviyoMappings.map((row) => row.klaviyo_account_id).filter(Boolean);
-  const aliexpressIds = connectedAliExpressMappings.map((row) => row.aliexpress_account_id).filter(Boolean);
+  const googleCustomerIds = connectedGoogleAdsMappings
+    .map((row) => row.customer_id)
+    .filter(Boolean);
+  const klaviyoAccountIds = connectedKlaviyoMappings
+    .map((row) => row.klaviyo_account_id)
+    .filter(Boolean);
+  const aliexpressIds = connectedAliExpressMappings
+    .map((row) => row.aliexpress_account_id)
+    .filter(Boolean);
 
-  const [shopifyShops, bigCommerceAccounts, wooAccounts, magentoAccounts, googleAdsAccounts, klaviyoAccounts, aliexpressAccounts] =
-    await Promise.all([
-      shopifyIds.length > 0
-        ? fetchManyOptional(
-            client
-              .from("shopify_shops")
-              .select("id, shop_domain, shop_name, email, currency, iana_timezone, status")
-              .in("id", shopifyIds),
-            { label: "shopify_shops lookup failed", warnings },
-          )
-        : Promise.resolve([] as ShopifyShopRow[]),
-      bigCommerceHashes.length > 0
-        ? fetchManyOptional<BigCommerceAccountRow>(
-            client
-              .from("bigcommerce_accounts")
-              .select("id, store_hash, name, secure_url, domain, currency, iana_timezone, status")
-              .in("store_hash", bigCommerceHashes),
-            { label: "bigcommerce_accounts lookup failed", warnings },
-          )
-        : Promise.resolve([] as BigCommerceAccountRow[]),
-      wooIds.length > 0
-        ? fetchManyOptional(
-            client
-              .from("woocommerce_accounts")
-              .select("id, site_url, site_name, store_url, currency, timezone, status")
-              .in("id", wooIds),
-            { label: "woocommerce_accounts lookup failed", warnings },
-          )
-        : Promise.resolve([] as WooAccountRow[]),
-      magentoIds.length > 0
-        ? fetchManyOptional(
-            client
-              .from("magento_accounts")
-              .select("id, name, base_url, currency, timezone, status")
-              .in("id", magentoIds),
-            { label: "magento_accounts lookup failed", warnings },
-          )
-        : Promise.resolve([] as MagentoAccountRow[]),
-      googleCustomerIds.length > 0
-        ? fetchManyOptional(
-            client
-              .from("google_ad_accounts")
-              .select("customer_id, account_name, currency_code, time_zone, status, last_synced_at")
-              .in("customer_id", googleCustomerIds),
-            { label: "google_ad_accounts lookup failed", warnings },
-          )
-        : Promise.resolve([] as GoogleAdsAccountRow[]),
-      klaviyoAccountIds.length > 0
-        ? fetchManyOptional(
-            client
-              .from("klaviyo_accounts")
-              .select("account_id, account_name, timezone, currency_code, status, webhooks_registered")
-              .in("account_id", klaviyoAccountIds),
-            { label: "klaviyo_accounts lookup failed", warnings },
-          )
-        : Promise.resolve([] as KlaviyoAccountRow[]),
-      aliexpressIds.length > 0
-        ? fetchManyOptional(
-            client
-              .from("aliexpress_accounts")
-              .select("id, account_id, account_name, shop_name, login_email, status")
-              .in("id", aliexpressIds),
-            { label: "aliexpress_accounts lookup failed", warnings },
-          )
-        : Promise.resolve([] as AliExpressAccountRow[]),
-    ]);
+  const [
+    shopifyShops,
+    bigCommerceAccounts,
+    wooAccounts,
+    magentoAccounts,
+    googleAdsAccounts,
+    klaviyoAccounts,
+    aliexpressAccounts,
+  ] = await Promise.all([
+    shopifyIds.length > 0
+      ? fetchManyOptional(
+          client
+            .from("shopify_shops")
+            .select("id, shop_domain, shop_name, email, currency, iana_timezone, status")
+            .in("id", shopifyIds),
+          { label: "shopify_shops lookup failed", warnings },
+        )
+      : Promise.resolve([] as ShopifyShopRow[]),
+    bigCommerceHashes.length > 0
+      ? fetchManyOptional<BigCommerceAccountRow>(
+          client
+            .from("bigcommerce_accounts")
+            .select("id, store_hash, name, secure_url, domain, currency, iana_timezone, status")
+            .in("store_hash", bigCommerceHashes),
+          { label: "bigcommerce_accounts lookup failed", warnings },
+        )
+      : Promise.resolve([] as BigCommerceAccountRow[]),
+    wooIds.length > 0
+      ? fetchManyOptional(
+          client
+            .from("woocommerce_accounts")
+            .select("id, site_url, site_name, store_url, currency, timezone, status")
+            .in("id", wooIds),
+          { label: "woocommerce_accounts lookup failed", warnings },
+        )
+      : Promise.resolve([] as WooAccountRow[]),
+    magentoIds.length > 0
+      ? fetchManyOptional(
+          client
+            .from("magento_accounts")
+            .select("id, name, base_url, currency, timezone, status")
+            .in("id", magentoIds),
+          { label: "magento_accounts lookup failed", warnings },
+        )
+      : Promise.resolve([] as MagentoAccountRow[]),
+    googleCustomerIds.length > 0
+      ? fetchManyOptional(
+          client
+            .from("google_ad_accounts")
+            .select("customer_id, account_name, currency_code, time_zone, status, last_synced_at")
+            .in("customer_id", googleCustomerIds),
+          { label: "google_ad_accounts lookup failed", warnings },
+        )
+      : Promise.resolve([] as GoogleAdsAccountRow[]),
+    klaviyoAccountIds.length > 0
+      ? fetchManyOptional(
+          client
+            .from("klaviyo_accounts")
+            .select(
+              "account_id, account_name, timezone, currency_code, status, webhooks_registered",
+            )
+            .in("account_id", klaviyoAccountIds),
+          { label: "klaviyo_accounts lookup failed", warnings },
+        )
+      : Promise.resolve([] as KlaviyoAccountRow[]),
+    aliexpressIds.length > 0
+      ? fetchManyOptional(
+          client
+            .from("aliexpress_accounts")
+            .select("id, account_id, account_name, shop_name, login_email, status")
+            .in("id", aliexpressIds),
+          { label: "aliexpress_accounts lookup failed", warnings },
+        )
+      : Promise.resolve([] as AliExpressAccountRow[]),
+  ]);
 
   const shopifyById = new Map(shopifyShops.map((row) => [row.id, row]));
   const bigCommerceByHash = new Map(bigCommerceAccounts.map((row) => [row.store_hash, row]));
@@ -706,77 +749,82 @@ async function buildBustlyBootstrapContext(params: {
   const klaviyoById = new Map(klaviyoAccounts.map((row) => [row.account_id, row]));
   const aliexpressById = new Map(aliexpressAccounts.map((row) => [row.id, row]));
 
-  const storefronts = dedupeStorefronts(compactDefined([
-    ...connectedShopifyMappings.map((mapping) => {
-      const shop = shopifyById.get(mapping.shopify_shop_id);
-      if (!shop?.shop_domain && !shop?.shop_name) {
-        return null;
-      }
-      return {
-        platform: "shopify",
-        name: normalizeLine(shop?.shop_name || shop?.shop_domain, "Shopify store"),
-        url: shop?.shop_domain ? `https://${shop.shop_domain}` : null,
-        currency: shop?.currency ?? null,
-        timezone: shop?.iana_timezone ?? null,
-        role: mapping.role ?? null,
-        status: normalizeLine(shop?.status, mapping.status === 1 ? "active" : "unknown"),
-      };
-    }),
-    ...connectedBigCommerceMappings.map((mapping) => {
-      const store = bigCommerceByHash.get(mapping.store_hash);
-      if (!store?.secure_url && !store?.domain && !store?.name) {
-        return null;
-      }
-      return {
-        platform: "bigcommerce",
-        name: normalizeLine(store?.name || store?.domain, "BigCommerce store"),
-        url: store?.secure_url || store?.domain || null,
-        currency: store?.currency ?? null,
-        timezone: store?.iana_timezone ?? null,
-        role: mapping.role ?? null,
-        status: normalizeLine(store?.status, mapping.status === 1 ? "active" : "unknown"),
-      };
-    }),
-    ...connectedWooMappings.map((mapping) => {
-      const store = mapping.woocommerce_account_id
-        ? wooById.get(mapping.woocommerce_account_id)
-        : null;
-      if (!store?.store_url && !store?.site_url && !mapping.site_url && !store?.site_name) {
-        return null;
-      }
-      return {
-        platform: "woocommerce",
-        name: normalizeLine(store?.site_name || mapping.site_url, "WooCommerce store"),
-        url: store?.store_url || store?.site_url || mapping.site_url || null,
-        currency: store?.currency ?? null,
-        timezone: store?.timezone ?? null,
-        role: mapping.role ?? null,
-        status: normalizeLine(store?.status, mapping.status === 1 ? "active" : "unknown"),
-      };
-    }),
-    ...connectedMagentoMappings.map((mapping) => {
-      const store = magentoById.get(mapping.magento_account_id);
-      if (!store?.base_url && !store?.name) {
-        return null;
-      }
-      return {
-        platform: "magento",
-        name: normalizeLine(store?.name, "Magento store"),
-        url: store?.base_url || null,
-        currency: store?.currency ?? null,
-        timezone: store?.timezone ?? null,
-        role: mapping.role ?? null,
-        status: normalizeLine(store?.status, mapping.status === 1 ? "active" : "unknown"),
-      };
-    }),
-  ]));
+  const storefronts = dedupeStorefronts(
+    compactDefined([
+      ...connectedShopifyMappings.map((mapping) => {
+        const shop = shopifyById.get(mapping.shopify_shop_id);
+        if (!shop?.shop_domain && !shop?.shop_name) {
+          return null;
+        }
+        return {
+          platform: "shopify",
+          name: normalizeLine(shop?.shop_name || shop?.shop_domain, "Shopify store"),
+          url: shop?.shop_domain ? `https://${shop.shop_domain}` : null,
+          currency: shop?.currency ?? null,
+          timezone: shop?.iana_timezone ?? null,
+          role: mapping.role ?? null,
+          status: normalizeLine(shop?.status, mapping.status === 1 ? "active" : "unknown"),
+        };
+      }),
+      ...connectedBigCommerceMappings.map((mapping) => {
+        const store = bigCommerceByHash.get(mapping.store_hash);
+        if (!store?.secure_url && !store?.domain && !store?.name) {
+          return null;
+        }
+        return {
+          platform: "bigcommerce",
+          name: normalizeLine(store?.name || store?.domain, "BigCommerce store"),
+          url: store?.secure_url || store?.domain || null,
+          currency: store?.currency ?? null,
+          timezone: store?.iana_timezone ?? null,
+          role: mapping.role ?? null,
+          status: normalizeLine(store?.status, mapping.status === 1 ? "active" : "unknown"),
+        };
+      }),
+      ...connectedWooMappings.map((mapping) => {
+        const store = mapping.woocommerce_account_id
+          ? wooById.get(mapping.woocommerce_account_id)
+          : null;
+        if (!store?.store_url && !store?.site_url && !mapping.site_url && !store?.site_name) {
+          return null;
+        }
+        return {
+          platform: "woocommerce",
+          name: normalizeLine(store?.site_name || mapping.site_url, "WooCommerce store"),
+          url: store?.store_url || store?.site_url || mapping.site_url || null,
+          currency: store?.currency ?? null,
+          timezone: store?.timezone ?? null,
+          role: mapping.role ?? null,
+          status: normalizeLine(store?.status, mapping.status === 1 ? "active" : "unknown"),
+        };
+      }),
+      ...connectedMagentoMappings.map((mapping) => {
+        const store = magentoById.get(mapping.magento_account_id);
+        if (!store?.base_url && !store?.name) {
+          return null;
+        }
+        return {
+          platform: "magento",
+          name: normalizeLine(store?.name, "Magento store"),
+          url: store?.base_url || null,
+          currency: store?.currency ?? null,
+          timezone: store?.timezone ?? null,
+          role: mapping.role ?? null,
+          status: normalizeLine(store?.status, mapping.status === 1 ? "active" : "unknown"),
+        };
+      }),
+    ]),
+  );
 
   const marketingPlatforms: MarketingPlatform[] = [
     ...connectedGoogleAdsMappings.map((mapping) => {
       const account = googleByCustomerId.get(mapping.customer_id);
       return {
         platform: "google_ads",
-        accountLabel: normalizeLine(account?.account_name || mapping.customer_id, "Google Ads account"),
+        accountLabel: normalizeLine(
+          account?.account_name || mapping.customer_id,
+          "Google Ads account",
+        ),
         status: normalizeLine(account?.status, mapping.status ?? "unknown"),
         timezone: account?.time_zone ?? null,
         lastSyncedAt: account?.last_synced_at ?? null,
@@ -787,7 +835,10 @@ async function buildBustlyBootstrapContext(params: {
       const account = klaviyoById.get(mapping.klaviyo_account_id);
       return {
         platform: "klaviyo",
-        accountLabel: normalizeLine(account?.account_name || mapping.klaviyo_account_id, "Klaviyo account"),
+        accountLabel: normalizeLine(
+          account?.account_name || mapping.klaviyo_account_id,
+          "Klaviyo account",
+        ),
         status: normalizeLine(account?.status, mapping.status === 1 ? "active" : "unknown"),
         timezone: account?.timezone ?? null,
         lastSyncedAt: null,
@@ -796,7 +847,10 @@ async function buildBustlyBootstrapContext(params: {
     }),
   ];
 
-  if (localCredentials.googleAds && !marketingPlatforms.some((entry) => entry.platform === "google_ads" && entry.source === "local")) {
+  if (
+    localCredentials.googleAds &&
+    !marketingPlatforms.some((entry) => entry.platform === "google_ads" && entry.source === "local")
+  ) {
     marketingPlatforms.push({
       platform: "google_ads",
       accountLabel: "Local ads-core-ops credential",
@@ -806,7 +860,10 @@ async function buildBustlyBootstrapContext(params: {
       source: "local",
     });
   }
-  if (localCredentials.klaviyo && !marketingPlatforms.some((entry) => entry.platform === "klaviyo" && entry.source === "local")) {
+  if (
+    localCredentials.klaviyo &&
+    !marketingPlatforms.some((entry) => entry.platform === "klaviyo" && entry.source === "local")
+  ) {
     marketingPlatforms.push({
       platform: "klaviyo",
       accountLabel: "Local ads-core-ops credential",
@@ -831,14 +888,21 @@ async function buildBustlyBootstrapContext(params: {
     const account = aliexpressById.get(mapping.aliexpress_account_id);
     return {
       platform: "aliexpress",
-      accountLabel: normalizeLine(account?.account_name || mapping.account_name || String(mapping.account_id ?? ""), "AliExpress account"),
+      accountLabel: normalizeLine(
+        account?.account_name || mapping.account_name || String(mapping.account_id ?? ""),
+        "AliExpress account",
+      ),
       shopName: account?.shop_name || mapping.shop_name || null,
       status: normalizeLine(account?.status, mapping.status === 1 ? "active" : "unknown"),
     };
   });
 
   const pulseBrandName = getShopInfoString(pulse, ["brand_name", "shop_name", "store_name"]);
-  const pulseBrandDomain = getShopInfoString(pulse, ["brand_domain", "shop_domain", "store_domain"]);
+  const pulseBrandDomain = getShopInfoString(pulse, [
+    "brand_domain",
+    "shop_domain",
+    "store_domain",
+  ]);
 
   const gaps: string[] = [];
   if (storefronts.length === 0) {
@@ -848,7 +912,9 @@ async function buildBustlyBootstrapContext(params: {
     gaps.push("No connected sourcing account is visible for source-product.");
   }
   if (marketingPlatforms.length === 0) {
-    gaps.push("No marketing platform is currently configured in workspace mappings or local ads credentials.");
+    gaps.push(
+      "No marketing platform is currently configured in workspace mappings or local ads credentials.",
+    );
   }
   if (!billing || billing.status !== "ACTIVE") {
     gaps.push("Workspace billing window is missing or inactive; commerce reads may be blocked.");
@@ -925,12 +991,17 @@ function buildTemplateValues(context: BustlyBootstrapContext): Record<string, st
     : "Billing is not confirmed ACTIVE; commerce reads/writes may be blocked.";
   const knownConstraints = [
     billingSummary,
-    ...context.gaps.filter((gap) => gap !== "Workspace billing window is missing or inactive; commerce reads may be blocked."),
+    ...context.gaps.filter(
+      (gap) =>
+        gap !== "Workspace billing window is missing or inactive; commerce reads may be blocked.",
+    ),
   ].join(" | ");
   const workspaceNotes = [
     `status=${context.workspace.status}`,
     `members=${context.workspace.memberCount}`,
-    context.monitoring.pulse.enabled ? `pulse=${context.monitoring.pulse.reportStatus ?? "configured"}` : "pulse=not_configured",
+    context.monitoring.pulse.enabled
+      ? `pulse=${context.monitoring.pulse.reportStatus ?? "configured"}`
+      : "pulse=not_configured",
   ].join(", ");
   const commercePlatformSummary = summarizePlatforms(
     context.commerce.storefronts.map((entry) => entry.platform),
