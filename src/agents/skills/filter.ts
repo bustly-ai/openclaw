@@ -29,3 +29,25 @@ export function matchesSkillFilter(
   }
   return cachedNormalized.every((entry, index) => entry === nextNormalized[index]);
 }
+
+export function mergeSkillFilters(
+  primary?: ReadonlyArray<unknown>,
+  secondary?: ReadonlyArray<unknown>,
+): string[] | undefined {
+  const normalizedPrimary = normalizeSkillFilter(primary);
+  const normalizedSecondary = normalizeSkillFilter(secondary);
+  if (!normalizedPrimary && !normalizedSecondary) {
+    return undefined;
+  }
+  if (!normalizedPrimary) {
+    return normalizedSecondary;
+  }
+  if (!normalizedSecondary) {
+    return normalizedPrimary;
+  }
+  if (normalizedPrimary.length === 0 || normalizedSecondary.length === 0) {
+    return [];
+  }
+  const secondarySet = new Set(normalizedSecondary);
+  return normalizedPrimary.filter((name) => secondarySet.has(name));
+}

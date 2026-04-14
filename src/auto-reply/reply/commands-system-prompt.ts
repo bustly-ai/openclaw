@@ -2,13 +2,12 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { EmbeddedContextFile } from "../../agents/pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
+import { resolveAgentSkillsFilter, resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
+import { resolveWorkspaceSkillContext } from "../../agents/skills.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { buildToolSummaryMap } from "../../agents/tool-summaries.js";
@@ -34,18 +33,24 @@ export async function resolveCommandsSystemPromptBundle(
     sessionKey: params.sessionKey,
     sessionId: params.sessionEntry?.sessionId,
   });
-  const skillsSnapshot = (() => {
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+    agentId: params.agentId,
+  });
+  const skillFilter = resolveAgentSkillsFilter(params.cfg, sessionAgentId);
+  const skillContext = (() => {
     try {
-      return buildWorkspaceSkillSnapshot(workspaceDir, {
+      return resolveWorkspaceSkillContext(workspaceDir, {
         config: params.cfg,
+        skillFilter,
         eligibility: { remote: getRemoteSkillEligibility() },
-        snapshotVersion: getSkillsSnapshotVersion(workspaceDir),
       });
     } catch {
-      return { prompt: "", skills: [], resolvedSkills: [] };
+      return { prompt: "", eligibleEntries: [], promptEntries: [], resolvedSkills: [] };
     }
   })();
-  const skillsPrompt = skillsSnapshot.prompt ?? "";
+  const skillsPrompt = skillContext.prompt ?? "";
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.ctx.SessionKey ?? params.sessionKey,
@@ -72,11 +77,6 @@ export async function resolveCommandsSystemPromptBundle(
   })();
   const toolSummaries = buildToolSummaryMap(tools);
   const toolNames = tools.map((t) => t.name);
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-    agentId: params.agentId,
-  });
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: sessionAgentId,

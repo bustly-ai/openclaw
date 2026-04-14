@@ -633,6 +633,42 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("tags hidden internal tool events so the frontend can ignore them", () => {
+    const harness = createHarness({
+      resolveSessionKeyForRun: () => "session-tool-hidden",
+    });
+    const { broadcastToConnIds, toolEventRecipients, handler } = harness;
+    addToolEventsClient(harness, { connId: "conn-1" });
+
+    registerAgentRunContext("run-tool-hidden", {
+      sessionKey: "session-tool-hidden",
+      verboseLevel: "on",
+      uiVisibility: "hidden",
+      silentReason: "post-run-review",
+    });
+    toolEventRecipients.add("run-tool-hidden", "conn-1");
+
+    handler({
+      runId: "run-tool-hidden",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: {
+        phase: "result",
+        name: "memory_write",
+        toolCallId: "tool-hidden-1",
+        result: { content: [{ type: "text", text: "secret" }] },
+      },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    const payload = broadcastToConnIds.mock.calls[0]?.[1] as {
+      data?: { openclaw?: { visibility?: string; silentReason?: string } };
+    };
+    expect(payload.data?.openclaw?.visibility).toBe("hidden");
+    expect(payload.data?.openclaw?.silentReason).toBe("post-run-review");
+  });
+
   it("suppresses heartbeat ack-like chat output when showOk is false", () => {
     const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness({
       now: 2_000,

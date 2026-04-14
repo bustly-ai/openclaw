@@ -31,6 +31,7 @@ export type ChatEventPayload = {
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
+  meta?: Record<string, unknown>;
 };
 
 function sessionKeyVariants(value: unknown): Set<string> {
@@ -284,6 +285,9 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     return null;
   }
   if (!sessionKeysMatch(payload.sessionKey, state.sessionKey)) {
+    return null;
+  }
+  if (payload.meta?.visibility === "hidden") {
     return null;
   }
 

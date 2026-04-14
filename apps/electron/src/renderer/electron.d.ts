@@ -128,7 +128,10 @@ interface BustlyWorkspaceAgent {
   agentId: string;
   agentName: string;
   name: string;
+  description?: string;
+  identityMarkdown?: string;
   icon?: string;
+  skills?: string[];
   isMain: boolean;
   createdAt: number | null;
   updatedAt: number | null;
@@ -140,6 +143,23 @@ interface BustlyWorkspaceAgentSession {
   name: string;
   icon?: string;
   updatedAt: number | null;
+}
+
+interface BustlyGlobalSkillCatalogItem {
+  id: string;
+  name: string;
+  description: string;
+  source: string;
+  sourceLabel: string;
+  skillKey: string;
+  filePath: string;
+  homepage?: string;
+  primaryEnv?: string;
+  eligible: boolean;
+  bundled: boolean;
+  category: string;
+  installed: boolean;
+  canInstall: boolean;
 }
 
 interface ElectronAPI {
@@ -194,12 +214,16 @@ interface ElectronAPI {
   ) => Promise<{ success: boolean; agentId?: string; error?: string }>;
   bustlyListAgents: (workspaceId?: string) => Promise<BustlyWorkspaceAgent[]>;
   bustlyListAgentSessions: (workspaceId: string, agentId: string) => Promise<BustlyWorkspaceAgentSession[]>;
-  bustlyCreateAgent: (
-    workspaceId: string,
-    name: string,
-    icon?: string,
-    workspaceName?: string,
-  ) => Promise<{ success: boolean; agentId?: string; error?: string }>;
+  bustlyListGlobalSkills: () => Promise<BustlyGlobalSkillCatalogItem[]>;
+  bustlyInstallGlobalSkill: (skillKey: string) => Promise<{ success: boolean; error?: string }>;
+  bustlyCreateAgent: (params: {
+    workspaceId: string;
+    name: string;
+    description?: string;
+    icon?: string;
+    workspaceName?: string;
+    skills?: string[] | null;
+  }) => Promise<{ success: boolean; agentId?: string; error?: string }>;
   bustlyCreateAgentSession: (params: {
     workspaceId: string;
     agentId: string;
@@ -211,7 +235,9 @@ interface ElectronAPI {
     workspaceId: string;
     agentId: string;
     name?: string;
+    identityMarkdown?: string;
     icon?: string;
+    skills?: string[] | null;
   }) => Promise<{ success: boolean; error?: string }>;
   bustlyDeleteAgent: (params: {
     workspaceId: string;

@@ -23,11 +23,12 @@ import { resolveSignalReactionLevel } from "../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
+import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentSkillsFilter, resolveSessionAgentIds } from "../agent-scope.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
@@ -54,11 +55,11 @@ import {
 import { detectRuntimeShell } from "../shell-utils.js";
 import {
   applySkillEnvOverrides,
-  applySkillEnvOverridesFromSnapshot,
-  loadWorkspaceSkillEntries,
-  resolveSkillsPromptForRun,
   type SkillSnapshot,
+  resolveWorkspaceSkillContext,
+  type WorkspaceSkillContext,
 } from "../skills.js";
+import { mergeSkillFilters } from "../skills/filter.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
   compactWithSafetyTimeout,
@@ -108,7 +109,9 @@ export type CompactEmbeddedPiSessionParams = {
   workspaceDir: string;
   agentDir?: string;
   config?: OpenClawConfig;
+  /** Legacy compatibility only; ignored at runtime. */
   skillsSnapshot?: SkillSnapshot;
+  skillContext?: WorkspaceSkillContext;
   provider?: string;
   model?: string;
   thinkLevel?: ThinkLevel;
@@ -255,6 +258,20 @@ export async function compactEmbeddedPiSessionDirect(
   const maxAttempts = params.maxAttempts ?? 1;
   const runId = params.runId ?? params.sessionId;
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+  });
+  const skillContext =
+    params.skillContext ??
+    resolveWorkspaceSkillContext(resolvedWorkspace, {
+      config: params.config,
+      skillFilter: mergeSkillFilters(
+        undefined,
+        params.config ? resolveAgentSkillsFilter(params.config, sessionAgentId) : undefined,
+      ),
+      eligibility: { remote: getRemoteSkillEligibility() },
+    });
   const prevCwd = process.cwd();
 
   const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
@@ -334,25 +351,12 @@ export async function compactEmbeddedPiSessionDirect(
   let restoreSkillEnv: (() => void) | undefined;
   process.chdir(effectiveWorkspace);
   try {
-    const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
-    const skillEntries = shouldLoadSkillEntries
-      ? loadWorkspaceSkillEntries(effectiveWorkspace)
-      : [];
-    restoreSkillEnv = params.skillsSnapshot
-      ? applySkillEnvOverridesFromSnapshot({
-          snapshot: params.skillsSnapshot,
-          config: params.config,
-        })
-      : applySkillEnvOverrides({
-          skills: skillEntries ?? [],
-          config: params.config,
-        });
-    const skillsPrompt = resolveSkillsPromptForRun({
-      skillsSnapshot: params.skillsSnapshot,
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+    const skillEntries = skillContext.eligibleEntries;
+    restoreSkillEnv = applySkillEnvOverrides({
+      skills: skillEntries,
       config: params.config,
-      workspaceDir: effectiveWorkspace,
     });
+    const skillsPrompt = skillContext.prompt.trim();
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const { contextFiles } = await resolveBootstrapContextForRun({
@@ -468,7 +472,7 @@ export async function compactEmbeddedPiSessionDirect(
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
     const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
     const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    const { defaultAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
     });

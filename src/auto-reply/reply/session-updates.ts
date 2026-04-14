@@ -1,7 +1,5 @@
 import crypto from "node:crypto";
 import { resolveUserTimezone } from "../../agents/date-time.js";
-import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
@@ -10,7 +8,6 @@ import {
   formatUtcTimestamp,
   formatZonedTimestamp,
 } from "../../infra/format-time/format-datetime.ts";
-import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
 
 function compactSystemEvent(line: string): string | null {
@@ -132,6 +129,54 @@ export async function prependSystemEvents(params: {
   return `${block}\n\n${params.prefixedBodyBase}`;
 }
 
+export async function ensureSessionSystemSent(params: {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  sessionId?: string;
+  isFirstTurnInSession: boolean;
+}): Promise<{
+  sessionEntry?: SessionEntry;
+  systemSent: boolean;
+}> {
+  if (process.env.OPENCLAW_TEST_FAST === "1") {
+    return {
+      sessionEntry: params.sessionEntry,
+      systemSent: params.sessionEntry?.systemSent ?? false,
+    };
+  }
+
+  let nextEntry = params.sessionEntry;
+  let systemSent = params.sessionEntry?.systemSent ?? false;
+  if (!params.isFirstTurnInSession || !params.sessionStore || !params.sessionKey) {
+    return { sessionEntry: nextEntry, systemSent };
+  }
+
+  const current = nextEntry ??
+    params.sessionStore[params.sessionKey] ?? {
+      sessionId: params.sessionId ?? crypto.randomUUID(),
+      updatedAt: Date.now(),
+    };
+  nextEntry = {
+    ...current,
+    sessionId: params.sessionId ?? current.sessionId ?? crypto.randomUUID(),
+    updatedAt: Date.now(),
+    systemSent: true,
+    skillsSnapshot: undefined,
+  };
+  params.sessionStore[params.sessionKey] = { ...params.sessionStore[params.sessionKey], ...nextEntry };
+  if (params.storePath) {
+    await updateSessionStore(params.storePath, (store) => {
+      store[params.sessionKey!] = { ...store[params.sessionKey!], ...nextEntry };
+    });
+  }
+  systemSent = true;
+  return { sessionEntry: nextEntry, systemSent };
+}
+
+// Legacy compatibility shim for older tests and call sites. Snapshot persistence
+// has been removed from the runtime path; this now only ensures `systemSent`.
 export async function ensureSkillSnapshot(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -141,117 +186,17 @@ export async function ensureSkillSnapshot(params: {
   isFirstTurnInSession: boolean;
   workspaceDir: string;
   cfg: OpenClawConfig;
-  /** If provided, only load skills with these names (for per-channel skill filtering) */
   skillFilter?: string[];
 }): Promise<{
   sessionEntry?: SessionEntry;
   skillsSnapshot?: SessionEntry["skillsSnapshot"];
   systemSent: boolean;
 }> {
-  if (process.env.OPENCLAW_TEST_FAST === "1") {
-    // In fast unit-test runs we skip filesystem scanning, watchers, and session-store writes.
-    // Dedicated skills tests cover snapshot generation behavior.
-    return {
-      sessionEntry: params.sessionEntry,
-      skillsSnapshot: params.sessionEntry?.skillsSnapshot,
-      systemSent: params.sessionEntry?.systemSent ?? false,
-    };
-  }
-
-  const {
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    sessionId,
-    isFirstTurnInSession,
-    workspaceDir,
-    cfg,
-    skillFilter,
-  } = params;
-
-  let nextEntry = sessionEntry;
-  let systemSent = sessionEntry?.systemSent ?? false;
-  const remoteEligibility = getRemoteSkillEligibility();
-  const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
-  ensureSkillsWatcher({ workspaceDir, config: cfg });
-  const currentSnapshotVersion = nextEntry?.skillsSnapshot?.version;
-  const shouldRefreshSnapshot =
-    typeof currentSnapshotVersion !== "number" || currentSnapshotVersion < snapshotVersion;
-
-  if (isFirstTurnInSession && sessionStore && sessionKey) {
-    const current = nextEntry ??
-      sessionStore[sessionKey] ?? {
-        sessionId: sessionId ?? crypto.randomUUID(),
-        updatedAt: Date.now(),
-      };
-    const skillSnapshot =
-      isFirstTurnInSession || !current.skillsSnapshot || shouldRefreshSnapshot
-        ? buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            skillFilter,
-            eligibility: { remote: remoteEligibility },
-            snapshotVersion,
-          })
-        : current.skillsSnapshot;
-    nextEntry = {
-      ...current,
-      sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
-      updatedAt: Date.now(),
-      systemSent: true,
-      skillsSnapshot: skillSnapshot,
-    };
-    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...nextEntry };
-    if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = { ...store[sessionKey], ...nextEntry };
-      });
-    }
-    systemSent = true;
-  }
-
-  const skillsSnapshot = shouldRefreshSnapshot
-    ? buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: cfg,
-        skillFilter,
-        eligibility: { remote: remoteEligibility },
-        snapshotVersion,
-      })
-    : (nextEntry?.skillsSnapshot ??
-      (isFirstTurnInSession
-        ? undefined
-        : buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            skillFilter,
-            eligibility: { remote: remoteEligibility },
-            snapshotVersion,
-          })));
-  if (
-    skillsSnapshot &&
-    sessionStore &&
-    sessionKey &&
-    !isFirstTurnInSession &&
-    (!nextEntry?.skillsSnapshot || shouldRefreshSnapshot)
-  ) {
-    const current = nextEntry ?? {
-      sessionId: sessionId ?? crypto.randomUUID(),
-      updatedAt: Date.now(),
-    };
-    nextEntry = {
-      ...current,
-      sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
-      updatedAt: Date.now(),
-      skillsSnapshot,
-    };
-    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...nextEntry };
-    if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = { ...store[sessionKey], ...nextEntry };
-      });
-    }
-  }
-
-  return { sessionEntry: nextEntry, skillsSnapshot, systemSent };
+  void params.workspaceDir;
+  void params.cfg;
+  void params.skillFilter;
+  const result = await ensureSessionSystemSent(params);
+  return { ...result, skillsSnapshot: undefined };
 }
 
 export async function incrementCompactionCount(params: {

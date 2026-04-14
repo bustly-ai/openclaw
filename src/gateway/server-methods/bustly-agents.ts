@@ -38,10 +38,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },
@@ -49,7 +46,14 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
     try {
       const workspaceId = resolveWorkspaceIdParam(params);
       const name = typeof params.name === "string" ? params.name.trim() : "";
+      const description =
+        typeof params.description === "string" ? params.description.trim() : undefined;
       const icon = typeof params.icon === "string" ? params.icon.trim() : "";
+      const skills = Array.isArray(params.skills)
+        ? params.skills.map((skill) => String(skill).trim()).filter(Boolean)
+        : params.skills === null
+          ? null
+          : undefined;
       const workspaceName =
         typeof params.workspaceName === "string" ? params.workspaceName.trim() : undefined;
       if (!workspaceId) {
@@ -61,11 +65,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         return;
       }
       if (!name) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "name is required"),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "name is required"));
         return;
       }
       const created = await createBustlyWorkspaceAgent({
@@ -73,7 +73,9 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         workspaceName,
         agentName: name,
         displayName: name,
+        description,
         icon: icon || undefined,
+        ...(skills !== undefined ? { skills } : {}),
       });
       respond(
         true,
@@ -88,10 +90,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },
@@ -100,7 +99,14 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       const workspaceId = resolveWorkspaceIdParam(params);
       const agentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
       const name = typeof params.name === "string" ? params.name.trim() : "";
+      const identityMarkdown =
+        typeof params.identityMarkdown === "string" ? params.identityMarkdown : undefined;
       const icon = typeof params.icon === "string" ? params.icon.trim() : "";
+      const skills = Array.isArray(params.skills)
+        ? params.skills.map((skill) => String(skill).trim()).filter(Boolean)
+        : params.skills === null
+          ? null
+          : undefined;
       if (!workspaceId) {
         respond(
           false,
@@ -110,18 +116,16 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         return;
       }
       if (!agentId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"));
         return;
       }
       await updateBustlyWorkspaceAgent({
         workspaceId,
         agentId,
         displayName: name || undefined,
+        identityMarkdown,
         icon: icon || undefined,
+        ...(skills !== undefined ? { skills } : {}),
       });
       respond(
         true,
@@ -136,10 +140,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },
@@ -156,11 +157,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         return;
       }
       if (!agentId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"));
         return;
       }
       await deleteBustlyWorkspaceAgent({
@@ -180,10 +177,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },
@@ -200,11 +194,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         return;
       }
       if (!agentId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"));
         return;
       }
       respond(
@@ -219,10 +209,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },
@@ -240,11 +227,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         return;
       }
       if (!agentId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"));
         return;
       }
       const created = await createBustlyWorkspaceAgentSession({
@@ -268,10 +251,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },
@@ -303,10 +283,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },

@@ -33,7 +33,7 @@ function formatSkillStatus(skill: SkillStatusEntry): string {
     return theme.warn("⏸ disabled");
   }
   if (skill.blockedByAllowlist) {
-    return theme.warn("🚫 blocked");
+    return theme.warn("✗ unavailable");
   }
   return theme.error("✗ missing");
 }
@@ -160,7 +160,7 @@ export function formatSkillInfo(
     : skill.disabled
       ? theme.warn("⏸ Disabled")
       : skill.blockedByAllowlist
-        ? theme.warn("🚫 Blocked by allowlist")
+        ? theme.warn("✗ Unavailable")
         : theme.error("✗ Missing requirements");
 
   lines.push(`${emoji} ${theme.heading(skill.name)} ${status}`);
@@ -275,7 +275,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   lines.push(`${theme.muted("Total:")} ${report.skills.length}`);
   lines.push(`${theme.success("✓")} ${theme.muted("Eligible:")} ${eligible.length}`);
   lines.push(`${theme.warn("⏸")} ${theme.muted("Disabled:")} ${disabled.length}`);
-  lines.push(`${theme.warn("🚫")} ${theme.muted("Blocked by allowlist:")} ${blocked.length}`);
+  lines.push(`${theme.warn("✗")} ${theme.muted("Unavailable:")} ${blocked.length}`);
   lines.push(`${theme.error("✗")} ${theme.muted("Missing requirements:")} ${missingReqs.length}`);
 
   if (eligible.length > 0) {

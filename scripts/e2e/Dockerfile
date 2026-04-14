@@ -14,7 +14,7 @@ COPY docs ./docs
 COPY skills ./skills
 COPY patches ./patches
 COPY ui ./ui
-COPY extensions/memory-core ./extensions/memory-core
+COPY extensions/openclaw-weixin ./extensions/openclaw-weixin
 COPY vendor/a2ui/renderers/lit ./vendor/a2ui/renderers/lit
 COPY apps/shared/OpenClawKit/Tools/CanvasA2UI ./apps/shared/OpenClawKit/Tools/CanvasA2UI
 

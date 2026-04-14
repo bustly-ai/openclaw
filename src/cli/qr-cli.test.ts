@@ -34,15 +34,6 @@ function createRemoteQrConfig(params?: { withTailscale?: boolean }) {
       remote: { url: "wss://remote.example.com:444", token: "remote-tok" },
       auth: { mode: "token", token: "local-tok" },
     },
-    plugins: {
-      entries: {
-        "device-pair": {
-          config: {
-            publicUrl: "wss://wrong.example.com:443",
-          },
-        },
-      },
-    },
   };
 }
 
@@ -143,7 +134,7 @@ describe("registerQrCli", () => {
     expect(output).toContain("only bound to loopback");
   });
 
-  it("uses gateway.remote.url when --remote is set (ignores device-pair publicUrl)", async () => {
+  it("uses gateway.remote.url when --remote is set", async () => {
     loadConfig.mockReturnValue(createRemoteQrConfig());
     await runQr(["--setup-code-only", "--remote"]);
 

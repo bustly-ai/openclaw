@@ -39,6 +39,7 @@ import {
 } from "./auto-init.js";
 import {
   ensureBundledOpenClawShim,
+  resolveBundledBustlySkillsDir,
   resolveOpenClawCliPath,
   resolveElectronRunAsNodeExecPath,
 } from "./cli-utils.js";
@@ -51,6 +52,7 @@ import {
 } from "./oauth-handler.js";
 import * as BustlyOAuth from "./bustly-oauth.js";
 import { scheduleBustlySessionTitleGeneration } from "./bustly-session-title.js";
+import { supabaseFetch } from "./api/bustly.js";
 import {
   normalizeBustlyModelRef as normalizeSharedBustlyModelRef,
   syncBustlyConfigFile as syncSharedBustlyConfigFile,
@@ -74,6 +76,8 @@ import {
   type BustlyWorkspaceAgentSummary,
 } from "../../../../src/bustly/workspace-agents.js";
 import { resolveOpenClawAgentDir } from "../../../../src/agents/agent-paths";
+import { buildGlobalSkillStatus } from "../../../../src/agents/skills-status";
+import { bumpSkillsSnapshotVersion } from "../../../../src/agents/skills/refresh";
 import { loadConfig } from "../../../../src/config/config";
 import { GatewayClient } from "../../../../src/gateway/client";
 import type { SessionsPatchResult } from "../../../../src/gateway/protocol";
@@ -102,6 +106,7 @@ import {
 import {
   loadEnabledBustlyRemoteAgentPresets,
 } from "./bustly-agent-presets.js";
+import { initializeMainHttpClient } from "./http-client.js";
 import {
   ensureMainLogPath,
   setMainLogSink,
@@ -110,7 +115,38 @@ import {
   writeMainLog,
   writeMainWarn,
 } from "./logger.js";
+import { getRemoteSkillEligibility } from "../../../../src/infra/skills-remote.js";
+import { CONFIG_DIR } from "../../../../src/utils.js";
 
+type BustlyGlobalSkillCatalogItem = {
+  id: string;
+  name: string;
+  description: string;
+  source: string;
+  sourceLabel: string;
+  skillKey: string;
+  filePath: string;
+  homepage?: string;
+  primaryEnv?: string;
+  eligible: boolean;
+  bundled: boolean;
+  category: string;
+  installed: boolean;
+  canInstall: boolean;
+};
+
+type BustlyGlobalSkillCatalogRow = {
+  slug: string | null;
+  name: string | null;
+  description: string | null;
+  sub_layer: string | null;
+  published_version_id: string | null;
+};
+
+type BustlyPublishedSkillFileRow = {
+  relative_path: string | null;
+  file_content: string | null;
+};
 type DesktopUpdateStage =
   | "idle"
   | "checking"
@@ -954,6 +990,221 @@ async function hasMissingBustlyWorkspaceSetup(workspaceId: string): Promise<bool
   });
 }
 
+const BUSTLY_SKILL_SOURCE_LABELS: Record<string, string> = {
+  "openclaw-bundled": "Built-in",
+  "openclaw-managed": "Managed",
+  "openclaw-workspace": "Workspace",
+  "openclaw-extra": "Shared",
+  "agents-skills-personal": "Workspace",
+  "agents-skills-project": "Workspace",
+  "skillops-catalog": "Catalog",
+};
+
+const BUSTLY_UPPERCASE_CATEGORY_TOKENS = new Set([
+  "ai",
+  "crm",
+  "dtc",
+  "erp",
+  "hr",
+  "mcp",
+  "qa",
+  "roi",
+  "seo",
+  "ugc",
+  "ux",
+]);
+
+function resolveBustlyManagedSkillsDir(): string {
+  return join(CONFIG_DIR, "skills");
+}
+
+function normalizeBustlySkillLookupToken(value: string | undefined): string {
+  return value
+    ?.trim()
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-+/g, "-") ?? "";
+}
+
+function toBustlyCategoryWord(part: string): string {
+  if (!part) {
+    return "";
+  }
+  if (BUSTLY_UPPERCASE_CATEGORY_TOKENS.has(part)) {
+    return part.toUpperCase();
+  }
+  return `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`;
+}
+
+function formatBustlySkillCategoryLabel(value: string | undefined): string {
+  const normalized = normalizeBustlySkillLookupToken(value);
+  if (!normalized) {
+    return "Uncategorized";
+  }
+  return normalized
+    .split("-")
+    .map((part) => toBustlyCategoryWord(part))
+    .join(" ");
+}
+
+function resolveBustlySkillSourceLabel(source: string): string {
+  return BUSTLY_SKILL_SOURCE_LABELS[source] ?? source.replace(/^openclaw-/, "").replace(/^agents-skills-/, "");
+}
+
+async function fetchBustlyGlobalSkillCatalogRows(): Promise<BustlyGlobalSkillCatalogRow[]> {
+  const query = new URLSearchParams({
+    select: "slug,name,description,sub_layer,published_version_id",
+    status: "eq.enabled",
+    order: "name.asc",
+  });
+  const response = await supabaseFetch({
+    path: `/rest/v1/skills?${query.toString()}`,
+    headers: {
+      "Accept-Profile": "skillops",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load skill catalog (status ${response.status}).`);
+  }
+  return (await response.json()) as BustlyGlobalSkillCatalogRow[];
+}
+
+function resolveBustlySkillFileTargetPath(rootDir: string, relativePath: string): string {
+  const normalized = relativePath.replaceAll("\\", "/").trim().replace(/^\/+/, "");
+  if (!normalized) {
+    throw new Error("Invalid skill file path.");
+  }
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.some((part) => part === "." || part === "..")) {
+    throw new Error(`Invalid skill file path: ${relativePath}`);
+  }
+  return join(rootDir, ...parts);
+}
+
+async function listBustlyGlobalSkillCatalog(): Promise<BustlyGlobalSkillCatalogItem[]> {
+  const [rows, cfg] = await Promise.all([fetchBustlyGlobalSkillCatalogRows(), Promise.resolve(loadConfig())]);
+  const bundledSkillsDir = resolveBundledBustlySkillsDir({
+    resourcesPath: process.resourcesPath || app.getAppPath(),
+    appPath: app.getAppPath(),
+  }) || undefined;
+  const globalStatus = buildGlobalSkillStatus({
+    config: cfg,
+    managedSkillsDir: resolveBustlyManagedSkillsDir(),
+    bundledSkillsDir,
+    eligibility: { remote: getRemoteSkillEligibility() },
+  });
+  const statusByKey = new Map<string, (typeof globalStatus.skills)[number]>();
+  const statusByName = new Map<string, (typeof globalStatus.skills)[number]>();
+  for (const skill of globalStatus.skills) {
+    const skillKeyToken = normalizeBustlySkillLookupToken(skill.skillKey);
+    const skillNameToken = normalizeBustlySkillLookupToken(skill.name);
+    if (skillKeyToken) {
+      statusByKey.set(skillKeyToken, skill);
+    }
+    if (skillNameToken) {
+      statusByName.set(skillNameToken, skill);
+    }
+  }
+  return rows.map((row, index) => {
+    const slug = row.slug?.trim() || row.name?.trim() || `skill-${index + 1}`;
+    const slugToken = normalizeBustlySkillLookupToken(row.slug ?? undefined);
+    const nameToken = normalizeBustlySkillLookupToken(row.name ?? undefined);
+    const installedSkill = (
+      (slugToken ? statusByKey.get(slugToken) : undefined)
+      || (nameToken ? statusByKey.get(nameToken) : undefined)
+      || (nameToken ? statusByName.get(nameToken) : undefined)
+    );
+    return {
+      id: slug,
+      name: row.name?.trim() || slug,
+      description: row.description?.trim() || "",
+      source: installedSkill?.source?.trim() || "skillops-catalog",
+      sourceLabel: resolveBustlySkillSourceLabel(installedSkill?.source?.trim() || "skillops-catalog"),
+      skillKey: slug,
+      filePath: installedSkill?.filePath?.trim() || "",
+      homepage: installedSkill?.homepage?.trim() || undefined,
+      primaryEnv: installedSkill?.primaryEnv?.trim() || undefined,
+      eligible: installedSkill?.eligible === true,
+      bundled: installedSkill?.bundled === true || installedSkill?.source === "openclaw-bundled",
+      category: formatBustlySkillCategoryLabel(row.sub_layer ?? undefined),
+      installed: Boolean(installedSkill),
+      canInstall: !installedSkill && Boolean(row.published_version_id?.trim()),
+    };
+  });
+}
+
+async function installBustlyGlobalSkill(skillKey: string): Promise<void> {
+  const normalizedSkillKey = skillKey.trim();
+  if (!normalizedSkillKey) {
+    throw new Error("Skill key is required.");
+  }
+  const skillQuery = new URLSearchParams({
+    select: "slug,published_version_id",
+    status: "eq.enabled",
+    slug: `eq.${normalizedSkillKey}`,
+    limit: "1",
+  });
+  const skillResponse = await supabaseFetch({
+    path: `/rest/v1/skills?${skillQuery.toString()}`,
+    headers: {
+      "Accept-Profile": "skillops",
+    },
+  });
+  if (!skillResponse.ok) {
+    throw new Error(`Failed to resolve skill "${normalizedSkillKey}" (status ${skillResponse.status}).`);
+  }
+  const [skillRow] = (await skillResponse.json()) as Array<{
+    slug: string | null;
+    published_version_id: string | null;
+  }>;
+  const publishedVersionId = skillRow?.published_version_id?.trim();
+  const slug = skillRow?.slug?.trim() || normalizedSkillKey;
+  if (!publishedVersionId) {
+    throw new Error(`Skill "${slug}" does not have a published version yet.`);
+  }
+  const filesQuery = new URLSearchParams({
+    select: "relative_path,file_content",
+    skill_version_id: `eq.${publishedVersionId}`,
+    order: "relative_path.asc",
+  });
+  const filesResponse = await supabaseFetch({
+    path: `/rest/v1/skill_version_files?${filesQuery.toString()}`,
+    headers: {
+      "Accept-Profile": "skillops",
+    },
+  });
+  if (!filesResponse.ok) {
+    throw new Error(`Failed to download skill "${slug}" files (status ${filesResponse.status}).`);
+  }
+  const files = (await filesResponse.json()) as BustlyPublishedSkillFileRow[];
+  if (files.length === 0) {
+    throw new Error(`Skill "${slug}" does not contain any published files.`);
+  }
+  const targetRoot = join(resolveBustlyManagedSkillsDir(), slug);
+  rmSync(targetRoot, { recursive: true, force: true });
+  mkdirSync(targetRoot, { recursive: true });
+  let hasSkillMd = false;
+  for (const file of files) {
+    const relativePath = file.relative_path?.trim();
+    if (!relativePath) {
+      continue;
+    }
+    const targetPath = resolveBustlySkillFileTargetPath(targetRoot, relativePath);
+    mkdirSync(dirname(targetPath), { recursive: true });
+    writeFileSync(targetPath, file.file_content ?? "", "utf-8");
+    if (relativePath.replaceAll("\\", "/") === "SKILL.md") {
+      hasSkillMd = true;
+    }
+  }
+  if (!hasSkillMd) {
+    rmSync(targetRoot, { recursive: true, force: true });
+    throw new Error(`Skill "${slug}" is missing SKILL.md.`);
+  }
+  bumpSkillsSnapshotVersion({ reason: "manual" });
+}
 async function ensureBustlyPresetAgents(params: {
   workspaceId: string;
   workspaceName?: string;
@@ -979,14 +1230,18 @@ async function createBustlyWorkspaceAgent(params: {
   workspaceName?: string;
   agentName: string;
   displayName?: string;
+  description?: string;
   icon?: string;
+  skills?: string[] | null;
 }): Promise<{ agentId: string; workspaceDir: string }> {
   return await createSharedBustlyWorkspaceAgent({
     workspaceId: params.workspaceId,
     workspaceName: params.workspaceName,
     agentName: params.agentName,
     displayName: params.displayName,
+    description: params.description,
     icon: params.icon,
+    ...(params.skills !== undefined ? { skills: params.skills } : {}),
     configPath: resolveElectronConfigPath(),
     allowCreateConfig: false,
     env: process.env,
@@ -1044,13 +1299,17 @@ async function updateBustlyWorkspaceAgent(params: {
   workspaceId: string;
   agentId: string;
   displayName?: string;
+  identityMarkdown?: string;
   icon?: string;
+  skills?: string[] | null;
 }): Promise<void> {
   await updateSharedBustlyWorkspaceAgent({
     workspaceId: params.workspaceId,
     agentId: params.agentId,
     displayName: params.displayName,
+    identityMarkdown: params.identityMarkdown,
     icon: params.icon,
+    ...(params.skills !== undefined ? { skills: params.skills } : {}),
     configPath: resolveElectronConfigPath(),
     env: process.env,
   });
@@ -3671,26 +3930,55 @@ function setupIpcHandlers(): void {
     }
   });
 
+  ipcMain.handle("bustly-list-global-skills", async () => {
+    try {
+      return await listBustlyGlobalSkillCatalog();
+    } catch (error) {
+      writeMainWarn(
+        `[Bustly Skills] Failed to load global skill catalog: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return [];
+    }
+  });
+
+  ipcMain.handle("bustly-install-global-skill", async (_event, skillKey: string) => {
+    try {
+      await installBustlyGlobalSkill(skillKey);
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
   ipcMain.handle(
     "bustly-create-agent",
     async (
       _event,
-      workspaceId: string,
-      name: string,
-      icon?: string,
-      workspaceName?: string,
+      params: {
+        workspaceId: string;
+        name: string;
+        description?: string;
+        icon?: string;
+        workspaceName?: string;
+        skills?: string[] | null;
+      },
     ) => {
       try {
-        const trimmedName = typeof name === "string" ? name.trim() : "";
+        const trimmedName = typeof params?.name === "string" ? params.name.trim() : "";
         if (!trimmedName) {
           return { success: false, error: "Agent name is required." };
         }
         const result = await createBustlyWorkspaceAgent({
-          workspaceId,
-          workspaceName,
+          workspaceId: params.workspaceId,
+          workspaceName: params.workspaceName,
           agentName: trimmedName,
           displayName: trimmedName,
-          icon,
+          description: params.description,
+          icon: params.icon,
+          skills: params.skills,
         });
         return {
           success: true,
@@ -3736,14 +4024,23 @@ function setupIpcHandlers(): void {
     "bustly-update-agent",
     async (
       _event,
-      params: { workspaceId: string; agentId: string; name?: string; icon?: string },
+      params: {
+        workspaceId: string;
+        agentId: string;
+        name?: string;
+        identityMarkdown?: string;
+        icon?: string;
+        skills?: string[] | null;
+      },
     ) => {
       try {
         await updateBustlyWorkspaceAgent({
           workspaceId: params.workspaceId,
           agentId: params.agentId,
           displayName: params.name,
+          identityMarkdown: params.identityMarkdown,
           icon: params.icon,
+          skills: params.skills,
         });
         return { success: true };
       } catch (error) {
@@ -4153,6 +4450,11 @@ void app.whenReady().then(async () => {
     }
   };
   loadDotEnv();
+  try {
+    await initializeMainHttpClient();
+  } catch (error) {
+    writeMainError("[HTTP] Main HTTP client initialization failed:", error);
+  }
   if (await handlePendingInstallOnLaunch()) {
     return;
   }

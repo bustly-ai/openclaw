@@ -634,7 +634,7 @@ async function buildBustlyBootstrapContext(params: {
   const [shopifyShops, bigCommerceAccounts, wooAccounts, magentoAccounts, googleAdsAccounts, klaviyoAccounts, aliexpressAccounts] =
     await Promise.all([
       shopifyIds.length > 0
-        ? fetchManyOptional(
+        ? fetchManyOptional<ShopifyShopRow>(
             client
               .from("shopify_shops")
               .select("id, shop_domain, shop_name, email, currency, iana_timezone, status")
@@ -652,7 +652,7 @@ async function buildBustlyBootstrapContext(params: {
           )
         : Promise.resolve([] as BigCommerceAccountRow[]),
       wooIds.length > 0
-        ? fetchManyOptional(
+        ? fetchManyOptional<WooAccountRow>(
             client
               .from("woocommerce_accounts")
               .select("id, site_url, site_name, store_url, currency, timezone, status")
@@ -661,7 +661,7 @@ async function buildBustlyBootstrapContext(params: {
           )
         : Promise.resolve([] as WooAccountRow[]),
       magentoIds.length > 0
-        ? fetchManyOptional(
+        ? fetchManyOptional<MagentoAccountRow>(
             client
               .from("magento_accounts")
               .select("id, name, base_url, currency, timezone, status")
@@ -670,7 +670,7 @@ async function buildBustlyBootstrapContext(params: {
           )
         : Promise.resolve([] as MagentoAccountRow[]),
       googleCustomerIds.length > 0
-        ? fetchManyOptional(
+        ? fetchManyOptional<GoogleAdsAccountRow>(
             client
               .from("google_ad_accounts")
               .select("customer_id, account_name, currency_code, time_zone, status, last_synced_at")
@@ -679,7 +679,7 @@ async function buildBustlyBootstrapContext(params: {
           )
         : Promise.resolve([] as GoogleAdsAccountRow[]),
       klaviyoAccountIds.length > 0
-        ? fetchManyOptional(
+        ? fetchManyOptional<KlaviyoAccountRow>(
             client
               .from("klaviyo_accounts")
               .select("account_id, account_name, timezone, currency_code, status, webhooks_registered")
@@ -688,7 +688,7 @@ async function buildBustlyBootstrapContext(params: {
           )
         : Promise.resolve([] as KlaviyoAccountRow[]),
       aliexpressIds.length > 0
-        ? fetchManyOptional(
+        ? fetchManyOptional<AliExpressAccountRow>(
             client
               .from("aliexpress_accounts")
               .select("id, account_id, account_name, shop_name, login_email, status")

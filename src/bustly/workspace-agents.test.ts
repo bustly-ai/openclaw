@@ -9,6 +9,7 @@ import {
   deleteBustlyWorkspaceAgent,
   listBustlyWorkspaceAgentSessions,
   listBustlyWorkspaceAgents,
+  updateBustlyWorkspaceAgent,
 } from "./workspace-agents.js";
 
 const bootstrapMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -87,6 +88,65 @@ describe("workspace-agents", () => {
       env: process.env,
     });
     expect(listed.some((entry) => entry.agentId === "bustly-workspace-1-growth")).toBe(true);
+  });
+
+  it("persists bustly workspace agent identity and skill metadata", async () => {
+    const created = await createBustlyWorkspaceAgent({
+      workspaceId: "workspace-1",
+      agentName: "growth",
+      displayName: "Growth",
+      description: "Own performance marketing and weekly reporting.",
+      skills: ["reports", "ads", "reports"],
+      configPath,
+      env: process.env,
+    });
+
+    let listed = listBustlyWorkspaceAgents({
+      workspaceId: "workspace-1",
+      configPath,
+      env: process.env,
+    });
+    expect(listed.find((entry) => entry.agentId === created.agentId)).toMatchObject({
+      agentId: created.agentId,
+      name: "Growth",
+      description: "Own performance marketing and weekly reporting.",
+      skills: ["ads", "reports"],
+    });
+    expect(listed.find((entry) => entry.agentId === created.agentId)?.identityMarkdown).toContain(
+      "Own performance marketing and weekly reporting.",
+    );
+
+    await updateBustlyWorkspaceAgent({
+      workspaceId: "workspace-1",
+      agentId: created.agentId,
+      displayName: "Growth Ops",
+      identityMarkdown: [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: Growth Ops",
+        "- Role: Commerce Operating Agent",
+        "",
+        "## Mission",
+        "",
+        "Run growth experiments and coordinate reporting.",
+        "",
+      ].join("\n"),
+      skills: null,
+      configPath,
+      env: process.env,
+    });
+
+    listed = listBustlyWorkspaceAgents({
+      workspaceId: "workspace-1",
+      configPath,
+      env: process.env,
+    });
+    expect(listed.find((entry) => entry.agentId === created.agentId)).toMatchObject({
+      agentId: created.agentId,
+      name: "Growth Ops",
+      description: "Run growth experiments and coordinate reporting.",
+    });
+    expect(listed.find((entry) => entry.agentId === created.agentId)?.skills).toBeUndefined();
   });
 
   it("creates and lists bustly workspace agent sessions", async () => {

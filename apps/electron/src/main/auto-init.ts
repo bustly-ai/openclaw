@@ -624,6 +624,7 @@ export interface InitializationResult {
 export interface InitializationOptions extends PresetConfigOptions {
   force?: boolean;
   openrouterApiKey?: string;
+  workspace?: string;
 }
 
 export async function initializeOpenClaw(

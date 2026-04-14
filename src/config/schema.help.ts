@@ -908,6 +908,22 @@ export const FIELD_HELP: Record<string, string> = {
     "User-prompt template used for the pre-compaction memory flush turn when generating memory candidates. Use this only when you need custom extraction instructions beyond the default memory flush behavior.",
   "agents.defaults.compaction.memoryFlush.systemPrompt":
     "System-prompt override for the pre-compaction memory flush turn to control extraction style and safety constraints. Use carefully so custom instructions do not reduce memory quality or leak sensitive context.",
+  "agents.defaults.selfEvolution":
+    "Hermes-style self-evolution controls. By default, OpenClaw runs a silent post-run review loop after every completed agent turn, revisits the just-finished turn, and can write durable memory or evolve reusable skills without sending a user-visible reply.",
+  "agents.defaults.selfEvolution.enabled":
+    "Force-disable or force-enable the self-evolution loop. Default behavior is enabled; set this to false only when you explicitly need to suppress automatic post-run review.",
+  "agents.defaults.selfEvolution.reviewModel":
+    "Dedicated model ref used for the silent post-run review/consolidation run. Defaults to bustly/chat.standard so the classifier does not reuse the main task model unless you explicitly override it.",
+  "agents.defaults.selfEvolution.minToolCalls":
+    "Reserved review-policy knob for future cost heuristics. In the current Hermes-style v1 flow, post-run review runs after every completed turn and the review turn itself decides whether to write memory.",
+  "agents.defaults.selfEvolution.maxRecentMessages":
+    "How many recent transcript messages to inspect when isolating the current turn for post-run review. Increase only if your turns regularly exceed the default inspection window.",
+  "agents.defaults.selfEvolution.allowInGroupChats":
+    "Allows silent post-run memory review to trigger in group or channel sessions. Keep false by default to avoid over-learning from noisy multi-party conversations.",
+  "agents.defaults.selfEvolution.prompt":
+    "User-prompt template for the silent post-run memory review turn. Use this to customize what kinds of durable facts should be written to memory.",
+  "agents.defaults.selfEvolution.systemPrompt":
+    "System-prompt override for the silent post-run memory review turn. Use carefully so the review stays memory-focused and does not attempt user-visible work.",
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",

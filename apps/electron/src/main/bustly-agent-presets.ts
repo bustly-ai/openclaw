@@ -1,4 +1,5 @@
 import { normalizeBustlyAgentName, DEFAULT_BUSTLY_AGENT_NAME } from "../shared/bustly-agent.js";
+import { mainHttpFetch } from "./http-client.js";
 import { writeMainWarn } from "./logger.js";
 
 export type BustlyRemoteUseCase = {
@@ -180,47 +181,46 @@ function validatePresets(raw: BustlyRemoteAgentConfig): BustlyRemoteAgentPreset[
     throw new Error("Bustly agent config is missing agents[].");
   }
 
-  const presets = rawAgents
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return null;
-      }
-      const candidate = entry as Record<string, unknown>;
-      const slug = normalizeBustlyAgentName(typeof candidate.slug === "string" ? candidate.slug : "");
-      const label = typeof candidate.label === "string" ? candidate.label.trim() : "";
-      const icon = typeof candidate.icon === "string" ? candidate.icon.trim() : "";
-      const order = typeof candidate.order === "number" && Number.isFinite(candidate.order) ? candidate.order : null;
-      if (!slug || !label || !icon || order == null) {
-        return null;
-      }
-      return {
-        slug,
-        label,
-        icon,
-        order,
-        enabled: candidate.enabled === false ? false : true,
-        isMain: candidate.isMain === true,
-        model: typeof candidate.model === "string" ? candidate.model.trim() || undefined : undefined,
-        description:
-          typeof candidate.description === "string" ? candidate.description.trim() || undefined : undefined,
-        useCases: Array.isArray(candidate.useCases)
-          ? candidate.useCases.flatMap((rawUseCase) => {
-              if (!rawUseCase || typeof rawUseCase !== "object") {
-                return [];
-              }
-              const useCase = rawUseCase as Record<string, unknown>;
-              const useCaseIcon = typeof useCase.icon === "string" ? useCase.icon.trim() : "";
-              const useCaseLabel = typeof useCase.label === "string" ? useCase.label.trim() : "";
-              const prompt = typeof useCase.prompt === "string" ? useCase.prompt.trim() : "";
-              if (!useCaseIcon || !useCaseLabel || !prompt) {
-                return [];
-              }
-              return [{ icon: useCaseIcon, label: useCaseLabel, prompt }];
-            })
-          : [],
-      } satisfies BustlyRemoteAgentPreset;
-    })
-    .filter((entry): entry is BustlyRemoteAgentPreset => entry != null);
+  const presets: BustlyRemoteAgentPreset[] = [];
+  for (const entry of rawAgents) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const candidate = entry as Record<string, unknown>;
+    const slug = normalizeBustlyAgentName(typeof candidate.slug === "string" ? candidate.slug : "");
+    const label = typeof candidate.label === "string" ? candidate.label.trim() : "";
+    const icon = typeof candidate.icon === "string" ? candidate.icon.trim() : "";
+    const order = typeof candidate.order === "number" && Number.isFinite(candidate.order) ? candidate.order : null;
+    if (!slug || !label || !icon || order == null) {
+      continue;
+    }
+    presets.push({
+      slug,
+      label,
+      icon,
+      order,
+      enabled: candidate.enabled === false ? false : true,
+      isMain: candidate.isMain === true,
+      model: typeof candidate.model === "string" ? candidate.model.trim() || undefined : undefined,
+      description:
+        typeof candidate.description === "string" ? candidate.description.trim() || undefined : undefined,
+      useCases: Array.isArray(candidate.useCases)
+        ? candidate.useCases.flatMap((rawUseCase) => {
+            if (!rawUseCase || typeof rawUseCase !== "object") {
+              return [];
+            }
+            const useCase = rawUseCase as Record<string, unknown>;
+            const useCaseIcon = typeof useCase.icon === "string" ? useCase.icon.trim() : "";
+            const useCaseLabel = typeof useCase.label === "string" ? useCase.label.trim() : "";
+            const prompt = typeof useCase.prompt === "string" ? useCase.prompt.trim() : "";
+            if (!useCaseIcon || !useCaseLabel || !prompt) {
+              return [];
+            }
+            return [{ icon: useCaseIcon, label: useCaseLabel, prompt }];
+          })
+        : [],
+    });
+  }
 
   if (presets.length === 0) {
     throw new Error("Bustly agent config has no valid agents.");
@@ -237,7 +237,10 @@ export async function loadBustlyRemoteAgentPresets(
   if (!presetsPromise) {
     presetsPromise = (async () => {
       try {
-        const response = await fetch(resolveAgentConfigUrl(env));
+        const response = await mainHttpFetch(resolveAgentConfigUrl(env), {
+          label: "Bustly Agent Presets",
+          timeoutMs: 15_000,
+        });
         if (!response.ok) {
           throw new Error(`Failed to fetch Bustly agent config: ${response.status} ${response.statusText}`);
         }

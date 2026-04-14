@@ -2,14 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
-import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { createTelegramTestPlugin } from "../test-utils/channel-plugin-stubs.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { setHeartbeatsEnabled } from "./heartbeat-runner.js";
 
 export type HeartbeatSessionSeed = {
   sessionId?: string;
@@ -66,9 +65,11 @@ export async function withTempHeartbeatSandbox<T>(
     previousEnv.set(envName, process.env[envName]);
     process.env[envName] = "";
   }
+  setHeartbeatsEnabled(true);
   try {
     return await fn({ tmpDir, storePath, replySpy });
   } finally {
+    setHeartbeatsEnabled(false);
     replySpy.mockRestore();
     for (const [envName, previousValue] of previousEnv.entries()) {
       if (previousValue === undefined) {
@@ -98,9 +99,9 @@ export async function withTempTelegramHeartbeatSandbox<T>(
 }
 
 export function setupTelegramHeartbeatPluginRuntimeForTests() {
-  const runtime = createPluginRuntime();
-  setTelegramRuntime(runtime);
   setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+    createTestRegistry([
+      { pluginId: "telegram", plugin: createTelegramTestPlugin(), source: "test" },
+    ]),
   );
 }

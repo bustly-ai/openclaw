@@ -822,9 +822,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (
     authChoice === "oauth" ||
     authChoice === "chutes" ||
-    authChoice === "openai-codex" ||
-    authChoice === "qwen-portal" ||
-    authChoice === "minimax-portal"
+    authChoice === "openai-codex"
   ) {
     runtime.error("OAuth requires interactive mode.");
     runtime.exit(1);

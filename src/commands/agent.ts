@@ -3,7 +3,6 @@ import {
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
-  resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
@@ -24,8 +23,6 @@ import {
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
-import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import {
@@ -55,7 +52,6 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
-import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
@@ -76,9 +72,13 @@ type PersistSessionEntryParams = {
 };
 
 async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
-  params.sessionStore[params.sessionKey] = params.entry;
+  const nextEntry: SessionEntry = {
+    ...params.entry,
+    skillsSnapshot: undefined,
+  };
+  params.sessionStore[params.sessionKey] = nextEntry;
   await updateSessionStore(params.storePath, (store) => {
-    store[params.sessionKey] = params.entry;
+    store[params.sessionKey] = nextEntry;
   });
 }
 
@@ -108,7 +108,6 @@ function runAgentAttempt(params: {
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
   messageChannel: ReturnType<typeof resolveMessageChannel>;
-  skillsSnapshot: ReturnType<typeof buildWorkspaceSkillSnapshot> | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   agentDir: string;
   onAgentEvent: (evt: { stream: string; data?: Record<string, unknown> }) => void;
@@ -164,7 +163,6 @@ function runAgentAttempt(params: {
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
-    skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
     images: params.isFallbackRetry ? undefined : params.opts.images,
     clientTools: params.opts.clientTools,
@@ -273,7 +271,6 @@ export async function agentCommand(
     sessionEntry: resolvedSessionEntry,
     sessionStore,
     storePath,
-    isNewSession,
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
@@ -320,44 +317,6 @@ export async function agentCommand(
         sessionKey,
         verboseLevel: resolvedVerboseLevel,
       });
-    }
-
-    ensureSkillsWatcher({ workspaceDir, config: cfg });
-    const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
-    const currentSkillsSnapshotVersion = sessionEntry?.skillsSnapshot?.version;
-    const shouldRefreshSkillsSnapshot =
-      typeof currentSkillsSnapshotVersion !== "number" ||
-      currentSkillsSnapshotVersion < skillsSnapshotVersion;
-    const needsSkillsSnapshot =
-      isNewSession || !sessionEntry?.skillsSnapshot || shouldRefreshSkillsSnapshot;
-    const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
-    const skillsSnapshot = needsSkillsSnapshot
-      ? buildWorkspaceSkillSnapshot(workspaceDir, {
-          config: cfg,
-          eligibility: { remote: getRemoteSkillEligibility() },
-          snapshotVersion: skillsSnapshotVersion,
-          skillFilter,
-        })
-      : sessionEntry?.skillsSnapshot;
-
-    if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
-      const current = sessionEntry ?? {
-        sessionId,
-        updatedAt: Date.now(),
-      };
-      const next: SessionEntry = {
-        ...current,
-        sessionId,
-        updatedAt: Date.now(),
-        skillsSnapshot,
-      };
-      await persistSessionEntry({
-        sessionStore,
-        sessionKey,
-        storePath,
-        entry: next,
-      });
-      sessionEntry = next;
     }
 
     // Persist explicit /command overrides to the session store when we have a key.
@@ -584,7 +543,6 @@ export async function agentCommand(
             runContext,
             spawnedBy,
             messageChannel,
-            skillsSnapshot,
             resolvedVerboseLevel,
             agentDir,
             primaryProvider: provider,

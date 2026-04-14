@@ -96,8 +96,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
   bustlyListAgents: (workspaceId?: string) => ipcRenderer.invoke("bustly-list-agents", workspaceId),
   bustlyListAgentSessions: (workspaceId: string, agentId: string) =>
     ipcRenderer.invoke("bustly-list-agent-sessions", workspaceId, agentId),
-  bustlyCreateAgent: (workspaceId: string, name: string, icon?: string, workspaceName?: string) =>
-    ipcRenderer.invoke("bustly-create-agent", workspaceId, name, icon, workspaceName),
+  bustlyListGlobalSkills: () => ipcRenderer.invoke("bustly-list-global-skills"),
+  bustlyInstallGlobalSkill: (skillKey: string) => ipcRenderer.invoke("bustly-install-global-skill", skillKey),
+  bustlyCreateAgent: (params: {
+    workspaceId: string;
+    name: string;
+    description?: string;
+    icon?: string;
+    workspaceName?: string;
+    skills?: string[] | null;
+  }) =>
+    ipcRenderer.invoke("bustly-create-agent", params),
   bustlyCreateAgentSession: (params: {
     workspaceId: string;
     agentId: string;
@@ -106,7 +115,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     sampleRouteKey?: string;
   }) =>
     ipcRenderer.invoke("bustly-create-agent-session", params),
-  bustlyUpdateAgent: (params: { workspaceId: string; agentId: string; name?: string; icon?: string }) =>
+  bustlyUpdateAgent: (params: {
+    workspaceId: string;
+    agentId: string;
+    name?: string;
+    identityMarkdown?: string;
+    icon?: string;
+    skills?: string[] | null;
+  }) =>
     ipcRenderer.invoke("bustly-update-agent", params),
   bustlyDeleteAgent: (params: { workspaceId: string; agentId: string }) =>
     ipcRenderer.invoke("bustly-delete-agent", params),

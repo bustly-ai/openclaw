@@ -46,7 +46,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
 import { BARE_SESSION_RESET_PROMPT } from "./session-reset-prompt.js";
-import { buildQueuedSystemEventBlock, ensureSkillSnapshot } from "./session-updates.js";
+import { buildQueuedSystemEventBlock, ensureSessionSystemSent } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
 
@@ -341,20 +341,16 @@ export async function runPreparedReply(
     : threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
-  const skillResult = await ensureSkillSnapshot({
+  const sessionUpdate = await ensureSessionSystemSent({
     sessionEntry,
     sessionStore,
     sessionKey,
     storePath,
     sessionId,
     isFirstTurnInSession,
-    workspaceDir,
-    cfg,
-    skillFilter: opts?.skillFilter,
   });
-  sessionEntry = skillResult.sessionEntry ?? sessionEntry;
-  currentSystemSent = skillResult.systemSent;
-  const skillsSnapshot = skillResult.skillsSnapshot;
+  sessionEntry = sessionUpdate.sessionEntry ?? sessionEntry;
+  currentSystemSent = sessionUpdate.systemSent;
   const prefixedBody = [threadContextNote, prefixedBodyBase].filter(Boolean).join("\n\n");
   const mediaNote = buildInboundMediaNote(ctx);
   const mediaReplyHint = mediaNote
@@ -483,7 +479,7 @@ export async function runPreparedReply(
       sessionFile,
       workspaceDir,
       config: cfg,
-      skillsSnapshot,
+      skillFilter: opts?.skillFilter,
       provider,
       model,
       authProfileId,

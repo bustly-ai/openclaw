@@ -201,7 +201,6 @@ export const SkillsInstallParamsSchema = Type.Object(
 export const SkillsUpdateParamsSchema = Type.Object(
   {
     skillKey: NonEmptyString,
-    enabled: Type.Optional(Type.Boolean()),
     apiKey: Type.Optional(Type.String()),
     env: Type.Optional(Type.Record(NonEmptyString, Type.String())),
   },

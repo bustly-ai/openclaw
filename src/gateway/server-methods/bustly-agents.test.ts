@@ -118,6 +118,56 @@ describe("gateway bustly agent/session handlers", () => {
     );
   });
 
+  it("passes through bustly agent metadata fields", async () => {
+    mocks.createBustlyWorkspaceAgent.mockResolvedValue({
+      agentId: "bustly-workspace-1-growth",
+      workspaceDir: "/tmp/workspaces/workspace-1/agents/growth",
+    });
+    await invoke("bustly.agents.create", {
+      workspaceId: "workspace-1",
+      name: "growth",
+      description: "Run growth reporting.",
+      skills: ["ads", "reporting"],
+    });
+    expect(mocks.createBustlyWorkspaceAgent).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      workspaceName: undefined,
+      agentName: "growth",
+      displayName: "growth",
+      description: "Run growth reporting.",
+      skills: ["ads", "reporting"],
+      icon: undefined,
+    });
+  });
+
+  it("passes through bustly agent update identity and skills", async () => {
+    mocks.updateBustlyWorkspaceAgent.mockResolvedValue(undefined);
+    const respond = await invoke("bustly.agents.update", {
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-growth",
+      name: "Growth Ops",
+      identityMarkdown: "# IDENTITY\n\n## Mission\n\nRun growth ops.",
+      skills: null,
+    });
+    expect(mocks.updateBustlyWorkspaceAgent).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-growth",
+      displayName: "Growth Ops",
+      identityMarkdown: "# IDENTITY\n\n## Mission\n\nRun growth ops.",
+      skills: null,
+      icon: undefined,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: true,
+        workspaceId: "workspace-1",
+        agentId: "bustly-workspace-1-growth",
+      },
+      undefined,
+    );
+  });
+
   it("creates a bustly session and returns key/id", async () => {
     mocks.createBustlyWorkspaceAgentSession.mockResolvedValue({
       agentId: "bustly-workspace-1-overview",

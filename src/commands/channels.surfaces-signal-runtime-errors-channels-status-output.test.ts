@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { signalPlugin } from "../../extensions/signal/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createSignalTestPlugin } from "../test-utils/channel-plugin-stubs.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../test-utils/imessage-test-plugin.js";
 import { formatGatewayChannelsStatusLines } from "./channels/status.js";
@@ -8,7 +8,9 @@ import { formatGatewayChannelsStatusLines } from "./channels/status.js";
 describe("channels command", () => {
   beforeEach(() => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "signal", source: "test", plugin: signalPlugin }]),
+      createTestRegistry([
+        { pluginId: "signal", source: "test", plugin: createSignalTestPlugin() },
+      ]),
     );
   });
 

@@ -19,7 +19,6 @@ export type SkillsProps = {
   messages: SkillMessageMap;
   onFilterChange: (next: string) => void;
   onRefresh: () => void;
-  onToggle: (skillKey: string, enabled: boolean) => void;
   onEdit: (skillKey: string, value: string) => void;
   onSaveKey: (skillKey: string) => void;
   onInstall: (skillKey: string, name: string, installId: string) => void;
@@ -27,6 +26,7 @@ export type SkillsProps = {
 
 export function renderSkills(props: SkillsProps) {
   const skills = props.report?.skills ?? [];
+  const scope = props.report?.scope ?? "global";
   const filter = props.filter.trim().toLowerCase();
   const filtered = filter
     ? skills.filter((skill) =>
@@ -39,8 +39,14 @@ export function renderSkills(props: SkillsProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Skills</div>
-          <div class="card-sub">Bundled, managed, and workspace skills.</div>
+          <div class="card-title">Skills Hub</div>
+          <div class="card-sub">
+            ${
+              scope === "agent"
+                ? "Skills visible to this agent."
+                : "Global catalog for built-in, shared, and agent-created skills."
+            }
+          </div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? "Loading…" : "Refresh"}
@@ -98,7 +104,6 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
   const apiKey = props.edits[skill.skillKey] ?? "";
   const message = props.messages[skill.skillKey] ?? null;
   const canInstall = skill.install.length > 0 && skill.missing.bins.length > 0;
-  const showBundledBadge = Boolean(skill.bundled && skill.source !== "openclaw-bundled");
   const missing = computeSkillMissing(skill);
   const reasons = computeSkillReasons(skill);
   return html`
@@ -108,7 +113,7 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
           ${skill.emoji ? `${skill.emoji} ` : ""}${skill.name}
         </div>
         <div class="list-sub">${clampText(skill.description, 140)}</div>
-        ${renderSkillStatusChips({ skill, showBundledBadge })}
+        ${renderSkillStatusChips({ skill })}
         ${
           missing.length > 0
             ? html`
@@ -130,13 +135,6 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
       </div>
       <div class="list-meta">
         <div class="row" style="justify-content: flex-end; flex-wrap: wrap;">
-          <button
-            class="btn"
-            ?disabled=${busy}
-            @click=${() => props.onToggle(skill.skillKey, skill.disabled)}
-          >
-            ${skill.disabled ? "Enable" : "Disable"}
-          </button>
           ${
             canInstall
               ? html`<button

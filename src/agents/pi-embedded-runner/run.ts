@@ -5,11 +5,13 @@ import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
+import { resolveAgentSkillsFilter } from "../agent-scope.js";
 import {
   isProfileInCooldown,
   markAuthProfileFailure,
@@ -51,6 +53,8 @@ import {
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
+import { mergeSkillFilters } from "../skills/filter.js";
+import { resolveWorkspaceSkillContext } from "../skills.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveSessionLane } from "./lanes.js";
@@ -219,6 +223,19 @@ export async function runEmbeddedPiAgent(
         config: params.config,
       });
       const resolvedWorkspace = workspaceResolution.workspaceDir;
+      const resolvedSkillFilter = mergeSkillFilters(
+        params.skillFilter,
+        params.config && workspaceResolution.agentId
+          ? resolveAgentSkillsFilter(params.config, workspaceResolution.agentId)
+          : undefined,
+      );
+      const skillContext =
+        params.skillContext ??
+        resolveWorkspaceSkillContext(resolvedWorkspace, {
+          config: params.config,
+          skillFilter: resolvedSkillFilter,
+          eligibility: { remote: getRemoteSkillEligibility() },
+        });
       const redactedSessionId = redactRunIdentifier(params.sessionId);
       const redactedSessionKey = redactRunIdentifier(params.sessionKey);
       const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
@@ -592,7 +609,7 @@ export async function runEmbeddedPiAgent(
             workspaceDir: resolvedWorkspace,
             agentDir,
             config: params.config,
-            skillsSnapshot: params.skillsSnapshot,
+            skillContext,
             prompt,
             retryWithoutNewUser: params.retryWithoutNewUser,
             images: params.images,
@@ -740,7 +757,7 @@ export async function runEmbeddedPiAgent(
                 workspaceDir: resolvedWorkspace,
                 agentDir,
                 config: params.config,
-                skillsSnapshot: params.skillsSnapshot,
+                skillContext,
                 senderIsOwner: params.senderIsOwner,
                 provider,
                 model: modelId,

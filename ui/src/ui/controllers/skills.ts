@@ -71,31 +71,6 @@ export function updateSkillEdit(state: SkillsState, skillKey: string, value: str
   state.skillEdits = { ...state.skillEdits, [skillKey]: value };
 }
 
-export async function updateSkillEnabled(state: SkillsState, skillKey: string, enabled: boolean) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  state.skillsBusyKey = skillKey;
-  state.skillsError = null;
-  try {
-    await state.client.request("skills.update", { skillKey, enabled });
-    await loadSkills(state);
-    setSkillMessage(state, skillKey, {
-      kind: "success",
-      message: enabled ? "Skill enabled" : "Skill disabled",
-    });
-  } catch (err) {
-    const message = getErrorMessage(err);
-    state.skillsError = message;
-    setSkillMessage(state, skillKey, {
-      kind: "error",
-      message,
-    });
-  } finally {
-    state.skillsBusyKey = null;
-  }
-}
-
 export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
   if (!state.client || !state.connected) {
     return;

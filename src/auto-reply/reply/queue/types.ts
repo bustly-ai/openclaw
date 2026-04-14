@@ -59,7 +59,9 @@ export type FollowupRun = {
     sessionFile: string;
     workspaceDir: string;
     config: OpenClawConfig;
+    /** Legacy compatibility only; ignored by the embedded runner. */
     skillsSnapshot?: SkillSnapshot;
+    skillFilter?: string[];
     provider: string;
     model: string;
     authProfileId?: string;

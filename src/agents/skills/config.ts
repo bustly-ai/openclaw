@@ -64,50 +64,6 @@ export function resolveSkillConfig(
   return entry;
 }
 
-function normalizeAllowlist(input: unknown): string[] | undefined {
-  if (!input) {
-    return undefined;
-  }
-  if (!Array.isArray(input)) {
-    return undefined;
-  }
-  const normalized = input.map((entry) => String(entry).trim()).filter(Boolean);
-  return normalized.length > 0 ? normalized : undefined;
-}
-
-function normalizeAllowlistToken(value: string): string {
-  return value.trim().toLowerCase().replace(/[\s_]+/g, "-");
-}
-
-const BUNDLED_SOURCES = new Set(["openclaw-bundled"]);
-
-function isBundledSkill(entry: SkillEntry): boolean {
-  return BUNDLED_SOURCES.has(entry.skill.source);
-}
-
-export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | undefined {
-  return normalizeAllowlist(config?.skills?.allowBundled);
-}
-
-export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): boolean {
-  if (!allowlist || allowlist.length === 0) {
-    return true;
-  }
-  if (!isBundledSkill(entry)) {
-    return true;
-  }
-  const key = resolveSkillKey(entry.skill, entry);
-  const normalizedAllowlist = new Set(allowlist.map((value) => normalizeAllowlistToken(value)));
-  const normalizedKey = normalizeAllowlistToken(key);
-  const normalizedName = normalizeAllowlistToken(entry.skill.name);
-  return (
-    allowlist.includes(key) ||
-    allowlist.includes(entry.skill.name) ||
-    normalizedAllowlist.has(normalizedKey) ||
-    normalizedAllowlist.has(normalizedName)
-  );
-}
-
 export function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: OpenClawConfig;
@@ -116,14 +72,6 @@ export function shouldIncludeSkill(params: {
   const { entry, config, eligibility } = params;
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
-  const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
-
-  if (skillConfig?.enabled === false) {
-    return false;
-  }
-  if (!isBundledSkillAllowed(entry, allowBundled)) {
-    return false;
-  }
   return evaluateRuntimeEligibility({
     os: entry.metadata?.os,
     remotePlatforms: eligibility?.remote?.platforms,

@@ -12,6 +12,7 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { normalizeSkillFilter } from "./skills/filter.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
+import { loadBustlyAgentMetadata, saveBustlyAgentMetadata } from "./bustly-agent-metadata.js";
 const log = createSubsystemLogger("agent-scope");
 const BUSTLY_AGENT_PREFIX = "bustly-";
 const BUSTLY_WORKSPACES_DIRNAME = "workspaces";
@@ -321,7 +322,24 @@ export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,
 ): string[] | undefined {
-  return normalizeSkillFilter(resolveAgentConfig(cfg, agentId)?.skills);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const metadataSkills = workspaceDir ? loadBustlyAgentMetadata(workspaceDir).skills : undefined;
+  if (metadataSkills !== undefined) {
+    return metadataSkills;
+  }
+  const configSkills = normalizeSkillFilter(resolveAgentConfig(cfg, agentId)?.skills);
+  if (
+    workspaceDir &&
+    configSkills !== undefined &&
+    normalizeAgentId(agentId).startsWith(BUSTLY_AGENT_PREFIX)
+  ) {
+    const current = loadBustlyAgentMetadata(workspaceDir);
+    saveBustlyAgentMetadata(workspaceDir, {
+      ...current,
+      skills: configSkills,
+    });
+  }
+  return configSkills;
 }
 
 function resolveModelPrimary(raw: unknown): string | undefined {

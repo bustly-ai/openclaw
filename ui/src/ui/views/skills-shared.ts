@@ -16,29 +16,21 @@ export function computeSkillReasons(skill: SkillStatusEntry): string[] {
     reasons.push("disabled");
   }
   if (skill.blockedByAllowlist) {
-    reasons.push("blocked by allowlist");
+    reasons.push("unavailable");
   }
   return reasons;
 }
 
 export function renderSkillStatusChips(params: {
   skill: SkillStatusEntry;
-  showBundledBadge?: boolean;
 }) {
   const skill = params.skill;
-  const showBundledBadge = Boolean(params.showBundledBadge);
+  const showSource = skill.source !== "openclaw-bundled";
   return html`
     <div class="chip-row" style="margin-top: 6px;">
-      <span class="chip">${skill.source}</span>
-      ${
-        showBundledBadge
-          ? html`
-              <span class="chip">bundled</span>
-            `
-          : nothing
-      }
+      ${showSource ? html`<span class="chip">${skill.source}</span>` : nothing}
       <span class="chip ${skill.eligible ? "chip-ok" : "chip-warn"}">
-        ${skill.eligible ? "eligible" : "blocked"}
+        ${skill.eligible ? "eligible" : "needs setup"}
       </span>
       ${
         skill.disabled

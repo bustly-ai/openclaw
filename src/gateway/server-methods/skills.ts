@@ -1,6 +1,6 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { installSkill } from "../../agents/skills-install.js";
-import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
+import { buildGlobalSkillStatus, buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
 import { bumpSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
@@ -51,15 +51,18 @@ function collectSkillBins(entries: SkillEntry[]): string[] {
   return [...bins].toSorted();
 }
 
-function normalizeAllowBundled(input: unknown): string[] {
-  if (!Array.isArray(input)) {
-    return [];
+function resolveWorkspaceDirForSkillName(params: {
+  config: OpenClawConfig;
+  skillName: string;
+}): string {
+  const normalizedSkillName = params.skillName.trim();
+  for (const workspaceDir of listAgentWorkspaceDirs(params.config)) {
+    const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.config });
+    if (entries.some((entry) => entry.skill.name === normalizedSkillName)) {
+      return workspaceDir;
+    }
   }
-  return [...new Set(input.map((entry) => String(entry).trim()).filter(Boolean))];
-}
-
-function normalizeSkillToken(value: string): string {
-  return value.trim().toLowerCase().replace(/[\s_]+/g, "-");
+  return resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config));
 }
 
 export const skillsHandlers: GatewayRequestHandlers = {
@@ -77,12 +80,15 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     const cfg = loadConfig();
     const agentIdRaw = typeof params?.agentId === "string" ? params.agentId.trim() : "";
-    const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : resolveDefaultAgentId(cfg);
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const report = buildWorkspaceSkillStatus(workspaceDir, {
-      config: cfg,
-      eligibility: { remote: getRemoteSkillEligibility() },
-    });
+    const report = agentIdRaw
+      ? buildWorkspaceSkillStatus(resolveAgentWorkspaceDir(cfg, normalizeAgentId(agentIdRaw)), {
+          config: cfg,
+          eligibility: { remote: getRemoteSkillEligibility() },
+        })
+      : buildGlobalSkillStatus({
+          config: cfg,
+          eligibility: { remote: getRemoteSkillEligibility() },
+        });
     respond(true, report, undefined);
   },
   "skills.bins": ({ params, respond }) => {
@@ -126,7 +132,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
     };
     const cfg = loadConfig();
-    const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    const workspaceDirRaw = resolveWorkspaceDirForSkillName({
+      config: cfg,
+      skillName: p.name,
+    });
     const result = await installSkill({
       workspaceDir: workspaceDirRaw,
       skillName: p.name,
@@ -157,38 +166,13 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     const p = params as {
       skillKey: string;
-      enabled?: boolean;
       apiKey?: string;
       env?: Record<string, string>;
     };
     const cfg = loadConfig();
-    const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-    const allEntries = loadWorkspaceSkillEntries(defaultWorkspaceDir, { config: cfg });
-    const matchedEntry = allEntries.find((entry) => {
-      const metadataSkillKey = entry.metadata?.skillKey?.trim();
-      return metadataSkillKey === p.skillKey || entry.skill.name === p.skillKey;
-    });
-    const isBundledSkill = matchedEntry?.skill.source === "openclaw-bundled";
-    const normalizedSkillKey = normalizeSkillToken(p.skillKey);
-    const normalizedSkillName = matchedEntry
-      ? normalizeSkillToken(matchedEntry.skill.name)
-      : normalizedSkillKey;
     const skills = cfg.skills ? { ...cfg.skills } : {};
     const entries = skills.entries ? { ...skills.entries } : {};
     const current = entries[p.skillKey] ? { ...entries[p.skillKey] } : {};
-    if (typeof p.enabled === "boolean") {
-      current.enabled = p.enabled;
-      if (p.enabled && isBundledSkill) {
-        const nextSet = new Set(normalizeAllowBundled(skills.allowBundled));
-        nextSet.add(p.skillKey);
-        if (matchedEntry?.skill.name) {
-          nextSet.add(matchedEntry.skill.name);
-        }
-        nextSet.add(normalizedSkillKey);
-        nextSet.add(normalizedSkillName);
-        skills.allowBundled = [...nextSet];
-      }
-    }
     if (typeof p.apiKey === "string") {
       const trimmed = normalizeSecretInput(p.apiKey);
       if (trimmed) {
@@ -213,7 +197,15 @@ export const skillsHandlers: GatewayRequestHandlers = {
       }
       current.env = nextEnv;
     }
-    entries[p.skillKey] = current;
+    delete current.enabled;
+    if (current.env && Object.keys(current.env).length === 0) {
+      delete current.env;
+    }
+    if (Object.keys(current).length === 0) {
+      delete entries[p.skillKey];
+    } else {
+      entries[p.skillKey] = current;
+    }
     skills.entries = entries;
     const nextConfig: OpenClawConfig = {
       ...cfg,

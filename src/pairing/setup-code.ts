@@ -212,7 +212,7 @@ async function resolveGatewayUrl(
   if (typeof opts.publicUrl === "string" && opts.publicUrl.trim()) {
     const url = normalizeUrl(opts.publicUrl, scheme);
     if (url) {
-      return { url, source: "plugins.entries.device-pair.config.publicUrl" };
+      return { url, source: "options.publicUrl" };
     }
     return { error: "Configured publicUrl is invalid." };
   }
@@ -253,7 +253,7 @@ async function resolveGatewayUrl(
 
   return {
     error:
-      "Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.",
+      "Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or pass --public-url.",
   };
 }
 

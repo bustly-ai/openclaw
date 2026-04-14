@@ -12,6 +12,7 @@ import {
   Lightning,
   PencilSimple,
   Plus,
+  UserCircle,
   UserPlus,
   SquaresFour,
   SignOut,
@@ -25,11 +26,20 @@ import {
   buildChatRoute,
   CollapsedScenariosIcon,
   getSessionIconComponent,
-  resolveSessionIconComponent,
-  SESSION_ICON_OPTIONS,
-  type SessionIconId,
 } from "../../lib/session-icons";
+import {
+  AGENT_AVATAR_OPTIONS,
+  DEFAULT_AGENT_AVATAR,
+  getAgentAvatarSrc,
+  normalizeAgentAvatarName,
+} from "../../lib/agent-avatars";
+import { resolveAgentPresentation } from "../../lib/agent-presentation";
 import { listWorkspaceSummaries, type WorkspaceSummary } from "../../lib/bustly-supabase";
+import {
+  fetchSkillCatalog,
+  recommendSkillNames,
+  type SkillCatalogItem,
+} from "../../lib/skill-catalog";
 import { useAppState } from "../../providers/AppStateProvider";
 import { useGlobalLoader } from "../../providers/GlobalLoaderProvider";
 import {
@@ -37,6 +47,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../../shared/bustly-agent";
 import UpdatePrompt from "../Updater/UpdatePrompt";
+import { CreateAgentSkillsStep } from "../skills/SkillLibraryPanels";
 import Skeleton from "../ui/Skeleton";
 import PortalTooltip from "../ui/PortalTooltip";
 
@@ -50,6 +61,7 @@ type SidebarTask = {
   agentId: string;
   name: string;
   icon?: string;
+  skills?: string[];
   isMain?: boolean;
   createdAt?: number | null;
   updatedAt?: number | null;
@@ -66,6 +78,7 @@ type SidebarSession = {
 
 const SIDEBAR_TASKS_REFRESH_EVENT = "openclaw:sidebar-refresh-tasks";
 const SIDEBAR_TASK_RUN_STATE_EVENT = "openclaw:sidebar-task-run-state";
+const CREATE_AGENT_VIBES = ["Professional", "Friendly", "Creative", "Concise", "Casual", "Expert"] as const;
 
 function notifySidebarTasksRefresh() {
   window.dispatchEvent(new Event(SIDEBAR_TASKS_REFRESH_EVENT));
@@ -73,6 +86,17 @@ function notifySidebarTasksRefresh() {
 
 function SpinnerIcon({ className }: { className?: string }) {
   return <CircleNotch size={14} weight="bold" className={className} />;
+}
+
+function TaskStatusIndicator(props: { status?: "running"; className?: string }) {
+  if (props.status !== "running") {
+    return null;
+  }
+  return (
+    <span className={`inline-flex h-5 w-5 items-center justify-center text-[#5A5CFF] ${props.className ?? ""}`}>
+      <CircleNotch size={13} weight="bold" className="animate-spin" />
+    </span>
+  );
 }
 
 function sortSidebarAgents(
@@ -104,6 +128,17 @@ function sortSidebarAgents(
   });
 }
 
+function sortSidebarSessions(sessions: SidebarSession[]): SidebarSession[] {
+  return [...sessions].sort((left, right) => {
+    const leftUpdatedAt = left.updatedAt ?? 0;
+    const rightUpdatedAt = right.updatedAt ?? 0;
+    if (leftUpdatedAt !== rightUpdatedAt) {
+      return rightUpdatedAt - leftUpdatedAt;
+    }
+    return left.name.localeCompare(right.name);
+  });
+}
+
 type IconProps = {
   className?: string;
 };
@@ -114,10 +149,6 @@ function CaretDownIcon({ className }: IconProps) {
 
 function CaretRightIcon({ className }: IconProps) {
   return <CaretRight size={14} weight="bold" className={className} />;
-}
-
-function DotsThreeIcon({ className }: IconProps) {
-  return <DotsThree size={18} weight="bold" className={className} />;
 }
 
 function CheckIcon({ className }: IconProps) {
@@ -154,6 +185,10 @@ function SidebarModal(props: {
   children: ReactNode;
   onClose: () => void;
   widthClassName?: string;
+  panelClassName?: string;
+  bodyClassName?: string;
+  headerClassName?: string;
+  flush?: boolean;
 }) {
   useEffect(() => {
     if (!props.open) {
@@ -179,10 +214,16 @@ function SidebarModal(props: {
       onClick={props.onClose}
     >
       <div
-        className={`w-full rounded-3xl border border-gray-200 bg-white p-5 shadow-2xl ${props.widthClassName ?? "max-w-sm"}`}
+        className={`w-full rounded-3xl border border-gray-200 bg-white shadow-2xl ${props.widthClassName ?? "max-w-sm"} ${props.panelClassName ?? ""}`}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between gap-3">
+        <div
+          className={`flex items-center justify-between gap-3 ${
+            props.flush
+              ? "border-b border-[#E8EBF3] px-6 py-5"
+              : "mb-4 px-5 pt-5"
+          } ${props.headerClassName ?? ""}`}
+        >
           <h2 className="text-lg font-semibold text-[#1A162F]">{props.title}</h2>
           <button
             type="button"
@@ -192,7 +233,9 @@ function SidebarModal(props: {
             <CloseIcon className="h-4 w-4" />
           </button>
         </div>
-        {props.children}
+        <div className={`${props.flush ? "" : "px-5 pb-5"} ${props.bodyClassName ?? ""}`}>
+          {props.children}
+        </div>
       </div>
     </div>,
     document.body,
@@ -267,24 +310,37 @@ function SidebarItem(props: {
   );
 }
 
-function TaskItem(props: {
-  task: SidebarTask;
+function AgentFolderItem(props: {
+  agent: SidebarTask;
+  workspaceId: string;
   active: boolean;
+  hasSessions: boolean;
+  expanded: boolean;
   collapsed: boolean;
-  onClick: () => void;
+  onToggleExpand: () => void;
+  onOpenAgent: () => void;
   onRename: () => void;
   onDelete: () => void;
   onChangeIcon: () => void;
 }) {
   const [isHovered, setIsHovered] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const SessionIcon = resolveSessionIconComponent({
-    icon: props.task.icon,
-    label: props.task.name,
-    sessionKey: props.task.id,
+  const triggerRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const presentation = resolveAgentPresentation({
+    workspaceId: props.workspaceId,
+    agentId: props.agent.agentId,
+    name: props.agent.name,
+    icon: props.agent.icon,
   });
+  const Icon = getSessionIconComponent(presentation.iconId);
+  const handleRowClick = () => {
+    if (props.hasSessions) {
+      props.onToggleExpand();
+      return;
+    }
+    props.onOpenAgent();
+  };
 
   useEffect(() => {
     if (!menuOpen) {
@@ -297,73 +353,141 @@ function TaskItem(props: {
       }
       setMenuOpen(false);
     };
-    window.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("mousedown", handlePointerDown);
     return () => {
-      window.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("mousedown", handlePointerDown);
     };
   }, [menuOpen]);
 
   return (
     <>
-      <SidebarItem
-        icon={SessionIcon}
-        label={props.task.name}
-        active={props.active}
-        onClick={props.onClick}
-        collapsed={props.collapsed}
-        showTooltip
-        rightSlotVisible={isHovered || menuOpen}
+      <div
+        ref={triggerRef}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
-        rightSlot={
-          !props.collapsed ? (
-            <div className="flex h-5 w-5 items-center justify-center">
+        onClick={handleRowClick}
+        className={`group relative mx-3 flex cursor-pointer items-center gap-3 rounded-lg px-3 py-1.5 transition-all duration-200 ${
+          props.active
+            ? "bg-[#1A162F]/10 text-[#1A162F] hover:bg-[#1A162F]/15"
+            : "text-text-sub hover:bg-[#1A162F]/5 hover:text-text-main"
+        }`}
+      >
+        {!props.collapsed ? (
+          <div className="relative flex h-5 w-5 shrink-0 items-center justify-center">
+            {props.hasSessions ? (
+              <>
+                <div
+                  className={`absolute inset-0 flex items-center justify-center transition-all duration-200 ${
+                    isHovered ? "scale-90 opacity-0" : "scale-100 opacity-100"
+                  }`}
+                >
+                  {presentation.avatarSrc ? (
+                    <img
+                      src={presentation.avatarSrc}
+                      alt={props.agent.name}
+                      className="h-5 w-5 rounded-full border border-[#E8EBF3] object-cover"
+                    />
+                  ) : (
+                    <Icon size={16} weight="bold" className="shrink-0" />
+                  )}
+                </div>
+                <div
+                  className={`absolute inset-0 flex items-center justify-center text-[#8A93B2] transition-all duration-200 ${
+                    isHovered ? "scale-100 opacity-100" : "scale-90 opacity-0"
+                  }`}
+                  style={{ transform: `rotate(${props.expanded ? 90 : 0}deg)` }}
+                >
+                  <CaretRight size={12} weight="fill" />
+                </div>
+              </>
+            ) : presentation.avatarSrc ? (
+              <img
+                src={presentation.avatarSrc}
+                alt={props.agent.name}
+                className="h-5 w-5 rounded-full border border-[#E8EBF3] object-cover"
+              />
+            ) : (
+              <Icon size={16} weight="bold" className="shrink-0" />
+            )}
+          </div>
+        ) : null}
+
+        {!props.collapsed ? (
+          <div className="min-w-0 flex-1 pr-12">
+            <span className={`block truncate whitespace-nowrap text-[14px] ${props.active ? "font-medium" : "font-normal"}`}>
+              {props.agent.name}
+            </span>
+          </div>
+        ) : null}
+
+        {!props.collapsed ? (
+          <div className="absolute top-1/2 right-3 flex -translate-y-1/2 items-center gap-0.5">
+            <PortalTooltip
+              content="More actions"
+              side="right"
+              disabled={menuOpen}
+              className={`transition-all ${!isHovered && !menuOpen ? "pointer-events-none opacity-0" : ""}`}
+            >
               <button
-                ref={triggerRef}
                 type="button"
-                className={`rounded-md p-1 transition-all ${
-                  isHovered || menuOpen ? "opacity-100" : "pointer-events-none opacity-0"
-                } ${
-                  menuOpen ? "bg-white/88 shadow-sm backdrop-blur-sm" : ""
-                } ${
-                  props.active ? "text-[#1A162F] hover:bg-[#1A162F]/6" : "text-text-sub hover:bg-black/[0.04]"
-                }`}
                 onClick={(event) => {
                   event.stopPropagation();
                   setMenuOpen((prev) => !prev);
                 }}
+                className={`flex h-5 w-5 items-center justify-center rounded text-current transition-all hover:bg-white hover:text-[#1A162F] ${
+                  menuOpen ? "bg-white/80 shadow-sm" : ""
+                }`}
+                aria-label="More actions"
               >
-                <DotsThreeIcon className="h-4 w-4" />
+                <DotsThree size={14} weight="bold" />
               </button>
-            </div>
-          ) : null
-        }
-      />
+            </PortalTooltip>
+            <PortalTooltip
+              content="New task"
+              side="right"
+              className={`transition-all ${!isHovered ? "pointer-events-none opacity-0" : ""}`}
+            >
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onOpenAgent();
+                }}
+                className="flex h-5 w-5 items-center justify-center rounded text-current transition-all hover:bg-white hover:text-[#1A162F]"
+                aria-label="New task"
+              >
+                <Plus size={12} weight="bold" />
+              </button>
+            </PortalTooltip>
+          </div>
+        ) : null}
+      </div>
+
       {menuOpen && !props.collapsed && triggerRef.current
         ? createPortal(
             <div
               ref={menuRef}
-              className="fixed z-[11000] w-48 rounded-xl border border-gray-100 bg-white p-1.5 shadow-xl"
+              className="fixed z-[11000] w-40 rounded-xl border border-gray-100 bg-white p-1.5 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.1)]"
               style={{
                 top: triggerRef.current.getBoundingClientRect().bottom + 4,
-                left: triggerRef.current.getBoundingClientRect().left,
+                right: window.innerWidth - triggerRef.current.getBoundingClientRect().right,
               }}
               onMouseDown={(event) => event.stopPropagation()}
             >
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm font-medium text-text-sub transition-colors hover:bg-gray-50 hover:text-text-main"
                 onClick={() => {
                   setMenuOpen(false);
                   props.onChangeIcon();
                 }}
               >
-                <SquaresFour size={16} weight="bold" />
-                Change icon
+                <UserCircle size={16} weight="bold" />
+                Change avatar
               </button>
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm font-medium text-text-sub transition-colors hover:bg-gray-50 hover:text-text-main"
                 onClick={() => {
                   setMenuOpen(false);
                   props.onRename();
@@ -372,13 +496,11 @@ function TaskItem(props: {
                 <PencilSimple size={16} weight="bold" />
                 Rename
               </button>
-              {!props.task.isMain ? (
-                <div className="my-1 h-px bg-gray-100" />
-              ) : null}
-              {!props.task.isMain ? (
+              {!props.agent.isMain ? <div className="my-1 h-px bg-gray-100" /> : null}
+              {!props.agent.isMain ? (
                 <button
                   type="button"
-                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50"
+                  className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
                   onClick={() => {
                     setMenuOpen(false);
                     props.onDelete();
@@ -396,8 +518,35 @@ function TaskItem(props: {
   );
 }
 
+function AgentChildItem(props: {
+  label: string;
+  active: boolean;
+  running?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      className={`relative mx-3 ml-[30px] flex w-auto items-center rounded-lg py-1.5 pr-2 pl-2 text-left transition-all duration-200 ${
+        props.active ? "bg-[#1A162F]/10 text-[#1A162F]" : "text-text-sub hover:bg-[#1A162F]/5 hover:text-text-main"
+      }`}
+    >
+      <div className="min-w-0 flex-1 pr-6">
+        <span className="block truncate whitespace-nowrap text-[13px] font-normal transition-colors duration-200">
+          {props.label}
+        </span>
+      </div>
+      <div className="absolute top-1/2 right-2 flex -translate-y-1/2 items-center">
+        {props.running ? <TaskStatusIndicator status="running" className="scale-75" /> : null}
+      </div>
+    </button>
+  );
+}
+
 function CollapsedScenariosButton(props: {
   tasks: SidebarTask[];
+  workspaceId: string;
   activeTaskId: string;
   onOpenTask: (task: SidebarTask) => void;
   onRenameClick: (task: SidebarTask) => void;
@@ -522,11 +671,13 @@ function CollapsedScenariosButton(props: {
               <div className="px-2 pt-1 pb-2 text-xs font-medium text-[#666F8D]">Agents</div>
               <div className="space-y-0.5">
                 {props.tasks.map((task) => {
-                  const Icon = resolveSessionIconComponent({
+                  const presentation = resolveAgentPresentation({
+                    workspaceId: props.workspaceId,
+                    agentId: task.agentId,
+                    name: task.name,
                     icon: task.icon,
-                    label: task.name,
-                    sessionKey: task.id,
                   });
+                  const Icon = getSessionIconComponent(presentation.iconId);
                   const isActive = task.id === props.activeTaskId;
                   return (
                     <div
@@ -546,7 +697,17 @@ function CollapsedScenariosButton(props: {
                           isActive ? "text-[#1A162F]" : "text-[#666F8D] hover:text-[#1A162F]"
                         }`}
                       >
-                        <Icon size={17} weight="bold" className="shrink-0" />
+                        <div className="flex h-5 w-5 shrink-0 items-center justify-center">
+                          {presentation.avatarSrc ? (
+                            <img
+                              src={presentation.avatarSrc}
+                              alt={task.name}
+                              className="h-5 w-5 rounded-full border border-[#E8EBF3] object-cover"
+                            />
+                          ) : (
+                            <Icon size={17} weight="bold" className="shrink-0" />
+                          )}
+                        </div>
                         <span className={`min-w-0 flex-1 truncate text-sm ${isActive ? "font-medium" : "font-normal"}`}>
                           {task.name}
                         </span>
@@ -589,8 +750,8 @@ function CollapsedScenariosButton(props: {
                 }}
                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-[#666F8D] transition-colors hover:bg-[#F5F7FB] hover:text-[#1A162F]"
               >
-                <SquaresFour size={16} weight="bold" />
-                Change icon
+                <UserCircle size={16} weight="bold" />
+                Change avatar
               </button>
               <button
                 type="button"
@@ -1046,6 +1207,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [isWindowFullscreen, setIsWindowFullscreen] = useState(false);
   const [recentTasks, setRecentTasks] = useState<SidebarTask[]>([]);
   const [sessionsByAgent, setSessionsByAgent] = useState<Record<string, SidebarSession[]>>({});
+  const [runningTasks, setRunningTasks] = useState<Record<string, boolean>>({});
   const [tasksLoading, setTasksLoading] = useState(true);
   const [hasLoadedTasks, setHasLoadedTasks] = useState(false);
   const [bustlyUserInfo, setBustlyUserInfo] = useState<BustlyUserInfo | null>(null);
@@ -1056,6 +1218,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isPreparingIssueReport, setIsPreparingIssueReport] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createAgentStep, setCreateAgentStep] = useState<"info" | "skills">("info");
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [iconModalOpen, setIconModalOpen] = useState(false);
@@ -1064,11 +1227,18 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   const [renameSaving, setRenameSaving] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [draftScenarioName, setDraftScenarioName] = useState("");
+  const [draftScenarioDescription, setDraftScenarioDescription] = useState("");
+  const [draftScenarioVibe, setDraftScenarioVibe] = useState<(typeof CREATE_AGENT_VIBES)[number]>("Professional");
+  const [createSkillCatalog, setCreateSkillCatalog] = useState<SkillCatalogItem[]>([]);
+  const [createSkillsLoading, setCreateSkillsLoading] = useState(false);
+  const [createSkillsError, setCreateSkillsError] = useState<string | null>(null);
+  const [selectedCreateSkills, setSelectedCreateSkills] = useState<string[]>([]);
+  const [hasSeededCreateSkills, setHasSeededCreateSkills] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [selectedIcon, setSelectedIcon] = useState<SessionIconId>("SquaresFour");
+  const [selectedIcon, setSelectedIcon] = useState(DEFAULT_AGENT_AVATAR);
   const [iconPickerMode, setIconPickerMode] = useState<"create" | "edit">("edit");
   const [pendingAgentId, setPendingAgentId] = useState<string | null>(null);
-  const [runningTasks, setRunningTasks] = useState<Record<string, boolean>>({});
+  const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>({});
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const userMenuTriggerRef = useRef<HTMLDivElement | null>(null);
   const workspaceLoadingRef = useRef(false);
@@ -1105,6 +1275,15 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     () => recentTasks.find((task) => task.agentId === activeAgentId)?.id ?? activeAgentId,
     [activeAgentId, recentTasks],
   );
+  const overviewTask = useMemo(
+    () => recentTasks.find((task) => task.isMain) ?? null,
+    [recentTasks],
+  );
+  const visibleAgentTasks = useMemo(
+    () => recentTasks.filter((task) => !task.isMain),
+    [recentTasks],
+  );
+  const isOverviewActive = !isSkillPage && activeAgentId === defaultWorkspaceAgentId;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -1269,23 +1448,16 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
             const sessions = await window.electronAPI.bustlyListAgentSessions(effectiveWorkspaceId, agent.agentId);
             return [
               agent.agentId,
-              sessions
-                .map((session) => ({
+              sortSidebarSessions(
+                sessions.map((session) => ({
                   id: session.sessionKey,
                   agentId: session.agentId,
                   name: session.name,
                   icon: session.icon,
                   updatedAt: session.updatedAt,
                   running: runningTasks[session.sessionKey] === true,
-                }))
-                .sort((left, right) => {
-                  const leftUpdatedAt = left.updatedAt ?? 0;
-                  const rightUpdatedAt = right.updatedAt ?? 0;
-                  if (leftUpdatedAt !== rightUpdatedAt) {
-                    return rightUpdatedAt - leftUpdatedAt;
-                  }
-                  return left.name.localeCompare(right.name);
-                }),
+                })),
+              ),
             ] as const;
           }),
         );
@@ -1298,6 +1470,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
             agentId: agent.agentId,
             name: agent.name,
             icon: agent.icon,
+            skills: agent.skills,
             isMain: agent.isMain,
             createdAt: agent.createdAt,
             updatedAt: agent.updatedAt,
@@ -1347,8 +1520,8 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
           return prev;
         }
         let changed = false;
-        const nextSessions = agentSessions
-          .map((session) => {
+        const nextSessions = sortSidebarSessions(
+          agentSessions.map((session) => {
             if (session.id !== payload.sessionKey) {
               return session;
             }
@@ -1358,15 +1531,8 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
               name: payload.label,
               updatedAt: payload.updatedAt ?? session.updatedAt,
             };
-          })
-          .sort((left, right) => {
-            const leftUpdatedAt = left.updatedAt ?? 0;
-            const rightUpdatedAt = right.updatedAt ?? 0;
-            if (leftUpdatedAt !== rightUpdatedAt) {
-              return rightUpdatedAt - leftUpdatedAt;
-            }
-            return left.name.localeCompare(right.name);
-          });
+          }),
+        );
         if (!changed) {
           return prev;
         }
@@ -1402,9 +1568,15 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     if (fallbackTask.name?.trim()) {
       nextSearchParams.set("label", fallbackTask.name.trim());
     }
-    if (fallbackTask.icon?.trim()) {
-      nextSearchParams.set("icon", fallbackTask.icon.trim());
-    }
+    nextSearchParams.set(
+      "icon",
+      resolveAgentPresentation({
+        workspaceId: effectiveWorkspaceId,
+        agentId: fallbackTask.agentId,
+        name: fallbackTask.name,
+        icon: fallbackTask.icon,
+      }).iconId,
+    );
     const prompt = searchParams.get("prompt")?.trim();
     if (prompt) {
       nextSearchParams.set("prompt", prompt);
@@ -1424,7 +1596,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     void navigate(`/chat?${nextSearchParams.toString()}`, {
       replace: true,
     });
-  }, [location.pathname, location.search, navigate, pendingAgentId, recentTasks]);
+  }, [effectiveWorkspaceId, location.pathname, location.search, navigate, pendingAgentId, recentTasks]);
 
   useEffect(() => {
     if (!pendingAgentId) {
@@ -1434,6 +1606,16 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       setPendingAgentId(null);
     }
   }, [pendingAgentId, recentTasks]);
+
+  useEffect(() => {
+    setExpandedAgents((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const task of visibleAgentTasks) {
+        next[task.agentId] = prev[task.agentId] !== false;
+      }
+      return next;
+    });
+  }, [visibleAgentTasks]);
 
   useEffect(() => {
     let disposed = false;
@@ -1517,6 +1699,22 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     void window.electronAPI.bustlyOpenWorkspaceCreate(effectiveWorkspaceId || undefined);
   };
 
+  const resolveAgentRouteIcon = useCallback((task: SidebarTask) => {
+    return resolveAgentPresentation({
+      workspaceId: effectiveWorkspaceId,
+      agentId: task.agentId,
+      name: task.name,
+      icon: task.icon,
+    }).iconId;
+  }, [effectiveWorkspaceId]);
+
+  const toggleAgentExpand = useCallback((agentId: string) => {
+    setExpandedAgents((prev) => ({
+      ...prev,
+      [agentId]: prev[agentId] === false,
+    }));
+  }, []);
+
   const handleSwitchWorkspace = async (workspaceId: string) => {
     if (workspaceId === activeWorkspaceId) {
       return;
@@ -1559,11 +1757,23 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
   };
 
   const selectedTask = recentTasks.find((entry) => entry.id === selectedTaskId) ?? null;
-  const openCreateModal = () => {
+  const resetCreateModalState = useCallback(() => {
+    setCreateAgentStep("info");
     setDraftScenarioName("");
-    setSelectedIcon("SquaresFour");
-    setIconPickerMode("create");
+    setDraftScenarioDescription("");
+    setDraftScenarioVibe("Professional");
+    setSelectedIcon(DEFAULT_AGENT_AVATAR);
     setCreateError(null);
+    setCreateSkillCatalog([]);
+    setCreateSkillsLoading(false);
+    setCreateSkillsError(null);
+    setSelectedCreateSkills([]);
+    setHasSeededCreateSkills(false);
+  }, []);
+
+  const openCreateModal = () => {
+    resetCreateModalState();
+    setIconPickerMode("create");
     setCreateModalOpen(true);
   };
 
@@ -1574,34 +1784,114 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     setRenameModalOpen(true);
   };
 
+  const toggleCreateSkill = useCallback((skillName: string) => {
+    setHasSeededCreateSkills(true);
+    setSelectedCreateSkills((current) => (
+      current.includes(skillName)
+        ? current.filter((entry) => entry !== skillName)
+        : [...current, skillName].toSorted((left, right) =>
+            left.localeCompare(right, undefined, { sensitivity: "base", numeric: true }),
+          )
+    ));
+  }, []);
+
+  useEffect(() => {
+    if (!createModalOpen || !effectiveWorkspaceId) {
+      return;
+    }
+    let disposed = false;
+    setCreateSkillsLoading(true);
+    setCreateSkillsError(null);
+    void fetchSkillCatalog({
+      scope: `create-agent-${effectiveWorkspaceId}`,
+      surface: "agent",
+    }).then((items) => {
+      if (disposed) {
+        return;
+      }
+      setCreateSkillCatalog(items);
+    }).catch((error) => {
+      if (disposed) {
+        return;
+      }
+      setCreateSkillCatalog([]);
+      setCreateSkillsError(error instanceof Error ? error.message : String(error));
+    }).finally(() => {
+      if (!disposed) {
+        setCreateSkillsLoading(false);
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [createModalOpen, effectiveWorkspaceId]);
+
+  useEffect(() => {
+    if (
+      !createModalOpen ||
+      createAgentStep !== "skills" ||
+      hasSeededCreateSkills ||
+      createSkillsLoading ||
+      createSkillCatalog.length === 0
+    ) {
+      return;
+    }
+    setSelectedCreateSkills(recommendSkillNames(createSkillCatalog));
+    setHasSeededCreateSkills(true);
+  }, [
+    createAgentStep,
+    createModalOpen,
+    createSkillCatalog,
+    createSkillsLoading,
+    draftScenarioDescription,
+    draftScenarioVibe,
+    hasSeededCreateSkills,
+  ]);
+
   const openIconModal = (task?: SidebarTask) => {
     if (task) {
       setSelectedTaskId(task.id);
-      setSelectedIcon((task.icon && SESSION_ICON_OPTIONS.some((option) => option.id === task.icon)) ? (task.icon as SessionIconId) : "SquaresFour");
+      setSelectedIcon(
+        normalizeAgentAvatarName(task.icon) ||
+          resolveAgentPresentation({
+            workspaceId: effectiveWorkspaceId,
+            agentId: task.agentId,
+            name: task.name,
+            icon: task.icon,
+          }).avatarName ||
+          DEFAULT_AGENT_AVATAR,
+      );
       setIconPickerMode("edit");
     } else {
       setSelectedTaskId(null);
-      setSelectedIcon("SquaresFour");
+      setSelectedIcon(DEFAULT_AGENT_AVATAR);
       setIconPickerMode("create");
     }
     setIconModalOpen(true);
   };
 
   const handleCreateScenario = async () => {
-    const name = draftScenarioName.trim() || "New agent";
-    if (createSaving || !effectiveWorkspaceId) {
+    const name = draftScenarioName.trim();
+    if (!name || createSaving || !effectiveWorkspaceId) {
       return;
     }
     setCreateSaving(true);
     setCreateError(null);
     try {
       const workspace = workspaces.find((entry) => entry.id === effectiveWorkspaceId);
-      const result = await window.electronAPI.bustlyCreateAgent(
-        effectiveWorkspaceId,
+      const result = await window.electronAPI.bustlyCreateAgent({
+        workspaceId: effectiveWorkspaceId,
         name,
-        selectedIcon,
-        workspace?.name,
-      );
+        description: draftScenarioDescription.trim(),
+        icon: selectedIcon,
+        workspaceName: workspace?.name,
+        skills:
+          createSkillCatalog.length === 0
+            ? undefined
+            : (selectedCreateSkills.length === createSkillCatalog.length
+              ? createSkillCatalog.map((skill) => skill.name).toSorted()
+              : selectedCreateSkills),
+      });
       if (!result.success) {
         setCreateError(result.error ?? "Failed to create agent.");
         return;
@@ -1623,8 +1913,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
         return mainTask ? [mainTask, nextTask, ...otherTasks] : [nextTask, ...otherTasks];
       });
       setSessionsByAgent((prev) => ({ ...prev, [nextAgentId]: [] }));
-      setDraftScenarioName("");
-      setSelectedIcon("SquaresFour");
+      resetCreateModalState();
       setCreateModalOpen(false);
       notifySidebarTasksRefresh();
       void navigate(buildChatRoute({ agentId: nextAgentId, label: name, icon: selectedIcon }));
@@ -1669,7 +1958,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
             agentId: selectedTask.agentId,
             sessionKey: activeSessionKey || undefined,
             label: name,
-            icon: selectedTask.icon,
+            icon: resolveAgentRouteIcon({ ...selectedTask, name }),
           }),
           { replace: true },
         );
@@ -1715,7 +2004,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
     }
   };
 
-  const handleSelectIcon = async (icon: SessionIconId) => {
+  const handleSelectIcon = async (icon: string) => {
     if (iconPickerMode === "create") {
       setSelectedIcon(icon);
       setIconModalOpen(false);
@@ -1745,7 +2034,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
           agentId: selectedTask.agentId,
           sessionKey: activeSessionKey || undefined,
           label: selectedTask.name,
-          icon,
+          icon: resolveAgentRouteIcon({ ...selectedTask, icon }),
         }),
         { replace: true },
       );
@@ -1755,7 +2044,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
 
   return (
     <div
-      className={`[-webkit-app-region:drag] z-[100] flex h-full flex-col border-r border-white/40 bg-white/30 backdrop-blur-lg transition-all duration-300 ${
+      className={`[-webkit-app-region:drag] z-[100] flex h-full flex-col border-r border-[#E5E7EB] bg-[#F4F5F8] transition-all duration-300 ${
         props.collapsed ? "w-20" : "w-64 overflow-x-hidden"
       } ${isWindowFullscreen ? "pt-0" : "pt-[20px]"}`}
     >
@@ -1824,92 +2113,26 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
       >
         {!props.collapsed ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="shrink-0 px-4 pt-2 pb-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[13px] font-medium text-[#8A93B2]">Agents</span>
-                <PortalTooltip content="Create agent" side="right">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      openCreateModal();
-                    }}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8A93B2] transition-all duration-200 hover:bg-[#1A162F]/5 hover:text-[#1A162F] active:bg-[#1A162F]/8"
-                    aria-label="Create agent"
-                  >
-                    <Plus size={16} weight="bold" />
-                  </button>
-                </PortalTooltip>
-              </div>
-            </div>
-            <div className="flex-1 overflow-y-auto px-0 pb-4">
-              <div className="space-y-0.5">
-              {tasksLoading ? (
-                <>
-                  <TaskItemSkeleton />
-                  <TaskItemSkeleton />
-                  <TaskItemSkeleton />
-                </>
-              ) : (
-                recentTasks.map((task) => (
-                  <div key={task.id}>
-                    <TaskItem
-                      task={task}
-                      active={!activeSessionKey && activeTaskId === task.id}
-                      collapsed={false}
-                      onClick={() => {
-                        void navigate(buildChatRoute({ agentId: task.agentId, label: task.name, icon: task.icon }));
-                      }}
-                      onRename={() => {
-                        openRenameModal(task);
-                      }}
-                      onDelete={() => {
-                        setSelectedTaskId(task.id);
-                        setDeleteModalOpen(true);
-                      }}
-                      onChangeIcon={() => {
-                        openIconModal(task);
-                      }}
-                    />
-                    {(sessionsByAgent[task.agentId] ?? []).length > 0 ? (
-                      <div
-                        className="mt-1 mb-2 max-h-40 space-y-0.5 overflow-y-auto pr-3 pl-10 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                        style={{ msOverflowStyle: "none" }}
-                      >
-                        {(sessionsByAgent[task.agentId] ?? []).map((session) => {
-                          return (
-                            <button
-                              key={session.id}
-                              type="button"
-                              onClick={() => {
-                                void navigate(
-                                  buildChatRoute({
-                                    agentId: task.agentId,
-                                    sessionKey: session.id,
-                                    label: session.name,
-                                    icon: session.icon ?? task.icon,
-                                  }),
-                                );
-                              }}
-                              className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors ${
-                                activeSessionKey === session.id
-                                  ? "bg-[#1A162F]/10 font-semibold text-[#1A162F] hover:bg-[#1A162F]/15"
-                                  : "text-[#666F8D] hover:bg-[#1A162F]/4 hover:text-[#1A162F]"
-                              }`}
-                            >
-                              <span className="min-w-0 flex-1 truncate">{session.name}</span>
-                              {session.running ? <SpinnerIcon className="h-3.5 w-3.5 animate-spin" /> : null}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                  </div>
-                ))
-              )}
-              </div>
-            </div>
-
-            <div className="space-y-1 border-t border-[#E5E7EB] bg-gray-50/30 p-3">
+            <div className="space-y-0.5 px-0 pt-2 pb-2">
+              <SidebarItem
+                icon={SquaresFour}
+                label="Overview"
+                active={isOverviewActive}
+                onClick={() => {
+                  const target = overviewTask ?? recentTasks[0];
+                  if (!target) {
+                    return;
+                  }
+                  void navigate(
+                    buildChatRoute({
+                      agentId: target.agentId,
+                      label: target.name,
+                      icon: resolveAgentRouteIcon(target),
+                    }),
+                  );
+                }}
+                collapsed={false}
+              />
               <SidebarItem
                 icon={LightningIcon}
                 label="Skills"
@@ -1921,33 +2144,127 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                   });
                 }}
                 collapsed={false}
-                insetClassName="gap-3 px-4 py-2.5"
               />
+            </div>
+
+            <div
+              className="custom-scrollbar flex-1 overflow-y-auto pb-4"
+              style={{ scrollbarGutter: "stable" }}
+            >
+              <div className="sticky top-0 z-10 bg-[#F4F5F8] px-3 pb-1.5">
+                <div className="group flex items-center justify-between py-0.5">
+                  <div className="flex items-center gap-1 text-[11px] font-normal text-[#8A93B2]">
+                    My agents
+                  </div>
+                  <PortalTooltip content="Create agent" side="right" className="shrink-0">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openCreateModal();
+                      }}
+                      className="flex h-5 w-5 items-center justify-center rounded-md text-[#8A93B2] opacity-0 transition-all duration-200 hover:bg-[#1A162F]/10 hover:text-[#1A162F] group-hover:opacity-100"
+                      aria-label="Create agent"
+                    >
+                      <Plus size={12} weight="bold" />
+                    </button>
+                  </PortalTooltip>
+                </div>
+              </div>
+
+              <div className="space-y-0.5">
+                {tasksLoading ? (
+                  <>
+                    <TaskItemSkeleton />
+                    <TaskItemSkeleton />
+                    <TaskItemSkeleton />
+                  </>
+                ) : (
+                  visibleAgentTasks.map((task) => {
+                    const childSessions = sessionsByAgent[task.agentId] ?? [];
+                    const showChildSessions = childSessions.length > 0 && expandedAgents[task.agentId] !== false;
+                    return (
+                      <div key={task.id} className="flex flex-col gap-0.5">
+                        <AgentFolderItem
+                          agent={task}
+                          workspaceId={effectiveWorkspaceId}
+                          active={!activeSessionKey && activeTaskId === task.id}
+                          hasSessions={childSessions.length > 0}
+                          expanded={expandedAgents[task.agentId] !== false}
+                          collapsed={false}
+                          onToggleExpand={() => toggleAgentExpand(task.agentId)}
+                          onOpenAgent={() => {
+                            void navigate(
+                              buildChatRoute({
+                                agentId: task.agentId,
+                                label: task.name,
+                                icon: resolveAgentRouteIcon(task),
+                              }),
+                            );
+                          }}
+                          onRename={() => {
+                            openRenameModal(task);
+                          }}
+                          onDelete={() => {
+                            setSelectedTaskId(task.id);
+                            setDeleteModalOpen(true);
+                          }}
+                          onChangeIcon={() => {
+                            openIconModal(task);
+                          }}
+                        />
+
+                        <div
+                          className="grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                          style={{
+                            gridTemplateRows: showChildSessions ? "1fr" : "0fr",
+                            opacity: showChildSessions ? 1 : 0.72,
+                          }}
+                        >
+                          <div className="overflow-hidden">
+                            <div
+                              className={`relative mb-1 flex flex-col gap-0.5 before:absolute before:top-0 before:bottom-3 before:left-[30px] before:w-px before:bg-gray-200/60 before:content-[''] transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                                showChildSessions ? "translate-y-0" : "-translate-y-1"
+                              }`}
+                            >
+                              {childSessions.map((session) => (
+                                <AgentChildItem
+                                  key={session.id}
+                                  label={session.name}
+                                  active={activeSessionKey === session.id}
+                                  running={session.running}
+                                  onClick={() => {
+                                    void navigate(
+                                      buildChatRoute({
+                                        agentId: task.agentId,
+                                        sessionKey: session.id,
+                                        label: session.name,
+                                        icon: session.icon ?? resolveAgentRouteIcon(task),
+                                      }),
+                                    );
+                                  }}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
           </div>
         ) : (
-          <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-4">
+          <div className="flex min-h-0 w-full flex-1 flex-col items-center pt-4 gap-4">
             <div className="flex w-full flex-1 flex-col items-center gap-3">
-              <PortalTooltip content="Create agent" side="right">
-                <button
-                  type="button"
-                  onClick={() => {
-                    openCreateModal();
-                  }}
-                  className="flex h-10 w-10 items-center justify-center rounded-xl text-text-sub transition-all hover:bg-[#1A162F]/5 hover:text-text-main"
-                  aria-label="Create agent"
-                >
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent bg-gray-50 transition-colors hover:border-[#1A162F]/10 hover:bg-white">
-                    <Plus size={18} weight="bold" />
-                  </div>
-                </button>
-              </PortalTooltip>
               {recentTasks.length > 0 ? (
                 <CollapsedScenariosButton
                   tasks={recentTasks}
+                  workspaceId={effectiveWorkspaceId}
                   activeTaskId={activeTaskId}
                   onOpenTask={(task) => {
-                    void navigate(buildChatRoute({ agentId: task.agentId, label: task.name, icon: task.icon }));
+                    void navigate(buildChatRoute({ agentId: task.agentId, label: task.name, icon: resolveAgentRouteIcon(task) }));
                   }}
                   onRenameClick={openRenameModal}
                   onDeleteClick={(task) => {
@@ -1959,6 +2276,20 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
                   }}
                 />
               ) : null}
+              <PortalTooltip content="Create agent" side="right" className="w-full flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    openCreateModal();
+                  }}
+                  className="group flex h-10 w-10 items-center justify-center rounded-xl text-text-sub transition-all hover:bg-[#1A162F]/5 hover:text-text-main"
+                  aria-label="Create agent"
+                >
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent bg-gray-50 transition-colors group-hover:border-[#1A162F]/10 group-hover:bg-white">
+                    <Plus size={18} weight="bold" />
+                  </div>
+                </button>
+              </PortalTooltip>
             </div>
 
             <div className="w-full space-y-2 border-t border-[#E5E7EB] px-2 pt-4">
@@ -2078,64 +2409,142 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
 
       <SidebarModal
         open={createModalOpen}
-        title="Create agent"
+        title="Create Agent"
+        widthClassName="max-w-3xl"
+        panelClassName="flex h-[calc(100vh-80px)] max-h-[860px] flex-col overflow-hidden"
+        bodyClassName="flex min-h-0 flex-1 flex-col"
+        flush
         onClose={() => {
+          resetCreateModalState();
           setCreateModalOpen(false);
-          setDraftScenarioName("");
-          setSelectedIcon("SquaresFour");
-          setCreateError(null);
         }}
       >
-        <div className="space-y-5">
-          <div className="space-y-3">
-            <label className="mb-2 block text-sm font-medium text-[#1A162F]">Agent name</label>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => openIconModal()}
-                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-[#E3E7F0] bg-[#F7F8FC] text-[#1A162F] transition-colors hover:border-[#D4D9E6] hover:bg-[#F2F4FA]"
-                aria-label="Choose icon"
-                title="Choose icon"
-              >
-                {createElement(getSessionIconComponent(selectedIcon), { size: 20, weight: "bold" })}
-              </button>
-              <input
-                autoFocus
-                type="text"
-                value={draftScenarioName}
-                onChange={(event) => setDraftScenarioName(event.target.value)}
-                placeholder="e.g. Supplier finder"
-                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm font-normal transition-all focus:border-[#1A162F] focus:outline-none focus:ring-2 focus:ring-[#1A162F]/5"
-              />
+        {createAgentStep === "info" ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              setCreateError(null);
+              setHasSeededCreateSkills(false);
+              setSelectedCreateSkills([]);
+              setCreateAgentStep("skills");
+            }}
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            <div className="shrink-0 px-6 pb-6 pt-6">
+              <h2 className="text-[22px] font-bold text-[#1A162F]">Hire a Digital Employee</h2>
             </div>
-          </div>
-          {createError ? <p className="text-sm text-red-600">{createError}</p> : null}
-          <div className="flex justify-end gap-3">
-            <button
-              type="button"
-              className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100"
-              disabled={createSaving}
-              onClick={() => {
-                setCreateModalOpen(false);
-                setDraftScenarioName("");
-                setSelectedIcon("SquaresFour");
-                setCreateError(null);
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="rounded-lg bg-[#1A162F] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#27223F] disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={createSaving}
-              onClick={() => {
+
+            <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+              <div className="space-y-5">
+                <div>
+                  <label className="mb-2 block text-[13px] font-bold text-[#1A162F]">Agent name</label>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => openIconModal()}
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[#E8EBF3] bg-[#F4F5F8] text-[#1A162F] transition-transform hover:scale-[1.02]"
+                      aria-label="Choose avatar"
+                      title="Choose avatar"
+                    >
+                      {getAgentAvatarSrc(selectedIcon) ? (
+                        <img
+                          src={getAgentAvatarSrc(selectedIcon) ?? undefined}
+                          alt="avatar"
+                          className="h-full w-full rounded-full object-cover"
+                        />
+                      ) : (
+                        createElement(getSessionIconComponent(selectedIcon), { size: 20, weight: "bold" })
+                      )}
+                    </button>
+                    <input
+                      autoFocus
+                      type="text"
+                      value={draftScenarioName}
+                      onChange={(event) => setDraftScenarioName(event.target.value)}
+                      placeholder="e.g. Supplier finder"
+                      className="flex-1 rounded-xl border border-[#E8EBF3] bg-white px-4 py-2.5 text-[13px] font-medium text-[#1A162F] placeholder:font-normal placeholder:text-[#8A93B2] focus:border-[#1A162F] focus:outline-none focus:ring-1 focus:ring-[#1A162F]"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-[13px] font-bold text-[#1A162F]">Role & Responsibilities</label>
+                  <textarea
+                    rows={5}
+                    value={draftScenarioDescription}
+                    onChange={(event) => setDraftScenarioDescription(event.target.value)}
+                    placeholder="Describe what this digital employee is hired to do..."
+                    className="min-h-[120px] w-full resize-none rounded-xl border border-[#E8EBF3] bg-white px-4 py-3 text-[13px] font-medium leading-relaxed text-[#1A162F] placeholder:font-normal placeholder:text-[#8A93B2] focus:border-[#1A162F] focus:outline-none focus:ring-1 focus:ring-[#1A162F]"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-[13px] font-bold text-[#1A162F]">Work style & Tone</label>
+                  <div className="flex flex-wrap gap-2">
+                    {CREATE_AGENT_VIBES.map((vibe) => (
+                      <button
+                        key={vibe}
+                        type="button"
+                        onClick={() => setDraftScenarioVibe(vibe)}
+                        className={`rounded-full border px-4 py-1.5 text-[13px] font-medium transition-all ${
+                          draftScenarioVibe === vibe
+                            ? "border-[#1A162F] bg-[#1A162F] text-white"
+                            : "border-[#E8EBF3] bg-white text-[#666F8D] hover:border-[#C8D0E2] hover:text-[#1A162F]"
+                        }`}
+                      >
+                        {vibe}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {createError ? <p className="text-sm text-red-600">{createError}</p> : null}
+              </div>
+            </div>
+
+            <div className="shrink-0 border-t border-[#E8EBF3] bg-white px-6 py-4">
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  className="h-10 rounded-xl px-4 py-2 text-[13px] font-medium text-[#666F8D] transition-colors hover:bg-[#F4F5F8]"
+                  disabled={createSaving}
+                  onClick={() => {
+                    resetCreateModalState();
+                    setCreateModalOpen(false);
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="h-10 rounded-xl bg-[#1A162F] px-4 py-2 text-[13px] font-bold text-white transition-colors hover:bg-[#27223F] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!draftScenarioName.trim() || !draftScenarioDescription.trim()}
+                >
+                  Next step
+                </button>
+              </div>
+            </div>
+          </form>
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="shrink-0 px-6 pb-6 pt-6">
+              <h2 className="text-[22px] font-bold text-[#1A162F]">Assign Skills</h2>
+            </div>
+            <CreateAgentSkillsStep
+              items={createSkillCatalog}
+              loading={createSkillsLoading}
+              error={createError ?? createSkillsError}
+              selectedSkillNames={selectedCreateSkills}
+              recommendedSkillNames={recommendSkillNames(createSkillCatalog)}
+              saving={createSaving}
+              onToggleSkill={toggleCreateSkill}
+              onBack={() => setCreateAgentStep("info")}
+              onCreate={() => {
                 void handleCreateScenario();
               }}
-            >
-              {createSaving ? "Creating..." : "Create agent"}
-            </button>
+            />
           </div>
-        </div>
+        )}
       </SidebarModal>
 
       <SidebarModal
@@ -2188,7 +2597,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
             </button>
             <button
               type="button"
-              disabled={renameSaving}
+              disabled={renameSaving || !draftScenarioName.trim()}
               className="rounded-lg bg-[#1A162F] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#27223F] disabled:cursor-not-allowed disabled:opacity-60"
               onClick={handleRenameScenario}
             >
@@ -2200,7 +2609,7 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
 
       <SidebarModal
         open={iconModalOpen}
-        title="Choose icon"
+        title="Choose avatar"
         widthClassName="max-w-md"
         onClose={() => {
           setIconModalOpen(false);
@@ -2210,25 +2619,29 @@ export function ClientAppSidebar(props: ClientAppSidebarProps) {
         }}
       >
         <div className="grid grid-cols-4 gap-2">
-          {SESSION_ICON_OPTIONS.map((option) => {
-            const Icon = option.icon;
-            const isSelected = option.id === selectedIcon;
+          {AGENT_AVATAR_OPTIONS.map((avatarFile) => {
+            const avatarSrc = getAgentAvatarSrc(avatarFile);
+            const isSelected = selectedIcon === avatarFile;
             return (
               <button
-                key={option.id}
+                key={avatarFile}
                 type="button"
-                aria-label={option.label}
-                title={option.label}
+                aria-label={`Select avatar ${avatarFile}`}
+                title={avatarFile}
                 onClick={() => {
-                  void handleSelectIcon(option.id);
+                  void handleSelectIcon(avatarFile);
                 }}
-                className={`flex h-16 items-center justify-center rounded-2xl border transition-all ${
+                className={`flex h-16 items-center justify-center overflow-hidden rounded-2xl border transition-all ${
                   isSelected
-                    ? "border-[#1A162F] bg-[#1A162F]/5 shadow-sm"
+                    ? "border-[#1A162F] bg-[#1A162F]/5 shadow-sm ring-2 ring-[#1A162F]/20"
                     : "border-transparent bg-[#F7F8FC] hover:border-[#1A162F]/10 hover:bg-[#F1F3F8]"
                 }`}
               >
-                <Icon size={20} weight="bold" className="text-[#1A162F]" />
+                {avatarSrc ? (
+                  <img src={avatarSrc} alt="avatar option" className="h-12 w-12 rounded-full object-cover" />
+                ) : (
+                  <UserCircle size={22} weight="bold" className="text-[#1A162F]" />
+                )}
               </button>
             );
           })}

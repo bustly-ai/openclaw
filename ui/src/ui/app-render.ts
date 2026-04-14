@@ -59,7 +59,6 @@ import {
   loadSkills,
   saveSkillApiKey,
   updateSkillEdit,
-  updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -980,7 +979,6 @@ export function renderApp(state: AppViewState) {
                 busyKey: state.skillsBusyKey,
                 onFilterChange: (next) => (state.skillsFilter = next),
                 onRefresh: () => loadSkills(state, { clearMessages: true }),
-                onToggle: (key, enabled) => updateSkillEnabled(state, key, enabled),
                 onEdit: (key, value) => updateSkillEdit(state, key, value),
                 onSaveKey: (key) => saveSkillApiKey(state, key),
                 onInstall: (skillKey, name, installId) =>

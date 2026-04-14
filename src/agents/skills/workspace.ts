@@ -13,6 +13,7 @@ import type {
   SkillCommandSpec,
   SkillEntry,
   SkillSnapshot,
+  WorkspaceSkillContext,
 } from "./types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
@@ -256,6 +257,7 @@ function loadSkillEntries(
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    includeWorkspaceRoots?: boolean;
   },
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config);
@@ -354,16 +356,19 @@ function loadSkillEntries(
   };
 
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
+  const includeWorkspaceRoots = opts?.includeWorkspaceRoots !== false;
   const workspaceSkillsDir = path.resolve(workspaceDir, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
   const extraDirs = extraDirsRaw
     .map((d) => (typeof d === "string" ? d.trim() : ""))
     .filter(Boolean);
-  const pluginSkillDirs = resolvePluginSkillDirs({
-    workspaceDir,
-    config: opts?.config,
-  });
+  const pluginSkillDirs = includeWorkspaceRoots
+    ? resolvePluginSkillDirs({
+        workspaceDir,
+        config: opts?.config,
+      })
+    : [];
   const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
 
   const bundledSkills = bundledSkillsDir
@@ -389,14 +394,18 @@ function loadSkillEntries(
     source: "agents-skills-personal",
   });
   const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
-  const projectAgentsSkills = loadSkills({
-    dir: projectAgentsSkillsDir,
-    source: "agents-skills-project",
-  });
-  const workspaceSkills = loadSkills({
-    dir: workspaceSkillsDir,
-    source: "openclaw-workspace",
-  });
+  const projectAgentsSkills = includeWorkspaceRoots
+    ? loadSkills({
+        dir: projectAgentsSkillsDir,
+        source: "agents-skills-project",
+      })
+    : [];
+  const workspaceSkills = includeWorkspaceRoots
+    ? loadSkills({
+        dir: workspaceSkillsDir,
+        source: "openclaw-workspace",
+      })
+    : [];
 
   const merged = new Map<string, Skill>();
   // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
@@ -479,17 +488,16 @@ export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
-  const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
-  const skillFilter = normalizeSkillFilter(opts?.skillFilter);
+  const context = resolveWorkspaceSkillContext(workspaceDir, opts);
   return {
-    prompt,
-    skills: eligible.map((entry) => ({
+    prompt: context.prompt,
+    skills: context.eligibleEntries.map((entry) => ({
       name: entry.skill.name,
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
-    ...(skillFilter === undefined ? {} : { skillFilter }),
-    resolvedSkills,
+    ...(context.skillFilter === undefined ? {} : { skillFilter: context.skillFilter }),
+    resolvedSkills: context.resolvedSkills,
     version: opts?.snapshotVersion,
   };
 }
@@ -498,7 +506,7 @@ export function buildWorkspaceSkillsPrompt(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions,
 ): string {
-  return resolveWorkspaceSkillPromptState(workspaceDir, opts).prompt;
+  return resolveWorkspaceSkillContext(workspaceDir, opts).prompt;
 }
 
 type WorkspaceSkillBuildOptions = {
@@ -511,22 +519,18 @@ type WorkspaceSkillBuildOptions = {
   eligibility?: SkillEligibilityContext;
 };
 
-function resolveWorkspaceSkillPromptState(
+export function resolveWorkspaceSkillContext(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions,
-): {
-  eligible: SkillEntry[];
-  prompt: string;
-  resolvedSkills: Skill[];
-} {
+): WorkspaceSkillContext {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
-  const eligible = filterSkillEntries(
+  const eligibleEntries = filterSkillEntries(
     skillEntries,
     opts?.config,
     opts?.skillFilter,
     opts?.eligibility,
   );
-  const promptEntries = eligible.filter(
+  const promptEntries = eligibleEntries.filter(
     (entry) => entry.invocation?.disableModelInvocation !== true,
   );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
@@ -550,7 +554,14 @@ function resolveWorkspaceSkillPromptState(
   ]
     .filter(Boolean)
     .join("\n");
-  return { eligible, prompt, resolvedSkills };
+  const skillFilter = normalizeSkillFilter(opts?.skillFilter);
+  return {
+    prompt,
+    ...(skillFilter === undefined ? {} : { skillFilter }),
+    eligibleEntries,
+    promptEntries,
+    resolvedSkills,
+  };
 }
 
 export function resolveSkillsPromptForRun(params: {
@@ -582,6 +593,17 @@ export function loadWorkspaceSkillEntries(
   },
 ): SkillEntry[] {
   return loadSkillEntries(workspaceDir, opts);
+}
+
+export function loadGlobalSkillEntries(opts?: {
+  config?: OpenClawConfig;
+  managedSkillsDir?: string;
+  bundledSkillsDir?: string;
+}): SkillEntry[] {
+  return loadSkillEntries(process.cwd(), {
+    ...opts,
+    includeWorkspaceRoots: false,
+  });
 }
 
 function resolveUniqueSyncedSkillDirName(base: string, used: Set<string>): string {

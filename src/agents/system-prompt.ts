@@ -64,6 +64,36 @@ function buildMemorySection(params: {
   return lines;
 }
 
+function buildSelfEvolutionSection(params: {
+  isMinimal: boolean;
+  availableTools: Set<string>;
+}) {
+  if (params.isMinimal) {
+    return [];
+  }
+  const hasSessionSearch = params.availableTools.has("session_search");
+  const hasSkillManage = params.availableTools.has("skill_manage");
+  if (!hasSessionSearch && !hasSkillManage) {
+    return [];
+  }
+  const lines = ["## Self Evolution"];
+  if (hasSessionSearch) {
+    lines.push(
+      "Use `session_search` to look for similar prior sessions when a task may repeat across conversations or when you need precedent before forming a new workflow.",
+    );
+  }
+  if (hasSkillManage) {
+    lines.push(
+      "Use `skill_manage` to codify stable step-by-step procedures into workspace skills under skills/<name>/ when a workflow becomes reusable.",
+    );
+  }
+  lines.push(
+    "Prefer MEMORY.md for durable facts/preferences/decisions; prefer skills for reusable procedures and operating playbooks.",
+  );
+  lines.push("");
+  return lines;
+}
+
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
   if (!ownerLine || isMinimal) {
     return [];
@@ -302,6 +332,8 @@ export function buildAgentSystemPrompt(params: {
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
+    session_search: "Search prior session transcripts for similar work",
+    skill_manage: "Create/update/delete workspace skills for reusable procedures",
     image: "Analyze an image with the configured image model",
   };
 
@@ -329,6 +361,8 @@ export function buildAgentSystemPrompt(params: {
     "sessions_send",
     "subagents",
     "session_status",
+    "session_search",
+    "skill_manage",
     "image",
   ];
 
@@ -439,6 +473,10 @@ export function buildAgentSystemPrompt(params: {
     availableTools,
     citationsMode: params.memoryCitationsMode,
   });
+  const selfEvolutionSection = buildSelfEvolutionSection({
+    isMinimal,
+    availableTools,
+  });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     isMinimal,
@@ -500,6 +538,7 @@ export function buildAgentSystemPrompt(params: {
     }),
     ...skillsSection,
     ...memorySection,
+    ...selfEvolutionSection,
     "",
     // Skip model aliases for subagent/none modes
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal

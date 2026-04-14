@@ -16,6 +16,8 @@ export type BustlyPresetChannel = {
   slug: string;
   label: string;
   icon: SessionIconId;
+  avatar: string;
+  description: string;
   order: number;
   enabled?: boolean;
   model?: string;
@@ -35,7 +37,8 @@ function createBustlyPresetChannel(
 export const BUSTLY_MAIN_AGENT_PRESET = {
   label: "Overview",
   icon: "Robot" as const,
-  description: "Automatically spots the most important business changes today.",
+  avatar: "Web3_Avatar.png",
+  description: "How can I help you today?",
   useCases: [
     {
       icon: "ChartPie",
@@ -59,6 +62,8 @@ export const BUSTLY_PRESET_CHANNELS: BustlyPresetChannel[] = [
   createBustlyPresetChannel({
     label: "Marketing",
     icon: "TrendUp",
+    avatar: "Web3_Avatar_1.png",
+    description: "Highlights wasted spend and recommends where to move budget.",
     order: 10,
     useCases: [
       {
@@ -81,6 +86,8 @@ export const BUSTLY_PRESET_CHANNELS: BustlyPresetChannel[] = [
   createBustlyPresetChannel({
     label: "Store Ops",
     icon: "Storefront",
+    avatar: "Web3_Avatar_2.png",
+    description: "Flags stockout, inventory backlog, and operational risks early.",
     order: 20,
     useCases: [
       {
@@ -103,6 +110,8 @@ export const BUSTLY_PRESET_CHANNELS: BustlyPresetChannel[] = [
   createBustlyPresetChannel({
     label: "Customers",
     icon: "Users",
+    avatar: "Web3_Avatar_3.png",
+    description: "Identifies churn-risk segments and high-value customer opportunities.",
     order: 30,
     useCases: [
       {
@@ -125,6 +134,8 @@ export const BUSTLY_PRESET_CHANNELS: BustlyPresetChannel[] = [
   createBustlyPresetChannel({
     label: "Finance",
     icon: "Wallet",
+    avatar: "Web3_Avatar_4.png",
+    description: "Explains how discounts, refunds, and fees affect true net revenue.",
     order: 40,
     useCases: [
       {
@@ -151,12 +162,32 @@ export function resolveBustlyPresetUseCases(params: {
   agentId?: string | null;
   workspaceId?: string | null;
 }): BustlyPresetUseCase[] {
+  const channel = resolveBustlyPresetChannel(params);
+  return channel?.useCases?.map((useCase) => ({ ...useCase })) ?? [];
+}
+
+export function resolveBustlyPresetChannel(params: {
+  sessionKey?: string | null;
+  agentId?: string | null;
+  workspaceId?: string | null;
+}) {
   const agentName =
     resolveBustlyAgentNameFromSessionKey(params.workspaceId, params.sessionKey) ||
     resolveBustlyAgentNameFromAgentId(params.workspaceId, params.agentId);
   if (agentName === DEFAULT_BUSTLY_AGENT_NAME) {
-    return BUSTLY_MAIN_AGENT_PRESET.useCases;
+    return {
+      ...BUSTLY_MAIN_AGENT_PRESET,
+      slug: DEFAULT_BUSTLY_AGENT_NAME,
+      order: 0,
+      enabled: true,
+      useCases: BUSTLY_MAIN_AGENT_PRESET.useCases.map((useCase) => ({ ...useCase })),
+    } satisfies BustlyPresetChannel;
   }
   const scenario = BUSTLY_PRESET_CHANNELS.find((entry) => entry.slug === agentName);
-  return scenario?.useCases ?? [];
+  return scenario
+    ? {
+        ...scenario,
+        useCases: scenario.useCases.map((useCase) => ({ ...useCase })),
+      }
+    : null;
 }

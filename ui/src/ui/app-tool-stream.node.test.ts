@@ -136,4 +136,29 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.fallbackStatus?.previous).toBe("deepinfra/moonshotai/Kimi-K2.5");
     vi.useRealTimers();
   });
+
+  it("ignores hidden internal tool events", () => {
+    const host = createHost({ chatRunId: "run-1" });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "result",
+        name: "memory_write",
+        toolCallId: "tool-hidden-1",
+        result: { content: [{ type: "text", text: "secret" }] },
+        openclaw: {
+          visibility: "hidden",
+          silentReason: "post-run-review",
+        },
+      },
+    });
+
+    expect(host.toolStreamOrder).toEqual([]);
+    expect(host.chatToolMessages).toEqual([]);
+  });
 });

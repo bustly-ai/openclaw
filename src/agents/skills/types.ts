@@ -106,3 +106,14 @@ export type SkillSnapshot = {
   resolvedSkills?: Skill[];
   version?: number;
 };
+
+export type WorkspaceSkillContext = {
+  prompt: string;
+  /** Normalized skill filter applied before prompt generation. */
+  skillFilter?: string[];
+  /** All eligible skills for this workspace/agent, including non-model-invocable entries. */
+  eligibleEntries: SkillEntry[];
+  /** Eligible skills that are exposed to the model prompt. */
+  promptEntries: SkillEntry[];
+  resolvedSkills: Skill[];
+};

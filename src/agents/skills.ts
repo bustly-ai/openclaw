@@ -3,9 +3,7 @@ import type { SkillsInstallPreferences } from "./skills/types.js";
 
 export {
   hasBinary,
-  isBundledSkillAllowed,
   isConfigPathTruthy,
-  resolveBundledAllowlist,
   resolveConfigPath,
   resolveRuntimePlatform,
   resolveSkillConfig,
@@ -23,6 +21,7 @@ export type {
   SkillEntry,
   SkillInstallSpec,
   SkillSnapshot,
+  WorkspaceSkillContext,
   SkillsInstallPreferences,
 } from "./skills/types.js";
 export {
@@ -30,7 +29,9 @@ export {
   buildWorkspaceSkillsPrompt,
   buildWorkspaceSkillCommandSpecs,
   filterWorkspaceSkillEntries,
+  loadGlobalSkillEntries,
   loadWorkspaceSkillEntries,
+  resolveWorkspaceSkillContext,
   resolveSkillsPromptForRun,
   syncSkillsToWorkspace,
 } from "./skills/workspace.js";

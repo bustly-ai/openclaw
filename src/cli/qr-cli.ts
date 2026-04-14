@@ -26,15 +26,6 @@ function renderQrAscii(data: string): Promise<string> {
   });
 }
 
-function readDevicePairPublicUrlFromConfig(cfg: ReturnType<typeof loadConfig>): string | undefined {
-  const value = cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 export function registerQrCli(program: Command) {
   program
     .command("qr")
@@ -45,7 +36,7 @@ export function registerQrCli(program: Command) {
     )
     .option(
       "--remote",
-      "Use gateway.remote.url and gateway.remote token/password (ignores device-pair publicUrl)",
+      "Use gateway.remote.url and gateway.remote token/password",
       false,
     )
     .option("--url <url>", "Override gateway URL used in the setup payload")
@@ -119,7 +110,7 @@ export function registerQrCli(program: Command) {
               ? opts.publicUrl.trim()
               : undefined;
         const publicUrl =
-          explicitUrl ?? (wantsRemote ? undefined : readDevicePairPublicUrlFromConfig(cfg));
+          explicitUrl;
 
         const resolved = await resolvePairingSetupFromConfig(cfg, {
           publicUrl,

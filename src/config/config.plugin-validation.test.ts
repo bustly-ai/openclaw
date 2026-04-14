@@ -65,22 +65,23 @@ describe("config plugin validation", () => {
     }
   });
 
-  it("rejects missing plugin ids in entries", async () => {
+  it("warns for missing plugin ids in entries instead of failing validation", async () => {
     const home = await createCaseHome();
     const res = validateInHome(home, {
       agents: { list: [{ id: "pi" }] },
       plugins: { enabled: false, entries: { "missing-plugin": { enabled: true } } },
     });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues).toContainEqual({
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toContainEqual({
         path: "plugins.entries.missing-plugin",
-        message: "plugin not found: missing-plugin",
+        message:
+          "plugin not installed: missing-plugin (stale plugin config ignored; install the plugin or remove the stale reference at plugins.entries.missing-plugin)",
       });
     }
   });
 
-  it("rejects missing plugin ids in allow/deny/slots", async () => {
+  it("warns for missing plugin ids in allow/deny/slots instead of failing validation", async () => {
     const home = await createCaseHome();
     const res = validateInHome(home, {
       agents: { list: [{ id: "pi" }] },
@@ -91,13 +92,25 @@ describe("config plugin validation", () => {
         slots: { memory: "missing-slot" },
       },
     });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues).toEqual(
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toEqual(
         expect.arrayContaining([
-          { path: "plugins.allow", message: "plugin not found: missing-allow" },
-          { path: "plugins.deny", message: "plugin not found: missing-deny" },
-          { path: "plugins.slots.memory", message: "plugin not found: missing-slot" },
+          {
+            path: "plugins.allow",
+            message:
+              "plugin not installed: missing-allow (stale plugin config ignored; install the plugin or remove the stale reference at plugins.allow)",
+          },
+          {
+            path: "plugins.deny",
+            message:
+              "plugin not installed: missing-deny (stale plugin config ignored; install the plugin or remove the stale reference at plugins.deny)",
+          },
+          {
+            path: "plugins.slots.memory",
+            message:
+              "plugin not installed: missing-slot (stale plugin config ignored; install the plugin or remove the stale reference at plugins.slots.memory)",
+          },
         ]),
       );
     }
@@ -184,7 +197,7 @@ describe("config plugin validation", () => {
     const home = await createCaseHome();
     const res = validateInHome(home, {
       agents: { list: [{ id: "pi" }] },
-      plugins: { enabled: false, entries: { discord: { enabled: true } } },
+      plugins: { enabled: false, entries: { slack: { enabled: true } } },
     });
     expect(res.ok).toBe(true);
   });
@@ -204,6 +217,26 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("warns for stale plugin channel config instead of failing validation", async () => {
+    const home = await createCaseHome();
+    const res = validateInHome(home, {
+      agents: { list: [{ id: "pi" }] },
+      channels: {
+        feishu: {
+          enabled: true,
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toContainEqual({
+        path: "channels.feishu",
+        message:
+          "plugin channel not installed: feishu (stale channel config ignored; install the plugin or remove channels.feishu)",
+      });
+    }
+  });
+
   it("accepts plugin heartbeat targets", async () => {
     const home = await createCaseHome();
     const pluginDir = path.join(home, "bluebubbles-plugin");
@@ -219,6 +252,35 @@ describe("config plugin validation", () => {
       plugins: { enabled: false, load: { paths: [pluginDir] } },
     });
     expect(res.ok).toBe(true);
+  });
+
+  it("warns for heartbeat targets tied to stale plugin channel config", async () => {
+    const home = await createCaseHome();
+    const res = validateInHome(home, {
+      agents: { defaults: { heartbeat: { target: "feishu" } }, list: [{ id: "pi" }] },
+      channels: {
+        feishu: {
+          enabled: true,
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toEqual(
+        expect.arrayContaining([
+          {
+            path: "channels.feishu",
+            message:
+              "plugin channel not installed: feishu (stale channel config ignored; install the plugin or remove channels.feishu)",
+          },
+          {
+            path: "agents.defaults.heartbeat.target",
+            message:
+              "plugin channel not installed: feishu (stale heartbeat target ignored; install the plugin or remove agents.defaults.heartbeat.target)",
+          },
+        ]),
+      );
+    }
   });
 
   it("rejects unknown heartbeat targets", async () => {

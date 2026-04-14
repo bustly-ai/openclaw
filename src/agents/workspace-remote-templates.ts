@@ -50,7 +50,7 @@ export async function loadRemoteWorkspaceTemplate(
   const targetUrl = `${baseUrl}/${encodedName}`;
 
   if (!fetchImpl) {
-    logRemoteTemplate(`fetch unavailable for remote template ${name}; falling back to local template`);
+    logRemoteTemplate(`fetch unavailable for remote template ${name}; continuing with fallback sources`);
     return undefined;
   }
 
@@ -64,7 +64,7 @@ export async function loadRemoteWorkspaceTemplate(
     logRemoteTemplate(`fetched remote template ${name}`, { url: targetUrl });
     return content;
   } catch (error) {
-    logRemoteTemplate(`remote fetch failed for ${name}, falling back to local template`, {
+    logRemoteTemplate(`remote fetch failed for ${name}; continuing with fallback sources`, {
       url: targetUrl,
       error: error instanceof Error ? error.message : String(error),
     });

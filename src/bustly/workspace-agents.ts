@@ -1,20 +1,24 @@
 import { randomUUID } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  loadBustlyAgentMetadata,
+  resolveBustlyAgentMetadataPath,
+  saveBustlyAgentMetadata,
+  type BustlyAgentMetadata,
+} from "../agents/bustly-agent-metadata.js";
+import {
+  extractIdentityMission,
+  upsertIdentityField,
+  upsertIdentityMission,
+} from "../agents/identity-file.js";
+import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
 import { applyAgentConfig, listAgentEntries, pruneAgentConfig } from "../commands/agents.config.js";
 import { type OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { initializeBustlyWorkspaceBootstrap } from "./workspace-bootstrap.js";
 import {
   buildBustlyAgentConversationSessionKey,
   buildBustlyWorkspaceAgentId,
@@ -24,20 +28,19 @@ import {
   normalizeBustlyAgentName,
   normalizeBustlyWorkspaceId,
 } from "./workspace-agent.js";
+import { initializeBustlyWorkspaceBootstrap } from "./workspace-bootstrap.js";
 import { resolveBustlyWorkspaceAgentWorkspaceDir } from "./workspace-runtime.js";
 
 type OpenClawAgentListEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
-
-type BustlyAgentMetadata = {
-  icon?: string;
-  createdAt?: number;
-};
 
 export type BustlyWorkspaceAgentSummary = {
   agentId: string;
   agentName: string;
   name: string;
+  description?: string;
+  identityMarkdown?: string;
   icon?: string;
+  skills?: string[];
   isMain: boolean;
   createdAt: number | null;
   updatedAt: number | null;
@@ -93,58 +96,34 @@ function stripPerAgentSkipBootstrap(
   });
 }
 
-function resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir: string): string {
-  return join(agentWorkspaceDir, ".bustly-agent.json");
-}
-
-function loadBustlyAgentMetadata(agentWorkspaceDir: string): BustlyAgentMetadata {
-  const metadataPath = resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir);
-  if (!existsSync(metadataPath)) {
-    return {};
-  }
-  try {
-    const raw = readFileSync(metadataPath, "utf-8");
-    const parsed = JSON.parse(raw) as BustlyAgentMetadata;
-    return {
-      icon: parsed.icon?.trim() || undefined,
-      createdAt:
-        typeof parsed.createdAt === "number" && Number.isFinite(parsed.createdAt)
-          ? parsed.createdAt
-          : undefined,
-    };
-  } catch {
-    return {};
-  }
-}
-
-function saveBustlyAgentMetadata(agentWorkspaceDir: string, metadata: BustlyAgentMetadata): void {
-  mkdirSync(agentWorkspaceDir, { recursive: true, mode: 0o700 });
-  writeFileSync(
-    resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir),
-    JSON.stringify(metadata, null, 2),
-    "utf-8",
-  );
-}
-
 function setBustlyAgentMetadata(params: {
   workspaceDir: string;
   icon?: string;
   createdAt?: number;
+  skills?: string[] | null;
 }): void {
   const nextIcon = params.icon?.trim();
   const nextCreatedAt =
     typeof params.createdAt === "number" && Number.isFinite(params.createdAt)
       ? params.createdAt
       : undefined;
-  if (!nextIcon && nextCreatedAt === undefined) {
+  if (!nextIcon && nextCreatedAt === undefined && params.skills === undefined) {
     return;
   }
   const current = loadBustlyAgentMetadata(params.workspaceDir);
-  saveBustlyAgentMetadata(params.workspaceDir, {
+  const nextMetadata: BustlyAgentMetadata = {
     ...current,
     icon: nextIcon ?? current.icon,
     createdAt: nextCreatedAt ?? current.createdAt,
-  });
+  };
+  if (params.skills !== undefined) {
+    if (params.skills === null) {
+      delete nextMetadata.skills;
+    } else {
+      nextMetadata.skills = params.skills;
+    }
+  }
+  saveBustlyAgentMetadata(params.workspaceDir, nextMetadata);
 }
 
 function resolveBustlyAgentCreatedAt(
@@ -156,7 +135,7 @@ function resolveBustlyAgentCreatedAt(
   }
   for (const candidatePath of [
     agentWorkspaceDir,
-    resolveBustlyWorkspaceAgentMetadataPath(agentWorkspaceDir),
+    resolveBustlyAgentMetadataPath(agentWorkspaceDir),
   ]) {
     if (!existsSync(candidatePath)) {
       continue;
@@ -181,6 +160,115 @@ function resolveBustlyAgentCreatedAt(
   return null;
 }
 
+function sanitizeBustlyIdentityLine(value: string): string {
+  return value
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function resolveBustlyAgentIdentityPath(workspaceDir: string): string {
+  return join(workspaceDir, DEFAULT_IDENTITY_FILENAME);
+}
+
+function buildDefaultBustlyIdentityMarkdown(params: {
+  name?: string;
+  description?: string;
+}): string {
+  const safeName = sanitizeBustlyIdentityLine(params.name?.trim() || "Agent");
+  const safeDescription = params.description?.trim() || "How can I help you today?";
+  return [
+    "# IDENTITY.md - Agent Identity",
+    "",
+    `- Name: ${safeName}`,
+    "- Role: Commerce Operating Agent",
+    "",
+    "## Mission",
+    "",
+    safeDescription,
+    "",
+  ].join("\n");
+}
+
+function normalizeBustlyIdentityMarkdownContent(content: string): string {
+  const normalized = content.replace(/\r\n/g, "\n").trimEnd();
+  return normalized ? `${normalized}\n` : "";
+}
+
+function loadBustlyAgentIdentityContent(workspaceDir: string): string | undefined {
+  try {
+    const content = readFileSync(resolveBustlyAgentIdentityPath(workspaceDir), "utf-8");
+    return normalizeBustlyIdentityMarkdownContent(content);
+  } catch {
+    return undefined;
+  }
+}
+
+function loadBustlyAgentDescription(workspaceDir: string): string | undefined {
+  try {
+    const mission = extractIdentityMission(
+      readFileSync(resolveBustlyAgentIdentityPath(workspaceDir), "utf-8"),
+    );
+    const trimmed = mission?.trim();
+    return trimmed ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function syncBustlyAgentIdentityFields(params: {
+  workspaceDir: string;
+  name?: string;
+  description?: string;
+}): void {
+  const nextName = params.name?.trim();
+  const nextDescription = params.description?.trim();
+  if (!nextName && !nextDescription) {
+    return;
+  }
+
+  const identityPath = resolveBustlyAgentIdentityPath(params.workspaceDir);
+  let content: string;
+  try {
+    content = readFileSync(identityPath, "utf-8");
+  } catch {
+    content = buildDefaultBustlyIdentityMarkdown({
+      name: nextName,
+      description: nextDescription,
+    });
+  }
+
+  if (nextName) {
+    content = upsertIdentityField(content, "Name", sanitizeBustlyIdentityLine(nextName));
+  }
+  if (nextDescription) {
+    content = upsertIdentityMission(content, nextDescription);
+  }
+  mkdirSync(params.workspaceDir, { recursive: true, mode: 0o700 });
+  writeFileSync(identityPath, content, "utf-8");
+}
+
+function writeBustlyAgentIdentityContent(params: {
+  workspaceDir: string;
+  content: string;
+  name?: string;
+}): void {
+  let nextContent = normalizeBustlyIdentityMarkdownContent(params.content);
+  const safeName = params.name?.trim();
+  if (!nextContent && safeName) {
+    nextContent = buildDefaultBustlyIdentityMarkdown({ name: safeName });
+  }
+  if (safeName) {
+    nextContent = upsertIdentityField(
+      nextContent || buildDefaultBustlyIdentityMarkdown({ name: safeName }),
+      "Name",
+      sanitizeBustlyIdentityLine(safeName),
+    );
+  }
+  mkdirSync(params.workspaceDir, { recursive: true, mode: 0o700 });
+  writeFileSync(resolveBustlyAgentIdentityPath(params.workspaceDir), nextContent, "utf-8");
+}
+
 function listBustlyWorkspaceAgentIds(cfg: OpenClawConfig, workspaceId: string): string[] {
   const normalizedWorkspaceId = normalizeBustlyWorkspaceId(workspaceId);
   if (!normalizedWorkspaceId) {
@@ -193,7 +281,9 @@ function listBustlyWorkspaceAgentIds(cfg: OpenClawConfig, workspaceId: string): 
     .map((entry) => entry.id);
 }
 
-function listBustlyAgentConversationSessions(agentId: string): BustlyWorkspaceAgentSessionSummary[] {
+function listBustlyAgentConversationSessions(
+  agentId: string,
+): BustlyWorkspaceAgentSessionSummary[] {
   const store = loadSessionStore(resolveDefaultSessionStorePath(agentId));
   return Object.entries(store)
     .filter(([sessionKey]) => isBustlyAgentConversationSessionKey(sessionKey, agentId))
@@ -277,12 +367,24 @@ export function listBustlyWorkspaceAgents(params: {
       const metadata = loadBustlyAgentMetadata(workspaceDir);
       const sessions = listBustlyAgentConversationSessions(agentId);
       const displayName = entry.name?.trim() || agentName;
+      const identityMarkdown = loadBustlyAgentIdentityContent(workspaceDir);
+      const description = loadBustlyAgentDescription(workspaceDir);
       const createdAt = resolveBustlyAgentCreatedAt(workspaceDir, metadata);
       return {
         agentId,
         agentName,
         name: displayName,
+        description,
+        identityMarkdown,
         icon: metadata.icon,
+        skills:
+          metadata.skills ??
+          (Array.isArray(entry.skills)
+            ? entry.skills
+                .map((skill) => skill.trim())
+                .filter(Boolean)
+                .toSorted()
+            : undefined),
         isMain: agentName === DEFAULT_BUSTLY_AGENT_NAME,
         createdAt,
         updatedAt: sessions[0]?.updatedAt ?? metadata.createdAt ?? null,
@@ -326,7 +428,9 @@ export async function createBustlyWorkspaceAgent(params: {
   workspaceName?: string;
   agentName: string;
   displayName?: string;
+  description?: string;
   icon?: string;
+  skills?: string[] | null;
   configPath?: string;
   allowCreateConfig?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -353,10 +457,9 @@ export async function createBustlyWorkspaceAgent(params: {
     throw new Error(`Agent "${agentName}" already exists in this workspace.`);
   }
 
-  const configWithoutMain =
-    listAgentEntries(config).some((entry) => entry.id === "main")
-      ? pruneAgentConfig(config, "main").config
-      : config;
+  const configWithoutMain = listAgentEntries(config).some((entry) => entry.id === "main")
+    ? pruneAgentConfig(config, "main").config
+    : config;
   const updated = applyAgentConfig(configWithoutMain, {
     agentId,
     name: displayName,
@@ -384,10 +487,16 @@ export async function createBustlyWorkspaceAgent(params: {
     workspaceName: params.workspaceName,
     agentName,
   });
+  syncBustlyAgentIdentityFields({
+    workspaceDir,
+    name: displayName,
+    description: params.description,
+  });
   setBustlyAgentMetadata({
     workspaceDir,
     icon,
     createdAt: Date.now(),
+    ...(params.skills !== undefined ? { skills: params.skills } : {}),
   });
   return { agentId, workspaceDir };
 }
@@ -402,7 +511,10 @@ export async function createBustlyWorkspaceAgentSession(params: {
   const agentId = params.agentId.trim();
   const agentPrefix = buildBustlyWorkspaceAgentPrefix(normalizedWorkspaceId);
   const legacyMainAgentId = `bustly-${normalizedWorkspaceId}`;
-  if (!normalizedWorkspaceId || (!agentId.startsWith(agentPrefix) && agentId !== legacyMainAgentId)) {
+  if (
+    !normalizedWorkspaceId ||
+    (!agentId.startsWith(agentPrefix) && agentId !== legacyMainAgentId)
+  ) {
     throw new Error("Agent does not belong to this workspace.");
   }
 
@@ -432,7 +544,9 @@ export async function updateBustlyWorkspaceAgent(params: {
   workspaceId: string;
   agentId: string;
   displayName?: string;
+  identityMarkdown?: string;
   icon?: string;
+  skills?: string[] | null;
   configPath?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
@@ -447,6 +561,8 @@ export async function updateBustlyWorkspaceAgent(params: {
   }
 
   const nextName = params.displayName?.trim();
+  const nextIdentityMarkdown =
+    typeof params.identityMarkdown === "string" ? params.identityMarkdown : undefined;
   const nextIcon = params.icon?.trim();
   let nextConfig = config;
   if (nextName) {
@@ -455,17 +571,37 @@ export async function updateBustlyWorkspaceAgent(params: {
       name: nextName,
     });
   }
+  if (params.skills !== undefined) {
+    nextConfig = applyAgentConfig(nextConfig, {
+      agentId: params.agentId,
+      skills: null,
+    });
+  }
   if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
     writeConfig(configPath, nextConfig);
   }
 
-  if (nextIcon) {
-    const agentName = resolveBustlyAgentNameFromWorkspaceAgentId(params.workspaceId, params.agentId);
+  const agentName = resolveBustlyAgentNameFromWorkspaceAgentId(params.workspaceId, params.agentId);
+  const workspaceDir =
+    entry.workspace?.trim() ||
+    resolveBustlyWorkspaceAgentWorkspaceDir(params.workspaceId, agentName, params.env);
+  if (nextIdentityMarkdown !== undefined) {
+    writeBustlyAgentIdentityContent({
+      workspaceDir,
+      content: nextIdentityMarkdown,
+      name: nextName ?? entry.name?.trim(),
+    });
+  } else if (nextName) {
+    syncBustlyAgentIdentityFields({
+      workspaceDir,
+      name: nextName,
+    });
+  }
+  if (nextIcon || params.skills !== undefined) {
     setBustlyAgentMetadata({
-      workspaceDir:
-        entry.workspace?.trim() ||
-        resolveBustlyWorkspaceAgentWorkspaceDir(params.workspaceId, agentName, params.env),
-      icon: nextIcon,
+      workspaceDir,
+      ...(nextIcon ? { icon: nextIcon } : {}),
+      ...(params.skills !== undefined ? { skills: params.skills } : {}),
     });
   }
 }

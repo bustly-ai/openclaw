@@ -27,6 +27,7 @@ function looksLikeSkillsDir(dir: string): boolean {
 }
 
 export type BundledSkillsResolveOptions = {
+  dir?: string;
   argv1?: string;
   moduleUrl?: string;
   cwd?: string;
@@ -36,6 +37,11 @@ export type BundledSkillsResolveOptions = {
 export function resolveBundledSkillsDir(
   opts: BundledSkillsResolveOptions = {},
 ): string | undefined {
+  const explicitDir = opts.dir?.trim();
+  if (explicitDir && looksLikeSkillsDir(explicitDir)) {
+    return explicitDir;
+  }
+
   const override = process.env.OPENCLAW_BUNDLED_SKILLS_DIR?.trim();
   if (override) {
     return override;
