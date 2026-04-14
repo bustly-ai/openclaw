@@ -9,13 +9,21 @@ import {
   synchronizeBustlyWorkspaceContext,
 } from "./workspace-runtime.js";
 
-const { oauthStateRef, setActiveWorkspaceIdMock, bootstrapMock } = vi.hoisted(() => {
-  return {
-    oauthStateRef: { current: null as BustlyOAuthState | null },
-    setActiveWorkspaceIdMock: vi.fn<(workspaceId: string) => void>(),
-    bootstrapMock: vi.fn(async () => {}),
-  };
-});
+const { oauthStateRef, setActiveWorkspaceIdMock, bootstrapMock, fetchAndApplyManifestMock } =
+  vi.hoisted(() => {
+    return {
+      oauthStateRef: { current: null as BustlyOAuthState | null },
+      setActiveWorkspaceIdMock: vi.fn<(workspaceId: string) => void>(),
+      bootstrapMock: vi.fn(async () => {}),
+      fetchAndApplyManifestMock: vi.fn(async () => ({
+        workspaceId: "workspace-1",
+        agentId: "bustly-workspace-1-overview",
+        workspaceDir: "/tmp/workspaces/workspace-1/agents/overview",
+        presetAgentsApplied: 0,
+        manifestRevision: "rev-1",
+      })),
+    };
+  });
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => oauthStateRef.current),
@@ -24,6 +32,10 @@ vi.mock("../bustly-oauth.js", () => ({
 
 vi.mock("./workspace-bootstrap.js", () => ({
   initializeBustlyWorkspaceBootstrap: (params: unknown) => bootstrapMock(params),
+}));
+
+vi.mock("./runtime-manifest.js", () => ({
+  fetchAndApplyBustlyRuntimeManifest: (params: unknown) => fetchAndApplyManifestMock(params),
 }));
 
 describe("workspace-runtime", () => {
@@ -41,6 +53,14 @@ describe("workspace-runtime", () => {
     setActiveWorkspaceIdMock.mockReset();
     bootstrapMock.mockReset();
     bootstrapMock.mockResolvedValue(undefined);
+    fetchAndApplyManifestMock.mockReset();
+    fetchAndApplyManifestMock.mockResolvedValue({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+      workspaceDir: "/tmp/workspaces/workspace-1/agents/overview",
+      presetAgentsApplied: 0,
+      manifestRevision: "rev-1",
+    });
   });
 
   afterEach(() => {
@@ -96,7 +116,9 @@ describe("workspace-runtime", () => {
     });
     expect(binding.workspaceId).toBe("workspace-1");
     expect(binding.agentId).toBe("bustly-workspace-1-overview");
-    expect(binding.workspaceDir).toContain(path.join("workspaces", "workspace-1", "agents", "overview"));
+    expect(binding.workspaceDir).toContain(
+      path.join("workspaces", "workspace-1", "agents", "overview"),
+    );
     expect(bootstrapMock).toHaveBeenCalledTimes(1);
     const configPath = process.env.OPENCLAW_CONFIG_PATH!;
     const config = JSON.parse(readFileSync(configPath, "utf-8")) as {
@@ -105,6 +127,27 @@ describe("workspace-runtime", () => {
     };
     expect(config.agents?.defaults?.workspace).toBe(binding.workspaceDir);
     expect(Object.keys(config.models?.providers ?? {})).toEqual(["bustly"]);
+  });
+
+  it("prefers control plane manifest preflight in cloud runtime mode", async () => {
+    const binding = await ensureBustlyCloudReady({
+      env: {
+        OPENCLAW_STATE_DIR: path.join(tempDir, "state"),
+        OPENCLAW_CONFIG_PATH: path.join(tempDir, "state", "openclaw.json"),
+        BUSTLY_CONTROL_PLANE_BASE_URL: "https://cp.example.com",
+        BUSTLY_RUNTIME_WORKSPACE_ID: "workspace-1",
+        BUSTLY_RUNTIME_ID: "runtime-1",
+        BUSTLY_RUNTIME_TOKEN: "runtime-token",
+      } as NodeJS.ProcessEnv,
+      userAgent: "openclaw-cloud",
+    });
+
+    expect(fetchAndApplyManifestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userAgent: "openclaw-cloud",
+      }),
+    );
+    expect(binding.workspaceId).toBe("workspace-1");
   });
 
   it("is idempotent when switching to the current workspace", async () => {

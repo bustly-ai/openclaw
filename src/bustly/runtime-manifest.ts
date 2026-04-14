@@ -1,7 +1,11 @@
 import { readBustlyOAuthState } from "../bustly-oauth.js";
-import type { BustlyWorkspaceBinding } from "./workspace-runtime.js";
-import { resolveActiveBustlyWorkspaceBinding, setActiveBustlyWorkspace } from "./workspace-runtime.js";
+import { fetchBustlyRuntimeManifest } from "./control-plane-runtime.js";
 import { ensureBustlyWorkspacePresetAgents } from "./workspace-agents.js";
+import type { BustlyWorkspaceBinding } from "./workspace-runtime.js";
+import {
+  resolveActiveBustlyWorkspaceBinding,
+  setActiveBustlyWorkspace,
+} from "./workspace-runtime.js";
 
 export type BustlyRuntimePresetAgent = {
   slug: string;
@@ -28,9 +32,9 @@ export type BustlyRuntimeManifestApplyResult = BustlyWorkspaceBinding & {
   presetAgentsApplied: number;
 };
 
-function resolveWorkspaceId(params?: {
-  workspaceId?: string;
-}): string {
+type FetchLike = typeof fetch;
+
+function resolveWorkspaceId(params?: { workspaceId?: string }): string {
   return params?.workspaceId?.trim() || readBustlyOAuthState()?.user?.workspaceId?.trim() || "";
 }
 
@@ -50,9 +54,7 @@ export function getBustlyRuntimeHealthSnapshot(): {
     workspaceId,
     userId: state?.user?.userId?.trim() ?? "",
     userEmail: state?.user?.userEmail?.trim() ?? "",
-    hasSupabaseConfig: Boolean(
-      state?.supabase?.url?.trim() && state?.supabase?.anonKey?.trim(),
-    ),
+    hasSupabaseConfig: Boolean(state?.supabase?.url?.trim() && state?.supabase?.anonKey?.trim()),
     activeBinding: resolveActiveBustlyWorkspaceBinding(),
   };
 }
@@ -107,3 +109,61 @@ export async function applyBustlyRuntimeManifest(
   };
 }
 
+function readStringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizePresetAgentsInput(raw: unknown): BustlyRuntimePresetAgent[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .filter(
+      (entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null,
+    )
+    .map((entry) => ({
+      slug: readStringField(entry, "slug") ?? "",
+      label: readStringField(entry, "label") ?? "",
+      icon: readStringField(entry, "icon"),
+      isMain: entry.isMain === true,
+    }))
+    .filter((entry) => entry.slug && entry.label);
+}
+
+export async function fetchAndApplyBustlyRuntimeManifest(params?: {
+  configPath?: string;
+  env?: NodeJS.ProcessEnv;
+  userAgent?: string;
+  baseUrl?: string;
+  fetchImpl?: FetchLike;
+}): Promise<BustlyRuntimeManifestApplyResult & { manifestRevision: string | null }> {
+  const resolved = await fetchBustlyRuntimeManifest({
+    env: params?.env,
+    fetchImpl: params?.fetchImpl,
+  });
+  const manifest = resolved.manifest;
+
+  const applied = await applyBustlyRuntimeManifest({
+    workspaceId: readStringField(manifest, "workspaceId") ?? resolved.workspaceId,
+    workspaceName: readStringField(manifest, "workspaceName"),
+    agentName: readStringField(manifest, "agentName"),
+    selectedModelInput:
+      readStringField(manifest, "selectedModelInput") ?? readStringField(manifest, "selectedModel"),
+    userAgent: params?.userAgent ?? readStringField(manifest, "userAgent"),
+    baseUrl: params?.baseUrl ?? readStringField(manifest, "baseUrl"),
+    presetAgents: normalizePresetAgentsInput(manifest.presetAgents),
+    allowCreateConfig: true,
+    configPath: params?.configPath,
+    env: params?.env,
+  });
+
+  return {
+    ...applied,
+    manifestRevision: resolved.manifestRevision,
+  };
+}

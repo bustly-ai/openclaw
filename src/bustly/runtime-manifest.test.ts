@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BustlyOAuthState } from "../config/types.base.js";
 import {
   applyBustlyRuntimeManifest,
+  fetchAndApplyBustlyRuntimeManifest,
   getBustlyRuntimeHealthSnapshot,
 } from "./runtime-manifest.js";
 
@@ -41,7 +42,16 @@ vi.mock("./workspace-agents.js", () => ({
     ensureBustlyWorkspacePresetAgentsMock(params),
 }));
 
+const fetchMock = vi.fn();
+vi.mock("./control-plane-runtime.js", () => ({
+  fetchBustlyRuntimeManifest: (params: unknown) => fetchMock(params),
+}));
+
 describe("bustly runtime manifest", () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+  });
+
   it("returns runtime health snapshot", () => {
     oauthStateRef.current = {
       deviceId: "device-1",
@@ -134,5 +144,32 @@ describe("bustly runtime manifest", () => {
       }),
     ).rejects.toThrow("workspaceId is required");
   });
-});
 
+  it("fetches manifest from control plane and applies it", async () => {
+    fetchMock.mockResolvedValue({
+      workspaceId: "workspace-1",
+      runtimeId: "runtime-1",
+      manifestRevision: "rev-1",
+      manifest: {
+        workspaceName: "Workspace One",
+        selectedModel: "bustly/chat.standard",
+        presetAgents: [{ slug: "growth", label: "Growth" }],
+      },
+    });
+
+    const applied = await fetchAndApplyBustlyRuntimeManifest({
+      userAgent: "openclaw-cloud",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(setActiveBustlyWorkspaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-1",
+        workspaceName: "Workspace One",
+        selectedModelInput: "bustly/chat.standard",
+        userAgent: "openclaw-cloud",
+      }),
+    );
+    expect(applied.manifestRevision).toBe("rev-1");
+  });
+});

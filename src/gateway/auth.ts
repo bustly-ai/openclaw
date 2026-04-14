@@ -34,6 +34,7 @@ export type ResolvedGatewayAuth = {
   password?: string;
   allowTailscale: boolean;
   trustedProxy?: GatewayTrustedProxyConfig;
+  verifier?: GatewayTokenVerifier;
 };
 
 export type GatewayAuthResult = {
@@ -46,6 +47,12 @@ export type GatewayAuthResult = {
   /** Milliseconds the client should wait before retrying (when rate-limited). */
   retryAfterMs?: number;
 };
+
+export type GatewayTokenVerifier = (params: {
+  token: string;
+  req?: IncomingMessage;
+  authSurface: GatewayAuthSurface;
+}) => Promise<{ ok: true } | { ok: false; reason?: string }>;
 
 type ConnectAuth = {
   token?: string;
@@ -289,7 +296,7 @@ export function resolveGatewayAuth(params: {
 }
 
 export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
-  if (auth.mode === "token" && !auth.token) {
+  if (auth.mode === "token" && !auth.token && !auth.verifier) {
     if (auth.allowTailscale) {
       return;
     }
@@ -432,12 +439,25 @@ export async function authorizeGatewayConnect(
   }
 
   if (auth.mode === "token") {
-    if (!auth.token) {
+    if (!auth.token && !auth.verifier) {
       return { ok: false, reason: "token_missing_config" };
     }
     if (!connectAuth?.token) {
       limiter?.recordFailure(ip, rateLimitScope);
       return { ok: false, reason: "token_missing" };
+    }
+    if (auth.verifier) {
+      const verified = await auth.verifier({
+        token: connectAuth.token,
+        req,
+        authSurface,
+      });
+      if (!verified.ok) {
+        limiter?.recordFailure(ip, rateLimitScope);
+        return { ok: false, reason: verified.reason ?? "token_mismatch" };
+      }
+      limiter?.reset(ip, rateLimitScope);
+      return { ok: true, method: "token" };
     }
     if (!safeEqualSecret(connectAuth.token, auth.token)) {
       limiter?.recordFailure(ip, rateLimitScope);
