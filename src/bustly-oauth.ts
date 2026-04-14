@@ -7,6 +7,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import * as os from "node:os";
 import { resolve } from "node:path";
+import { resolveBustlyAccountApiBaseUrl } from "./bustly/env.js";
 import type {
   BustlyOAuthState,
   BustlySearchDataConfig,
@@ -394,16 +395,13 @@ export function getBustlyAccessToken(
 }
 
 export async function refreshBustlySession(): Promise<BustlyRefreshResult> {
-  const apiBaseUrl = process.env.BUSTLY_API_BASE_URL?.trim() ?? "";
+  const apiBaseUrl = resolveBustlyAccountApiBaseUrl();
   const bustlyRefreshToken = getStoredBustlyRefreshToken(readBustlyOAuthState());
   if (!bustlyRefreshToken) {
     throw new Error("Missing Bustly refresh token");
   }
-  if (!apiBaseUrl) {
-    throw new Error("Missing Bustly API base URL");
-  }
 
-  const endpoint = `${apiBaseUrl.replace(/\/+$/, "")}/api/oauth/api/v1/oauth/refresh`;
+  const endpoint = `${apiBaseUrl}/api/oauth/api/v1/oauth/refresh`;
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {

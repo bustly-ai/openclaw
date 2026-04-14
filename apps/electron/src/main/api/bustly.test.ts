@@ -31,11 +31,13 @@ describe("refreshBustlySession", () => {
     mkdirSync(stateDir, { recursive: true });
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    process.env.BUSTLY_API_BASE_URL = "https://api.example.com/";
+    process.env.BUSTLY_ACCOUNT_API_BASE_URL = "https://test-bustly-account.bustly.ai/";
+    process.env.BUSTLY_API_BASE_URL = "https://legacy.example.com/";
   });
 
   afterAll(() => {
     rmSync(stateDir, { recursive: true, force: true });
+    delete process.env.BUSTLY_ACCOUNT_API_BASE_URL;
     delete process.env.BUSTLY_API_BASE_URL;
     vi.unstubAllGlobals();
   });
@@ -90,7 +92,7 @@ describe("refreshBustlySession", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://api.example.com/api/oauth/api/v1/oauth/refresh");
+    expect(url).toBe("https://test-bustly-account.bustly.ai/api/oauth/api/v1/oauth/refresh");
     expect(init.method).toBe("POST");
     expect(init.headers).toMatchObject({
       Accept: "application/json",
@@ -150,6 +152,34 @@ describe("refreshBustlySession", () => {
 
     expect(result.ok).toBe(false);
     expect(result.errorText).toBe("refresh failed");
+  });
+
+  it("falls back to the legacy Bustly API base env when account env is missing", async () => {
+    delete process.env.BUSTLY_ACCOUNT_API_BASE_URL;
+
+    writeFileSync(
+      oauthFile,
+      JSON.stringify({
+        deviceId: "device-1",
+        callbackPort: 17900,
+        user: {
+          bustlyRefreshToken: "bustly-refresh-token",
+        },
+      }),
+      "utf-8",
+    );
+
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ status: "0", data: {} }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await refreshBustlySession();
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://legacy.example.com/api/oauth/api/v1/oauth/refresh");
   });
 
   it("keeps a direct Supabase refresh fallback for legacy on-disk sessions", async () => {

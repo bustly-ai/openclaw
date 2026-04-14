@@ -91,9 +91,13 @@ MEMORY="2048"
 DESIRED_COUNT="1"
 BUSTLY_PROFILE="${OPENCLAW_BUSTLY_PROFILE:-prod}"
 DISABLE_LOCAL_OAUTH_FALLBACK="${OPENCLAW_DISABLE_LOCAL_OAUTH_FALLBACK:-0}"
+BUSTLY_ACCOUNT_API_BASE_URL=""
+BUSTLY_ACCOUNT_WEB_BASE_URL=""
 BUSTLY_API_BASE_URL=""
 BUSTLY_WEB_BASE_URL=""
 BUSTLY_CLIENT_ID=""
+BUSTLY_ACCOUNT_API_BASE_URL_DEFAULT="https://gw.bustly.ai/api/v1"
+BUSTLY_ACCOUNT_WEB_BASE_URL_DEFAULT="https://www.bustly.ai"
 BUSTLY_API_BASE_URL_DEFAULT="https://gw.bustly.ai/api/v1"
 BUSTLY_WEB_BASE_URL_DEFAULT="https://www.bustly.ai"
 BUSTLY_CLIENT_ID_DEFAULT="openclaw-desktop"
@@ -179,8 +183,16 @@ while [[ $# -gt 0 ]]; do
       BUSTLY_API_BASE_URL="${2:-}"
       shift 2
       ;;
+    --bustly-account-api-base-url)
+      BUSTLY_ACCOUNT_API_BASE_URL="${2:-}"
+      shift 2
+      ;;
     --bustly-web-base-url)
       BUSTLY_WEB_BASE_URL="${2:-}"
+      shift 2
+      ;;
+    --bustly-account-web-base-url)
+      BUSTLY_ACCOUNT_WEB_BASE_URL="${2:-}"
       shift 2
       ;;
     --bustly-client-id)
@@ -283,7 +295,9 @@ if [[ "$BUSTLY_PROFILE" != "prod" && "$BUSTLY_PROFILE" != "test" && "$BUSTLY_PRO
 fi
 
 if [[ "$BUSTLY_PROFILE" == "test" ]]; then
-  BUSTLY_API_BASE_URL_DEFAULT="https://test.agent-api.bustly.shop/java/api"
+  BUSTLY_ACCOUNT_API_BASE_URL_DEFAULT="https://test-bustly-account.bustly.ai"
+  BUSTLY_ACCOUNT_WEB_BASE_URL_DEFAULT="https://test-bustly-account.bustly.ai"
+  BUSTLY_API_BASE_URL_DEFAULT="https://test-bustly-account.bustly.ai"
   BUSTLY_WEB_BASE_URL_DEFAULT="https://test-www.bustly.shop"
 fi
 
@@ -469,11 +483,17 @@ if [[ -z "$BUSTLY_LOGIN_TRACE_ID" ]]; then
   BUSTLY_LOGIN_TRACE_ID="cloud-${WORKSPACE_ID:0:12}"
 fi
 
+if [[ -z "$BUSTLY_ACCOUNT_API_BASE_URL" ]]; then
+  BUSTLY_ACCOUNT_API_BASE_URL="$BUSTLY_ACCOUNT_API_BASE_URL_DEFAULT"
+fi
+if [[ -z "$BUSTLY_ACCOUNT_WEB_BASE_URL" ]]; then
+  BUSTLY_ACCOUNT_WEB_BASE_URL="$BUSTLY_ACCOUNT_WEB_BASE_URL_DEFAULT"
+fi
 if [[ -z "$BUSTLY_API_BASE_URL" ]]; then
-  BUSTLY_API_BASE_URL="$BUSTLY_API_BASE_URL_DEFAULT"
+  BUSTLY_API_BASE_URL="$BUSTLY_ACCOUNT_API_BASE_URL"
 fi
 if [[ -z "$BUSTLY_WEB_BASE_URL" ]]; then
-  BUSTLY_WEB_BASE_URL="$BUSTLY_WEB_BASE_URL_DEFAULT"
+  BUSTLY_WEB_BASE_URL="$BUSTLY_ACCOUNT_WEB_BASE_URL"
 fi
 if [[ -z "$BUSTLY_CLIENT_ID" ]]; then
   BUSTLY_CLIENT_ID="$BUSTLY_CLIENT_ID_DEFAULT"
@@ -593,6 +613,8 @@ cat >"$TASK_DEF_FILE" <<JSON
         {"name": "BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT", "value": "${BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT}"},
         {"name": "BUSTLY_SESSION_ID", "value": "${BUSTLY_SESSION_ID}"},
         {"name": "BUSTLY_LOGIN_TRACE_ID", "value": "${BUSTLY_LOGIN_TRACE_ID}"},
+        {"name": "BUSTLY_ACCOUNT_API_BASE_URL", "value": "${BUSTLY_ACCOUNT_API_BASE_URL}"},
+        {"name": "BUSTLY_ACCOUNT_WEB_BASE_URL", "value": "${BUSTLY_ACCOUNT_WEB_BASE_URL}"},
         {"name": "BUSTLY_API_BASE_URL", "value": "${BUSTLY_API_BASE_URL}"},
         {"name": "BUSTLY_WEB_BASE_URL", "value": "${BUSTLY_WEB_BASE_URL}"},
         {"name": "BUSTLY_CLIENT_ID", "value": "${BUSTLY_CLIENT_ID}"}

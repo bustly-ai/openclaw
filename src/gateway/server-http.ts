@@ -9,6 +9,7 @@ import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
 import * as BustlyOAuth from "../bustly-oauth.js";
+import { resolveBustlyAccountApiBaseUrl } from "../bustly/env.js";
 import { synchronizeBustlyWorkspaceContext } from "../bustly/workspace-runtime.js";
 import {
   A2UI_PATH,
@@ -164,12 +165,9 @@ function sendBustlyOAuthHtml(
 }
 
 async function exchangeBustlyAuthCode(code: string): Promise<BustlyTokenApiResponse> {
-  const apiBaseUrl = process.env.BUSTLY_API_BASE_URL;
-  if (!apiBaseUrl) {
-    throw new Error("Missing BUSTLY_API_BASE_URL");
-  }
+  const apiBaseUrl = resolveBustlyAccountApiBaseUrl();
   const clientId = process.env.BUSTLY_CLIENT_ID ?? "openclaw-desktop";
-  const apiEndpoint = `${apiBaseUrl.replace(/\/+$/, "")}/api/oauth/getToken`;
+  const apiEndpoint = `${apiBaseUrl}/api/oauth/getToken`;
   const response = await fetch(apiEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -4,6 +4,7 @@
 
 import { randomBytes } from "node:crypto";
 import * as BustlyOAuth from "../../bustly-oauth.js";
+import { resolveBustlyAccountWebBaseUrl } from "../../bustly/env.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
 
 // In-memory OAuth state storage (for pending logins)
@@ -59,19 +60,17 @@ export const oauthLogin: GatewayRequestHandler = async ({
   respond,
 }: Pick<GatewayRequestHandlerOptions, "params" | "respond">) => {
   try {
-    // Load environment variables for OAuth configuration
-    const apiBaseUrl = process.env.BUSTLY_API_BASE_URL;
-    const webBaseUrl = process.env.BUSTLY_WEB_BASE_URL;
     const clientId = process.env.BUSTLY_CLIENT_ID;
 
-    if (!apiBaseUrl || !webBaseUrl || !clientId) {
+    if (!clientId) {
       respond(false, undefined, {
         code: "OAUTH_ERROR",
         message:
-          "Bustly OAuth configuration not found. Please set BUSTLY_API_BASE_URL, BUSTLY_WEB_BASE_URL, and BUSTLY_CLIENT_ID environment variables.",
+          "Bustly OAuth configuration not found. Please set Bustly account base URLs and BUSTLY_CLIENT_ID environment variables.",
       });
       return;
     }
+    const webBaseUrl = resolveBustlyAccountWebBaseUrl();
 
     // Read current OAuth state to get device ID
     const currentState = BustlyOAuth.readBustlyOAuthState();

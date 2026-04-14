@@ -1,4 +1,8 @@
 import { resolveBustlyAdminLink, type BustlyLinkKind } from "../../bustly/admin-links.js";
+import {
+  resolveBustlyAccountApiBaseUrl,
+  resolveBustlyAccountWebBaseUrl,
+} from "../../bustly/env.js";
 import { loadConfig } from "../../config/config.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -33,9 +37,28 @@ function resolveWebBaseFromUrl(raw: string | undefined): string | undefined {
 }
 
 function resolveBustlyLinkEnv(): NodeJS.ProcessEnv {
-  const explicitWebBase = process.env.BUSTLY_WEB_BASE_URL?.trim();
-  if (explicitWebBase) {
-    return process.env;
+  try {
+    const explicitWebBase = resolveBustlyAccountWebBaseUrl(process.env);
+    return {
+      ...process.env,
+      BUSTLY_ACCOUNT_WEB_BASE_URL: explicitWebBase,
+    };
+  } catch {
+    // Fall through to derived values.
+  }
+
+  try {
+    const derivedFromAccountApiEnv = resolveWebBaseFromUrl(
+      resolveBustlyAccountApiBaseUrl(process.env),
+    );
+    if (derivedFromAccountApiEnv) {
+      return {
+        ...process.env,
+        BUSTLY_ACCOUNT_WEB_BASE_URL: derivedFromAccountApiEnv,
+      };
+    }
+  } catch {
+    // Fall through to derived values.
   }
 
   const derivedFromApiEnv = resolveWebBaseFromUrl(process.env.BUSTLY_API_BASE_URL);
@@ -103,11 +126,7 @@ export const bustlyLinksHandlers: GatewayRequestHandlers = {
       const code = message.includes("workspaceId is required")
         ? ErrorCodes.INVALID_REQUEST
         : ErrorCodes.UNAVAILABLE;
-      respond(
-        false,
-        undefined,
-        errorShape(code, message),
-      );
+      respond(false, undefined, errorShape(code, message));
     }
   },
 };

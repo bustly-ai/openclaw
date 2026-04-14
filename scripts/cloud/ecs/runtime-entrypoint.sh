@@ -94,12 +94,12 @@ fi
 
 if [[ "${OPENCLAW_CLOUD_CONTROL_UI_HOST_FALLBACK:-1}" == "1" ]]; then
   mkdir -p "$(dirname "$CONFIG_PATH")"
-  OPENCLAW_CONFIG_PATH="$CONFIG_PATH" BUSTLY_WEB_BASE_URL="${BUSTLY_WEB_BASE_URL:-}" node <<'NODE'
+  OPENCLAW_CONFIG_PATH="$CONFIG_PATH" BUSTLY_ACCOUNT_WEB_BASE_URL="${BUSTLY_ACCOUNT_WEB_BASE_URL:-}" BUSTLY_WEB_BASE_URL="${BUSTLY_WEB_BASE_URL:-}" node <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 
 const configPath = process.env.OPENCLAW_CONFIG_PATH;
-const webBaseUrl = (process.env.BUSTLY_WEB_BASE_URL || "").trim();
+const webBaseUrl = (process.env.BUSTLY_ACCOUNT_WEB_BASE_URL || process.env.BUSTLY_WEB_BASE_URL || "").trim();
 
 let config = {};
 try {

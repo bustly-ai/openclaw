@@ -6,13 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 describe("root bustly oauth state", () => {
   let tempHome: string;
   let previousHome: string | undefined;
+  let previousAccountApiBaseUrl: string | undefined;
   let previousApiBaseUrl: string | undefined;
 
   beforeEach(() => {
     tempHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-root-bustly-oauth-"));
     previousHome = process.env.HOME;
+    previousAccountApiBaseUrl = process.env.BUSTLY_ACCOUNT_API_BASE_URL;
     previousApiBaseUrl = process.env.BUSTLY_API_BASE_URL;
     process.env.HOME = tempHome;
+    delete process.env.BUSTLY_ACCOUNT_API_BASE_URL;
     delete process.env.BUSTLY_API_BASE_URL;
     vi.resetModules();
     vi.restoreAllMocks();
@@ -24,6 +27,11 @@ describe("root bustly oauth state", () => {
       delete process.env.HOME;
     } else {
       process.env.HOME = previousHome;
+    }
+    if (previousAccountApiBaseUrl === undefined) {
+      delete process.env.BUSTLY_ACCOUNT_API_BASE_URL;
+    } else {
+      process.env.BUSTLY_ACCOUNT_API_BASE_URL = previousAccountApiBaseUrl;
     }
     if (previousApiBaseUrl === undefined) {
       delete process.env.BUSTLY_API_BASE_URL;
@@ -90,10 +98,11 @@ describe("root bustly oauth state", () => {
         anonKey: "anon-key",
       },
     });
-    process.env.BUSTLY_API_BASE_URL = "https://api.example.com";
+    process.env.BUSTLY_ACCOUNT_API_BASE_URL = "https://test-bustly-account.bustly.ai";
+    process.env.BUSTLY_API_BASE_URL = "https://legacy.example.com";
 
     const fetchMock = vi.fn(
-      async () =>
+      async (_input: string | URL | Request) =>
         new Response(
           JSON.stringify({
             status: "0",
@@ -115,6 +124,8 @@ describe("root bustly oauth state", () => {
 
     expect(refreshed).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [firstCall] = fetchMock.mock.calls[0] ?? [];
+    expect(firstCall).toBe("https://test-bustly-account.bustly.ai/api/oauth/api/v1/oauth/refresh");
     const persistedState = JSON.parse(readFileSync(oauthPath, "utf-8")) as {
       user?: Record<string, unknown>;
     };

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { normalizeBustlyOAuthState, type BustlyOAuthState } from "../bustly-types.js";
 import { resolveElectronIsolatedStateDir } from "../defaults.js";
+import { resolveBustlyAccountApiBaseUrl } from "../../../../../src/bustly/env.js";
 
 export type SupabaseUserMetadata = {
   avatar_url?: string;
@@ -141,16 +142,13 @@ export async function supabaseFetch(params: SupabaseFetchParams): Promise<Respon
 }
 
 export async function refreshBustlySession(): Promise<BustlyRefreshResult> {
-  const apiBaseUrl = process.env.BUSTLY_API_BASE_URL?.trim() ?? "";
+  const apiBaseUrl = resolveBustlyAccountApiBaseUrl();
   const { bustlyRefreshToken } = getSupabaseAuthConfig();
   if (!bustlyRefreshToken) {
     throw new Error("Missing Bustly refresh token");
   }
-  if (!apiBaseUrl) {
-    throw new Error("Missing Bustly API base URL");
-  }
 
-  const endpoint = `${apiBaseUrl.replace(/\/+$/, "")}/api/oauth/api/v1/oauth/refresh`;
+  const endpoint = `${apiBaseUrl}/api/oauth/api/v1/oauth/refresh`;
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
