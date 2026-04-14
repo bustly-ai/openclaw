@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { BustlyOAuthState } from "../bustly-types.js";
+import { normalizeBustlyOAuthState, type BustlyOAuthState } from "../bustly-types.js";
 import { resolveElectronIsolatedStateDir } from "../defaults.js";
 
 export type SupabaseUserMetadata = {
@@ -43,6 +43,34 @@ export type SupabaseRefreshResult = {
   errorText?: string;
 };
 
+export type BustlyRefreshResponse = {
+  accessToken?: string;
+  refreshToken?: string;
+  tokenType?: string;
+  expiresIn?: number;
+  expiresAt?: number;
+  bustlySessionId?: string;
+  supabaseAccessToken?: string;
+  supabaseAccessTokenExpiresAt?: number;
+  capabilities?: string[];
+  extras?: Record<string, unknown>;
+};
+
+export type ApiResponseEnvelope<T> = {
+  code?: string;
+  message?: string;
+  status?: string;
+  data?: T;
+  extra?: Record<string, unknown>;
+};
+
+export type BustlyRefreshResult = {
+  ok: boolean;
+  status: number;
+  data?: BustlyRefreshResponse;
+  errorText?: string;
+};
+
 export type SupabaseFetchParams = {
   path: string;
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -65,7 +93,7 @@ function readBustlyOAuthState(): BustlyOAuthState | null {
       return null;
     }
     const content = readFileSync(oauthFile, "utf-8");
-    return JSON.parse(content) as BustlyOAuthState;
+    return normalizeBustlyOAuthState(JSON.parse(content) as BustlyOAuthState);
   } catch {
     return null;
   }
@@ -75,9 +103,11 @@ function getSupabaseAuthConfig() {
   const state = readBustlyOAuthState();
   const supabaseUrl = state?.supabase?.url?.trim() ?? "";
   const supabaseAnonKey = state?.supabase?.anonKey?.trim() ?? "";
-  const accessToken = state?.user?.userAccessToken?.trim() ?? "";
-  const refreshToken = state?.user?.userRefreshToken?.trim() ?? "";
-  return { supabaseUrl, supabaseAnonKey, accessToken, refreshToken };
+  const accessToken = state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "";
+  const bustlyRefreshToken = state?.user?.bustlyRefreshToken?.trim() ?? "";
+  const legacySupabaseRefreshToken =
+    state?.user?.legacySupabaseRefreshToken?.trim() ?? state?.user?.userRefreshToken?.trim() ?? "";
+  return { supabaseUrl, supabaseAnonKey, accessToken, bustlyRefreshToken, legacySupabaseRefreshToken };
 }
 
 export async function supabaseFetch(params: SupabaseFetchParams): Promise<Response> {
@@ -110,9 +140,48 @@ export async function supabaseFetch(params: SupabaseFetchParams): Promise<Respon
   });
 }
 
+export async function refreshBustlySession(): Promise<BustlyRefreshResult> {
+  const apiBaseUrl = process.env.BUSTLY_API_BASE_URL?.trim() ?? "";
+  const { bustlyRefreshToken } = getSupabaseAuthConfig();
+  if (!bustlyRefreshToken) {
+    throw new Error("Missing Bustly refresh token");
+  }
+  if (!apiBaseUrl) {
+    throw new Error("Missing Bustly API base URL");
+  }
+
+  const endpoint = `${apiBaseUrl.replace(/\/+$/, "")}/api/oauth/api/v1/oauth/refresh`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+    },
+    body: new URLSearchParams({
+      refresh_token: bustlyRefreshToken,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    return { ok: false, status: response.status, errorText };
+  }
+
+  const envelope = (await response.json()) as ApiResponseEnvelope<BustlyRefreshResponse>;
+  if (envelope.status && envelope.status !== "0") {
+    return {
+      ok: false,
+      status: response.status,
+      errorText: envelope.message ?? "Bustly refresh failed",
+    };
+  }
+
+  return { ok: true, status: response.status, data: envelope.data };
+}
+
 export async function refreshSupabaseAuth(): Promise<SupabaseRefreshResult> {
-  const { supabaseUrl, supabaseAnonKey, refreshToken } = getSupabaseAuthConfig();
-  if (!refreshToken) {
+  const { supabaseUrl, supabaseAnonKey, legacySupabaseRefreshToken } = getSupabaseAuthConfig();
+  if (!legacySupabaseRefreshToken) {
     throw new Error("Missing Supabase refresh token");
   }
   if (!supabaseUrl) {
@@ -131,7 +200,7 @@ export async function refreshSupabaseAuth(): Promise<SupabaseRefreshResult> {
       apikey: supabaseAnonKey,
     },
     body: JSON.stringify({
-      refresh_token: refreshToken,
+      refresh_token: legacySupabaseRefreshToken,
     }),
   });
 

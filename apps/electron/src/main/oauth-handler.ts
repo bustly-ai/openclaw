@@ -297,6 +297,10 @@ export type BustlyTokenApiResponse = {
     userId: string;
     userName: string;
     userEmail: string;
+    bustlySessionId?: string;
+    supabaseAccessToken?: string;
+    supabaseAccessTokenExpiresAt?: number;
+    capabilities?: string[];
     extras?: {
       "bustly-search-data"?: {
         search_DATA_TOKEN: string;

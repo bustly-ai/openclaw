@@ -3824,16 +3824,8 @@ function setupIpcHandlers(): void {
           // Got the code, now exchange for token
           const apiResponse = await exchangeToken(code);
           writeMainInfo(
-            `[Bustly Login] Token exchange response received user=${apiResponse.data.userEmail} workspace=${apiResponse.data.workspaceId} hasSupabaseSession=${Boolean(apiResponse.data.extras?.supabase_session?.access_token)}`,
+            `[Bustly Login] Token exchange response received user=${apiResponse.data.userEmail} workspace=${apiResponse.data.workspaceId} hasSupabaseAccessToken=${Boolean(apiResponse.data.supabaseAccessToken ?? apiResponse.data.extras?.supabase_session?.access_token)}`,
           );
-
-          const supabaseSession = apiResponse.data.extras?.supabase_session;
-          if (!supabaseSession?.access_token) {
-            throw new Error("Missing Supabase access token in API response");
-          }
-          if (!supabaseSession?.refresh_token) {
-            throw new Error("Missing Supabase refresh token in API response");
-          }
 
           // Read optional legacy supabase bootstrap config from API extras.
           // This is only for filling oauth supabase fields; it must not control skill enabling.
@@ -3848,22 +3840,12 @@ function setupIpcHandlers(): void {
             ].includes(skill),
           );
 
-          // Complete login - store user info plus Supabase session in bustlyOauth.json
+          const loginUser = BustlyOAuth.buildBustlyLoginStateFromTokenResponse(apiResponse.data);
+
+          // Complete login - store user info plus the minimal v13 session data in bustlyOauth.json
           BustlyOAuth.completeBustlyLogin({
             user: {
-              userId: apiResponse.data.userId,
-              userName: apiResponse.data.userName,
-              userEmail: apiResponse.data.userEmail,
-              userAvatarUrl:
-                supabaseSession.user?.user_metadata?.avatar_url?.trim()
-                || supabaseSession.user?.user_metadata?.picture?.trim()
-                || undefined,
-              userAccessToken: supabaseSession.access_token,
-              userRefreshToken: supabaseSession.refresh_token,
-              sessionExpiresIn: supabaseSession.expires_in,
-              sessionExpiresAt: supabaseSession.expires_at,
-              sessionTokenType: supabaseSession.token_type,
-              workspaceId: apiResponse.data.workspaceId,
+              ...loginUser,
               skills: filteredSkills,
             },
             supabase: searchDataConfig ? {

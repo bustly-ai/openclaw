@@ -7,7 +7,13 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "
 import { hostname } from "node:os";
 import { resolve } from "node:path";
 import type { BustlyOAuthState, BustlySupabaseConfig } from "./bustly-types.js";
-import { refreshSupabaseAuth, verifySupabaseAuth, type SupabaseUserResponse } from "./api/bustly.js";
+import { normalizeBustlyOAuthState } from "./bustly-types.js";
+import {
+  refreshBustlySession,
+  refreshSupabaseAuth,
+  verifySupabaseAuth,
+  type SupabaseUserResponse,
+} from "./api/bustly.js";
 import { resolveElectronIsolatedStateDir } from "./defaults.js";
 import { writeMainError, writeMainInfo, writeMainWarn } from "./logger.js";
 
@@ -21,6 +27,7 @@ function resolveBustlyOauthFile(): string {
 const DEFAULT_CALLBACK_PORT = 17900;
 const SESSION_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes for auth code
 const SESSION_REFRESH_MARGIN_SECONDS = 60;
+const SESSION_REFRESH_FALLBACK_SECONDS = 5 * 60;
 let refreshBustlyTokenPromise: Promise<boolean> | null = null;
 
 /**
@@ -34,17 +41,26 @@ function ensureConfigDir(): void {
 }
 
 function getStoredSupabaseAccessToken(state: BustlyOAuthState | null): string {
-  return state?.user?.userAccessToken?.trim() ?? "";
+  return state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "";
 }
 
-function getStoredSupabaseRefreshToken(state: BustlyOAuthState | null): string {
-  return state?.user?.userRefreshToken?.trim() ?? "";
+function getStoredBustlyRefreshToken(state: BustlyOAuthState | null): string {
+  return state?.user?.bustlyRefreshToken?.trim() ?? "";
+}
+
+function getStoredLegacySupabaseRefreshToken(state: BustlyOAuthState | null): string {
+  return state?.user?.legacySupabaseRefreshToken?.trim() ?? state?.user?.userRefreshToken?.trim() ?? "";
 }
 
 function getStoredSessionExpiresAt(state: BustlyOAuthState | null): number | null {
-  const expiresAt = state?.user?.sessionExpiresAt;
+  const expiresAt = state?.user?.supabaseAccessTokenExpiresAt;
   if (typeof expiresAt === "number" && Number.isFinite(expiresAt) && expiresAt > 0) {
     return expiresAt;
+  }
+
+  const legacyExpiresAt = state?.user?.sessionExpiresAt;
+  if (typeof legacyExpiresAt === "number" && Number.isFinite(legacyExpiresAt) && legacyExpiresAt > 0) {
+    return legacyExpiresAt;
   }
 
   const expiresIn = state?.user?.sessionExpiresIn;
@@ -66,6 +82,10 @@ function getStoredSessionExpiresAt(state: BustlyOAuthState | null): number | nul
 function trimToUndefined(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function toPositiveFiniteNumber(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function extractSupabaseUserAvatarUrl(user: SupabaseUserResponse | null | undefined): string | undefined {
@@ -116,52 +136,182 @@ function shouldRefreshSession(state: BustlyOAuthState | null, nowMs = Date.now()
   return nowSeconds >= refreshAtSeconds;
 }
 
+function getFallbackSupabaseAccessTokenExpiresAt(currentExpiresAt: number | null | undefined): number {
+  const current = toPositiveFiniteNumber(currentExpiresAt) ?? 0;
+  const minimumFuture = Math.floor(Date.now() / 1000) + SESSION_REFRESH_FALLBACK_SECONDS;
+  return Math.max(current, minimumFuture);
+}
+
+export type BustlyLoginTokenResponse = {
+  userId: string;
+  userName: string;
+  userEmail: string;
+  workspaceId: string;
+  skills: string[];
+  accessToken: string;
+  refreshToken: string;
+  bustlySessionId?: string;
+  supabaseAccessToken?: string;
+  supabaseAccessTokenExpiresAt?: number;
+  capabilities?: string[];
+  extras?: {
+    supabase_session?: {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+      expires_at?: number;
+      token_type?: string;
+      user?: {
+        user_metadata?: {
+          avatar_url?: string;
+          picture?: string;
+          full_name?: string;
+          name?: string;
+          display_name?: string;
+          preferred_username?: string;
+          username?: string;
+          user_name?: string;
+        };
+      };
+    };
+  };
+};
+
+export function buildBustlyLoginStateFromTokenResponse(
+  response: BustlyLoginTokenResponse,
+): BustlyOAuthState["user"] {
+  const supabaseSession = response.extras?.supabase_session;
+  const nextSupabaseAccessToken =
+    trimToUndefined(response.supabaseAccessToken) ??
+    trimToUndefined(supabaseSession?.access_token);
+  const nextSupabaseAccessTokenExpiresAt =
+    toPositiveFiniteNumber(response.supabaseAccessTokenExpiresAt) ??
+    toPositiveFiniteNumber(supabaseSession?.expires_at) ??
+    (typeof supabaseSession?.expires_in === "number" && Number.isFinite(supabaseSession.expires_in) && supabaseSession.expires_in > 0
+      ? Math.floor(Date.now() / 1000) + supabaseSession.expires_in
+      : undefined);
+  const nextBustlyRefreshToken = trimToUndefined(response.refreshToken);
+  const nextAvatarUrl = extractSupabaseUserAvatarUrl(supabaseSession?.user);
+
+  if (!nextSupabaseAccessToken) {
+    throw new Error("Missing Supabase access token in login response");
+  }
+  if (!nextBustlyRefreshToken) {
+    throw new Error("Missing Bustly refresh token in login response");
+  }
+
+  return {
+    userId: response.userId,
+    userName: response.userName,
+    userEmail: response.userEmail,
+    userAvatarUrl: nextAvatarUrl,
+    userAccessToken: nextSupabaseAccessToken,
+    bustlySessionId: trimToUndefined(response.bustlySessionId),
+    supabaseAccessToken: nextSupabaseAccessToken,
+    supabaseAccessTokenExpiresAt: nextSupabaseAccessTokenExpiresAt,
+    bustlyRefreshToken: nextBustlyRefreshToken,
+    capabilities: response.capabilities ?? [],
+    workspaceId: response.workspaceId,
+    skills: response.skills,
+  };
+}
+
 async function refreshBustlyAccessTokenInternal(): Promise<boolean> {
   const state = readBustlyOAuthState();
   const currentUser = state?.user;
-  const refreshToken = getStoredSupabaseRefreshToken(state);
+  const bustlyRefreshToken = getStoredBustlyRefreshToken(state);
+  const legacySupabaseRefreshToken = getStoredLegacySupabaseRefreshToken(state);
   if (!state || !currentUser) {
     writeMainWarn("[BustlyOAuth] Refresh skipped (no OAuth state/user)");
     return false;
   }
-  if (!refreshToken) {
-    writeMainWarn("[BustlyOAuth] Refresh skipped (no refresh token)");
+  if (!bustlyRefreshToken && !legacySupabaseRefreshToken) {
+    writeMainWarn("[BustlyOAuth] Refresh skipped (no usable refresh token)");
     return false;
   }
-  writeMainInfo(
-    `[BustlyOAuth] Refreshing Supabase session user=${currentUser.userEmail} workspace=${currentUser.workspaceId}`,
-  );
-
-  const refreshResult = await refreshSupabaseAuth();
-  if (!refreshResult.ok) {
-    throw new Error(
-      `Supabase refresh failed: ${refreshResult.status}${refreshResult.errorText ? ` ${refreshResult.errorText}` : ""}`,
-    );
-  }
-
-  const refreshedAccessToken = refreshResult.data?.access_token?.trim() ?? "";
-  if (!refreshedAccessToken) {
-    throw new Error("Missing Supabase access token in refresh response");
-  }
-  const nextRefreshToken = refreshResult.data?.refresh_token?.trim() || refreshToken;
-  const refreshedUserId = trimToUndefined(refreshResult.data?.user?.id) ?? currentUser.userId;
-  const refreshedUserEmail = trimToUndefined(refreshResult.data?.user?.email) ?? currentUser.userEmail;
-  const refreshedUserName = extractSupabaseUserName(refreshResult.data?.user) ?? currentUser.userName;
-  const refreshedUserAvatarUrl =
-    extractSupabaseUserAvatarUrl(refreshResult.data?.user) ?? currentUser.userAvatarUrl;
-  state.user = {
-    ...currentUser,
-    userId: refreshedUserId,
-    userName: refreshedUserName,
-    userEmail: refreshedUserEmail,
-    userAvatarUrl: refreshedUserAvatarUrl,
-    userAccessToken: refreshedAccessToken,
-    userRefreshToken: nextRefreshToken,
-    sessionExpiresIn: refreshResult.data?.expires_in,
-    sessionExpiresAt:
-      typeof refreshResult.data?.expires_at === "number" ? refreshResult.data.expires_at : undefined,
-    sessionTokenType: refreshResult.data?.token_type,
+  const {
+    legacySupabaseRefreshToken: _compatLegacyRefreshToken,
+    userRefreshToken: _legacyRefreshToken,
+    sessionExpiresIn: _legacySessionExpiresIn,
+    sessionExpiresAt: _legacySessionExpiresAt,
+    sessionTokenType: _legacySessionTokenType,
+    ...persistedUser
+  } = currentUser as NonNullable<BustlyOAuthState["user"]> & {
+    legacySupabaseRefreshToken?: string;
+    userRefreshToken?: string;
+    sessionExpiresIn?: number;
+    sessionExpiresAt?: number;
+    sessionTokenType?: string;
   };
+
+  if (bustlyRefreshToken) {
+    writeMainInfo(
+      `[BustlyOAuth] Refreshing Bustly-backed Supabase session user=${currentUser.userEmail} workspace=${currentUser.workspaceId}`,
+    );
+
+    const refreshResult = await refreshBustlySession();
+    if (!refreshResult.ok) {
+      throw new Error(
+        `Bustly refresh failed: ${refreshResult.status}${refreshResult.errorText ? ` ${refreshResult.errorText}` : ""}`,
+      );
+    }
+
+    const refreshedAccessToken =
+      trimToUndefined(refreshResult.data?.supabaseAccessToken) ??
+      trimToUndefined((refreshResult.data?.extras?.supabase_session as { access_token?: string } | undefined)?.access_token) ??
+      "";
+    if (!refreshedAccessToken) {
+      throw new Error("Missing Supabase access token in Bustly refresh response");
+    }
+    const nextRefreshToken = trimToUndefined(refreshResult.data?.refreshToken) ?? bustlyRefreshToken;
+    const nextExpiresAt =
+      toPositiveFiniteNumber(refreshResult.data?.supabaseAccessTokenExpiresAt) ??
+      toPositiveFiniteNumber(refreshResult.data?.expiresAt) ??
+      (typeof refreshResult.data?.expiresIn === "number" &&
+      Number.isFinite(refreshResult.data.expiresIn) &&
+      refreshResult.data.expiresIn > 0
+        ? Math.floor(Date.now() / 1000) + refreshResult.data.expiresIn
+        : undefined) ??
+      getFallbackSupabaseAccessTokenExpiresAt(currentUser.supabaseAccessTokenExpiresAt);
+    state.user = {
+      ...persistedUser,
+      userAccessToken: refreshedAccessToken,
+      supabaseAccessToken: refreshedAccessToken,
+      supabaseAccessTokenExpiresAt: nextExpiresAt,
+      bustlyRefreshToken: nextRefreshToken,
+      bustlySessionId: trimToUndefined(refreshResult.data?.bustlySessionId) ?? currentUser.bustlySessionId,
+      capabilities: refreshResult.data?.capabilities ?? currentUser.capabilities,
+    };
+  } else {
+    writeMainWarn(
+      `[BustlyOAuth] Falling back to legacy Supabase refresh for user=${currentUser.userEmail} workspace=${currentUser.workspaceId}`,
+    );
+    const refreshResult = await refreshSupabaseAuth();
+    if (!refreshResult.ok) {
+      throw new Error(
+        `Supabase refresh failed: ${refreshResult.status}${refreshResult.errorText ? ` ${refreshResult.errorText}` : ""}`,
+      );
+    }
+    const refreshedAccessToken = trimToUndefined(refreshResult.data?.access_token) ?? "";
+    if (!refreshedAccessToken) {
+      throw new Error("Missing Supabase access token in legacy refresh response");
+    }
+    state.user = {
+      ...persistedUser,
+      userAccessToken: refreshedAccessToken,
+      supabaseAccessToken: refreshedAccessToken,
+      supabaseAccessTokenExpiresAt:
+        toPositiveFiniteNumber(refreshResult.data?.expires_at) ??
+        (typeof refreshResult.data?.expires_in === "number" &&
+        Number.isFinite(refreshResult.data.expires_in) &&
+        refreshResult.data.expires_in > 0
+          ? Math.floor(Date.now() / 1000) + refreshResult.data.expires_in
+          : undefined) ??
+        getFallbackSupabaseAccessTokenExpiresAt(currentUser.supabaseAccessTokenExpiresAt),
+      legacySupabaseRefreshToken:
+        trimToUndefined(refreshResult.data?.refresh_token) ?? legacySupabaseRefreshToken,
+    } as NonNullable<BustlyOAuthState["user"]>;
+  }
   state.loggedInAt = Date.now();
   writeBustlyOAuthState(state);
   writeMainInfo(
@@ -207,7 +357,13 @@ export function readBustlyOAuthState(): BustlyOAuthState | null {
       return null;
     }
     const content = readFileSync(oauthFile, "utf-8");
-    return JSON.parse(content) as BustlyOAuthState;
+    const parsedState = JSON.parse(content) as BustlyOAuthState;
+    const normalizedState = normalizeBustlyOAuthState(parsedState);
+    if (normalizedState && normalizedState !== parsedState) {
+      writeBustlyOAuthState(normalizedState);
+      writeMainInfo("[BustlyOAuth] Normalized legacy OAuth state on read");
+    }
+    return normalizedState;
   } catch (error) {
     writeMainError("[BustlyOAuth] Failed to read state:", error);
     return null;
@@ -437,19 +593,7 @@ export function consumeBustlyAuthCode(): string | null {
  * All configuration is stored in bustlyOauth.json.
  */
 export function completeBustlyLogin(params: {
-  user: {
-    userId: string;
-    userName: string;
-    userEmail: string;
-    userAvatarUrl?: string;
-    userAccessToken?: string;
-    userRefreshToken?: string;
-    sessionExpiresIn?: number;
-    sessionExpiresAt?: number;
-    sessionTokenType?: string;
-    workspaceId: string;
-    skills: string[];
-  };
+  user: NonNullable<BustlyOAuthState["user"]>;
   supabase?: BustlySupabaseConfig;
 }): void {
   const state = readBustlyOAuthState();
@@ -458,9 +602,30 @@ export function completeBustlyLogin(params: {
   }
   const previousAccessToken = getStoredSupabaseAccessToken(state);
   const previousWorkspaceId = state.user?.workspaceId?.trim() ?? "";
+  const {
+    legacySupabaseRefreshToken: _compatLegacyRefreshToken,
+    userRefreshToken: _legacyRefreshToken,
+    sessionExpiresIn: _legacySessionExpiresIn,
+    sessionExpiresAt: _legacySessionExpiresAt,
+    sessionTokenType: _legacySessionTokenType,
+    ...persistedUser
+  } = params.user as NonNullable<BustlyOAuthState["user"]> & {
+    legacySupabaseRefreshToken?: string;
+    userRefreshToken?: string;
+    sessionExpiresIn?: number;
+    sessionExpiresAt?: number;
+    sessionTokenType?: string;
+  };
 
   // Update state with user info and supabase config.
-  state.user = params.user;
+  const nextSupabaseAccessToken =
+    trimToUndefined(persistedUser?.supabaseAccessToken) ?? trimToUndefined(persistedUser?.userAccessToken);
+  state.user = {
+    ...persistedUser,
+    userAccessToken: nextSupabaseAccessToken,
+    supabaseAccessToken: nextSupabaseAccessToken,
+    bustlyRefreshToken: trimToUndefined(persistedUser?.bustlyRefreshToken),
+  };
   state.supabase = params.supabase;
   state.loggedInAt = Date.now();
 
