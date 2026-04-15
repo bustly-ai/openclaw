@@ -290,7 +290,7 @@ describe("getApiKeyForModel", () => {
   });
 
   it("prefers bustlyOauth.json token over auth-profiles for bustly", async () => {
-    vi.spyOn(BustlyOAuth, "readBustlyOAuthState").mockReturnValue({
+    vi.spyOn(BustlyOAuth, "readBustlyOAuthStateEnsuringFreshToken").mockResolvedValue({
       deviceId: "device",
       callbackPort: 17900,
       user: {
@@ -320,8 +320,40 @@ describe("getApiKeyForModel", () => {
     expect(resolved.source).toBe("bustlyOauth.json:user.userAccessToken");
   });
 
+  it("prefers v13 supabaseAccessToken over auth-profiles for bustly", async () => {
+    vi.spyOn(BustlyOAuth, "readBustlyOAuthStateEnsuringFreshToken").mockResolvedValue({
+      deviceId: "device",
+      callbackPort: 17900,
+      user: {
+        userId: "u1",
+        userName: "User",
+        userEmail: "user@example.com",
+        supabaseAccessToken: "oauth-token-v13",
+        bustlyRefreshToken: "refresh-token",
+        workspaceId: "w1",
+        skills: [],
+      },
+    });
+    const resolved = await resolveApiKeyForProvider({
+      provider: "bustly",
+      store: {
+        version: 1,
+        profiles: {
+          "bustly:default": {
+            type: "token",
+            provider: "bustly",
+            token: "profile-token",
+          },
+        },
+      },
+    });
+    expect(resolved.mode).toBe("token");
+    expect(resolved.apiKey).toBe("oauth-token-v13");
+    expect(resolved.source).toBe("bustlyOauth.json:user.supabaseAccessToken");
+  });
+
   it("throws when bustlyOauth.json token is missing (no auth-profiles fallback)", async () => {
-    vi.spyOn(BustlyOAuth, "readBustlyOAuthState").mockReturnValue({
+    vi.spyOn(BustlyOAuth, "readBustlyOAuthStateEnsuringFreshToken").mockResolvedValue({
       deviceId: "device",
       callbackPort: 17900,
       user: {
@@ -351,7 +383,7 @@ describe("getApiKeyForModel", () => {
   });
 
   it("uses bustlyOauth token even when explicit profileId has no credential", async () => {
-    vi.spyOn(BustlyOAuth, "readBustlyOAuthState").mockReturnValue({
+    vi.spyOn(BustlyOAuth, "readBustlyOAuthStateEnsuringFreshToken").mockResolvedValue({
       deviceId: "device",
       callbackPort: 17900,
       user: {

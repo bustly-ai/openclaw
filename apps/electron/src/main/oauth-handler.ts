@@ -7,6 +7,10 @@ import { shell } from "electron";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { loginOpenAICodex, loginAntigravity } from "@mariozechner/pi-ai";
+import {
+  resolveBustlyAccountApiBaseUrl,
+  resolveBustlyAccountWebBaseUrl,
+} from "../../../../src/bustly/env.js";
 import { loadConfig } from "../../../../src/config/config.js";
 import * as BustlyOAuth from "./bustly-oauth.js";
 import { mainHttpFetch } from "./http-client.js";
@@ -51,16 +55,14 @@ export function generateLoginUrl(
   loginTraceId: string,
   redirectUri: string,
 ): string {
-  // Load config from environment variables
-  const apiBaseUrl = process.env.BUSTLY_API_BASE_URL;
-  const webBaseUrl = process.env.BUSTLY_WEB_BASE_URL;
   const clientId = process.env.BUSTLY_CLIENT_ID;
 
-  if (!apiBaseUrl || !webBaseUrl || !clientId) {
+  if (!clientId) {
     throw new Error(
-      "Bustly OAuth configuration not found. Please set BUSTLY_API_BASE_URL, BUSTLY_WEB_BASE_URL, and BUSTLY_CLIENT_ID environment variables.",
+      "Bustly OAuth configuration not found. Please set Bustly account base URLs and BUSTLY_CLIENT_ID environment variables.",
     );
   }
+  const webBaseUrl = resolveBustlyAccountWebBaseUrl();
 
   const state = BustlyOAuth.readBustlyOAuthState();
   const deviceId = state?.deviceId ?? "";
@@ -298,6 +300,10 @@ export type BustlyTokenApiResponse = {
     userId: string;
     userName: string;
     userEmail: string;
+    bustlySessionId?: string;
+    supabaseAccessToken?: string;
+    supabaseAccessTokenExpiresAt?: number;
+    capabilities?: string[];
     extras?: {
       "bustly-search-data"?: {
         search_DATA_TOKEN: string;
@@ -331,13 +337,8 @@ export type BustlyTokenApiResponse = {
 export async function exchangeToken(code: string): Promise<BustlyTokenApiResponse> {
   const clientId = process.env.BUSTLY_CLIENT_ID ?? "openclaw-desktop";
 
-  const apiBaseUrl = process.env.BUSTLY_API_BASE_URL;
-  if (!apiBaseUrl) {
-    throw new Error(
-      "Bustly OAuth configuration not found. Please set BUSTLY_API_BASE_URL environment variable.",
-    );
-  }
-  const apiEndpoint = `${apiBaseUrl.replace(/\/+$/, "")}/api/oauth/getToken`;
+  const apiBaseUrl = resolveBustlyAccountApiBaseUrl();
+  const apiEndpoint = `${apiBaseUrl}/api/oauth/getToken`;
   writeMainInfo("[Bustly OAuth] Exchanging authorization code for access token");
 
   const response = await mainHttpFetch(apiEndpoint, {

@@ -21,6 +21,19 @@ require_cmd() {
   fi
 }
 
+read_value_from_env_or_tf_output() {
+  local env_key="$1"
+  local tf_output_name="$2"
+  local value="${!env_key:-}"
+
+  if [[ -n "$value" ]]; then
+    printf '%s' "$value"
+    return 0
+  fi
+
+  terraform -chdir="$TF_DIR" output -raw "$tf_output_name"
+}
+
 WORKSPACE_ID=""
 AWS_PROFILE_NAME="${AWS_PROFILE:-bustly-staging}"
 TF_DIR="infra/terraform/ecs-fargate"
@@ -68,8 +81,8 @@ fi
 
 export AWS_PROFILE="$AWS_PROFILE_NAME"
 
-TABLE_NAME="$(terraform -chdir="$TF_DIR" output -raw workspace_runtime_table_name)"
-AWS_REGION="$(terraform -chdir="$TF_DIR" output -raw aws_region)"
+TABLE_NAME="$(read_value_from_env_or_tf_output OPENCLAW_WORKSPACE_RUNTIME_TABLE_NAME workspace_runtime_table_name)"
+AWS_REGION="$(read_value_from_env_or_tf_output OPENCLAW_AWS_REGION aws_region)"
 
 ITEM_JSON="$(aws dynamodb get-item \
   --region "$AWS_REGION" \
@@ -114,7 +127,9 @@ fi
 echo "smoke target: ${WS_URL}"
 
 wait_target_healthy() {
-  local attempts=24
+  # ALB health checks run every 30s and require multiple consecutive successes.
+  # After a recreate, runtime bootstrap + 5 healthy checks can easily exceed 2 minutes.
+  local attempts=48
   local sleep_seconds=5
   local state=""
   local reason=""

@@ -6,13 +6,20 @@ describe("bustly admin links", () => {
     vi.unstubAllEnvs();
   });
 
-  it("requires BUSTLY_WEB_BASE_URL", () => {
+  it("requires a Bustly web base url", () => {
+    vi.stubEnv("BUSTLY_ACCOUNT_WEB_BASE_URL", "");
     vi.stubEnv("BUSTLY_WEB_BASE_URL", "");
-    expect(() => resolveBustlyWebBaseUrl()).toThrow("Missing BUSTLY_WEB_BASE_URL");
+    expect(() => resolveBustlyWebBaseUrl()).toThrow("Missing Bustly web base URL");
+  });
+
+  it("prefers BUSTLY_ACCOUNT_WEB_BASE_URL", () => {
+    vi.stubEnv("BUSTLY_ACCOUNT_WEB_BASE_URL", "https://test-bustly-account.bustly.ai/");
+    vi.stubEnv("BUSTLY_WEB_BASE_URL", "https://legacy-web.example.com/");
+    expect(resolveBustlyWebBaseUrl()).toBe("https://test-bustly-account.bustly.ai");
   });
 
   it("builds profile settings link", () => {
-    vi.stubEnv("BUSTLY_WEB_BASE_URL", "https://www.bustly.ai/");
+    vi.stubEnv("BUSTLY_ACCOUNT_WEB_BASE_URL", "https://www.bustly.ai/");
     expect(
       resolveBustlyAdminLink({
         kind: "settings",
@@ -21,7 +28,7 @@ describe("bustly admin links", () => {
   });
 
   it("builds workspace links", () => {
-    vi.stubEnv("BUSTLY_WEB_BASE_URL", "https://www.bustly.ai");
+    vi.stubEnv("BUSTLY_ACCOUNT_WEB_BASE_URL", "https://www.bustly.ai");
     expect(
       resolveBustlyAdminLink({
         kind: "workspace-settings",
@@ -49,7 +56,7 @@ describe("bustly admin links", () => {
   });
 
   it("supports workspace-create with optional workspace id", () => {
-    vi.stubEnv("BUSTLY_WEB_BASE_URL", "https://www.bustly.ai");
+    vi.stubEnv("BUSTLY_ACCOUNT_WEB_BASE_URL", "https://www.bustly.ai");
     expect(
       resolveBustlyAdminLink({
         kind: "workspace-create",
@@ -64,7 +71,7 @@ describe("bustly admin links", () => {
   });
 
   it("requires workspace id for workspace-scoped links", () => {
-    vi.stubEnv("BUSTLY_WEB_BASE_URL", "https://www.bustly.ai");
+    vi.stubEnv("BUSTLY_ACCOUNT_WEB_BASE_URL", "https://www.bustly.ai");
     expect(() =>
       resolveBustlyAdminLink({
         kind: "workspace-settings",

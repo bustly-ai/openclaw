@@ -1,3 +1,7 @@
+import {
+  hasBustlyControlPlaneRuntimeIdentity,
+  verifyBustlyGatewayTokenWithControlPlane,
+} from "../bustly/control-plane-runtime.js";
 import type {
   GatewayAuthConfig,
   GatewayBindMode,
@@ -98,12 +102,24 @@ export async function resolveGatewayRuntimeConfig(params: {
   const tailscaleOverrides = params.tailscale ?? {};
   const tailscaleConfig = mergeGatewayTailscaleConfig(tailscaleBase, tailscaleOverrides);
   const tailscaleMode = tailscaleConfig.mode ?? "off";
-  const resolvedAuth = resolveGatewayAuth({
+  const baseResolvedAuth = resolveGatewayAuth({
     authConfig: params.cfg.gateway?.auth,
     authOverride: params.auth,
     env: process.env,
     tailscaleMode,
   });
+  const resolvedAuth: ResolvedGatewayAuth =
+    baseResolvedAuth.mode === "token" && hasBustlyControlPlaneRuntimeIdentity(process.env)
+      ? {
+          ...baseResolvedAuth,
+          verifier: async ({ token, req: _req, authSurface }) =>
+            await verifyBustlyGatewayTokenWithControlPlane({
+              gatewayToken: token,
+              authSurface,
+              env: process.env,
+            }),
+        }
+      : baseResolvedAuth;
   const authMode: ResolvedGatewayAuth["mode"] = resolvedAuth.mode;
   const hasToken = typeof resolvedAuth.token === "string" && resolvedAuth.token.trim().length > 0;
   const hasPassword =

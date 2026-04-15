@@ -35,7 +35,7 @@ describe("gateway bustly.links.resolve", () => {
   });
 
   it("returns workspace settings link", async () => {
-    vi.stubEnv("BUSTLY_WEB_BASE_URL", "https://www.bustly.ai");
+    vi.stubEnv("BUSTLY_ACCOUNT_WEB_BASE_URL", "https://www.bustly.ai");
     const respond = await invoke({
       kind: "workspace-settings",
       workspaceId: "workspace-1",
@@ -51,7 +51,7 @@ describe("gateway bustly.links.resolve", () => {
   });
 
   it("returns INVALID_REQUEST when workspace-scoped kind omits workspaceId", async () => {
-    vi.stubEnv("BUSTLY_WEB_BASE_URL", "https://www.bustly.ai");
+    vi.stubEnv("BUSTLY_ACCOUNT_WEB_BASE_URL", "https://www.bustly.ai");
     const respond = await invoke({
       kind: "workspace-pricing",
     });
@@ -65,9 +65,10 @@ describe("gateway bustly.links.resolve", () => {
     );
   });
 
-  it("falls back to BUSTLY_API_BASE_URL when web base env is missing", async () => {
+  it("falls back to BUSTLY_ACCOUNT_API_BASE_URL when web base env is missing", async () => {
+    vi.stubEnv("BUSTLY_ACCOUNT_WEB_BASE_URL", "");
     vi.stubEnv("BUSTLY_WEB_BASE_URL", "");
-    vi.stubEnv("BUSTLY_API_BASE_URL", "https://test-gw.bustly.ai/api/v1");
+    vi.stubEnv("BUSTLY_ACCOUNT_API_BASE_URL", "https://test-bustly-account.bustly.ai");
     const respond = await invoke({
       kind: "settings",
     });
@@ -75,14 +76,16 @@ describe("gateway bustly.links.resolve", () => {
       true,
       {
         kind: "settings",
-        url: "https://test-gw.bustly.ai/admin?setting_modal=profile",
+        url: "https://test-bustly-account.bustly.ai/admin?setting_modal=profile",
       },
       undefined,
     );
   });
 
   it("falls back to bustly provider baseUrl from config when env is missing", async () => {
+    vi.stubEnv("BUSTLY_ACCOUNT_WEB_BASE_URL", "");
     vi.stubEnv("BUSTLY_WEB_BASE_URL", "");
+    vi.stubEnv("BUSTLY_ACCOUNT_API_BASE_URL", "");
     vi.stubEnv("BUSTLY_API_BASE_URL", "");
     vi.spyOn(configModule, "loadConfig").mockReturnValue({
       models: {

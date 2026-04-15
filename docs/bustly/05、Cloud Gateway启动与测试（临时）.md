@@ -62,27 +62,33 @@ AWS_PROFILE=bustly-staging scripts/cloud/ecs/smoke-workspace-runtime.sh --worksp
 - `health` 返回 `ok=true`
 - `bustly.workspace.get-active` 返回 workspace 与 agent 目录
 
+说明：
+
+- 在 `destroy -> recreate` 场景下，ALB target 从 `unhealthy` 收敛到 `healthy`
+  可能需要 2-3 分钟
+- 原因通常不是 runtime 已坏，而是 ALB 健康检查间隔与健康阈值较保守
+
 ## 4. 自动化测试用例清单
 
 ## 4.1 基础设施与证书
 
-| 用例ID | 检查点 | 命令 | 通过标准 |
-| --- | --- | --- | --- |
-| INF-01 | ACM 证书状态 | `aws acm describe-certificate ...` | `Status=ISSUED` |
-| INF-02 | Listener 状态 | `aws elbv2 describe-listeners ...` | 有 `:443 HTTPS` |
-| INF-03 | 子域名解析 | `dig +short ws-<slug>.runtime-staging.bustly.ai` | 解析到 ALB |
+| 用例ID | 检查点        | 命令                                             | 通过标准        |
+| ------ | ------------- | ------------------------------------------------ | --------------- |
+| INF-01 | ACM 证书状态  | `aws acm describe-certificate ...`               | `Status=ISSUED` |
+| INF-02 | Listener 状态 | `aws elbv2 describe-listeners ...`               | 有 `:443 HTTPS` |
+| INF-03 | 子域名解析    | `dig +short ws-<slug>.runtime-staging.bustly.ai` | 解析到 ALB      |
 
 ## 4.2 WS 主链路
 
-| 用例ID | 检查点 | 命令 | 通过标准 |
-| --- | --- | --- | --- |
-| WS-00 | 握手参数校验 | Web 壳发 `connect` | `client.id=cli` 等字段合法，连接不被 `1008` 关闭 |
-| WS-01 | 健康检查 | `raw-gateway-call health` | `ok=true` |
-| WS-02 | 当前 workspace | `raw-gateway-call bustly.workspace.get-active` | workspaceId 正确 |
-| WS-03 | workspace 切换 | `raw-gateway-call bustly.workspace.set-active` | 返回切换成功 |
-| WS-04 | 会话创建 | `raw-gateway-call bustly.sessions.create` | 返回 `sessionKey` |
-| WS-05 | 消息闭环 | `chat.send -> agent.wait -> chat.history` | 历史有用户消息和 assistant 输出 |
-| WS-06 | 诊断导出 | `bustly.runtime.report-issue` | 返回 `archivePath` |
+| 用例ID | 检查点         | 命令                                           | 通过标准                                         |
+| ------ | -------------- | ---------------------------------------------- | ------------------------------------------------ |
+| WS-00  | 握手参数校验   | Web 壳发 `connect`                             | `client.id=cli` 等字段合法，连接不被 `1008` 关闭 |
+| WS-01  | 健康检查       | `raw-gateway-call health`                      | `ok=true`                                        |
+| WS-02  | 当前 workspace | `raw-gateway-call bustly.workspace.get-active` | workspaceId 正确                                 |
+| WS-03  | workspace 切换 | `raw-gateway-call bustly.workspace.set-active` | 返回切换成功                                     |
+| WS-04  | 会话创建       | `raw-gateway-call bustly.sessions.create`      | 返回 `sessionKey`                                |
+| WS-05  | 消息闭环       | `chat.send -> agent.wait -> chat.history`      | 历史有用户消息和 assistant 输出                  |
+| WS-06  | 诊断导出       | `bustly.runtime.report-issue`                  | 返回 `archivePath`                               |
 
 示例：
 
@@ -97,30 +103,30 @@ node scripts/cloud/ecs/raw-gateway-call.mjs --url "$WS_URL" --token "$TOKEN" --m
 
 ## 4.3 HTTP 辅助链路（混合模式）
 
-| 用例ID | 检查点 | 命令 | 预期 |
-| --- | --- | --- | --- |
-| HTTP-01 | `/tools/invoke` 路由与鉴权 | `POST /tools/invoke` | 带 token 返回业务错误（如参数缺失）；不带 token 返回 401/403 |
-| HTTP-02 | `/api/media` 路由 | `GET /api/media` | 无 path 参数返回 400 |
-| HTTP-03 | OAuth callback 路由 | `GET /authorize` | 缺少 code 时返回 400 登录失败页 |
-| HTTP-04 | `/v1/responses` 启用状态 | `POST /v1/responses` | 未启用时 405；启用后进入鉴权/参数校验 |
-| HTTP-05 | `/v1/chat/completions` 启用状态 | `POST /v1/chat/completions` | 未启用时 405；启用后进入鉴权/参数校验 |
+| 用例ID  | 检查点                          | 命令                        | 预期                                                         |
+| ------- | ------------------------------- | --------------------------- | ------------------------------------------------------------ |
+| HTTP-01 | `/tools/invoke` 路由与鉴权      | `POST /tools/invoke`        | 带 token 返回业务错误（如参数缺失）；不带 token 返回 401/403 |
+| HTTP-02 | `/api/media` 路由               | `GET /api/media`            | 无 path 参数返回 400                                         |
+| HTTP-03 | OAuth callback 路由             | `GET /authorize`            | 缺少 code 时返回 400 登录失败页                              |
+| HTTP-04 | `/v1/responses` 启用状态        | `POST /v1/responses`        | 未启用时 405；启用后进入鉴权/参数校验                        |
+| HTTP-05 | `/v1/chat/completions` 启用状态 | `POST /v1/chat/completions` | 未启用时 405；启用后进入鉴权/参数校验                        |
 
 ## 4.4 插件能力（openclaw-lark）
 
-| 用例ID | 检查点 | 命令/观察 | 通过标准 |
-| --- | --- | --- | --- |
-| PLG-01 | 插件加载成功 | 启动日志 | 不出现 `failed to load plugin ... openclaw-lark` |
-| PLG-02 | 依赖完整性 | 检查 `extensions/openclaw-lark/src/core/*.js` | 依赖文件可解析，命令可注册 |
+| 用例ID | 检查点       | 命令/观察                                     | 通过标准                                         |
+| ------ | ------------ | --------------------------------------------- | ------------------------------------------------ |
+| PLG-01 | 插件加载成功 | 启动日志                                      | 不出现 `failed to load plugin ... openclaw-lark` |
+| PLG-02 | 依赖完整性   | 检查 `extensions/openclaw-lark/src/core/*.js` | 依赖文件可解析，命令可注册                       |
 
 ## 4.5 负例与稳定性
 
-| 用例ID | 场景 | 预期 |
-| --- | --- | --- |
-| NEG-01 | token 错误 | WS connect 失败 / HTTP 401 |
-| NEG-02 | OAuth 过期 | `chat.send` 可能报 `401 Invalid JWT` |
-| NEG-03 | 重建冲突 | `service still draining` 时脚本自动重试 |
-| NEG-04 | 运行中重建 | `destroy -> provision` 后可恢复正常 |
-| NEG-05 | WS 握手字段错误 | 连接被 `1008 invalid connect params` 拒绝 |
+| 用例ID | 场景                       | 预期                                      |
+| ------ | -------------------------- | ----------------------------------------- |
+| NEG-01 | token 错误                 | WS connect 失败 / HTTP 401                |
+| NEG-02 | OAuth 过期                 | `chat.send` 可能报 `401 Invalid JWT`      |
+| NEG-03 | 重建冲突                   | `service still draining` 时脚本自动重试   |
+| NEG-04 | 运行中重建                 | `destroy -> provision` 后可恢复正常       |
+| NEG-05 | WS 握手字段错误            | 连接被 `1008 invalid connect params` 拒绝 |
 | NEG-06 | 缺少 `BUSTLY_WEB_BASE_URL` | `bustly.links.resolve` 返回 `UNAVAILABLE` |
 
 ## 5. 常见失败与自动化修复建议
@@ -140,6 +146,8 @@ node scripts/cloud/ecs/raw-gateway-call.mjs --url "$WS_URL" --token "$TOKEN" --m
 
 - 当前脚本已内置重试。
 - 若持续失败，先 `destroy-workspace-runtime.sh` 再 `provision`。
+- `recreate` 后 smoke 若前 1-2 分钟仍显示 `Target.FailedHealthChecks`，优先继续等待
+  健康收敛，而不是立刻判定 runtime 启动失败。
 
 ## 5.3 Node 版本导致本地 CLI 失败
 

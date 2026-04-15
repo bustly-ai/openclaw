@@ -202,6 +202,21 @@ describe("gateway auth", () => {
     expect(res.reason).toBe("token_missing_config");
   });
 
+  it("supports token verification via external verifier", async () => {
+    const verifier = vi.fn(async () => ({ ok: true as const }));
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", allowTailscale: false, verifier },
+      connectAuth: { token: "gateway-token" },
+    });
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("token");
+    expect(verifier).toHaveBeenCalledWith({
+      token: "gateway-token",
+      req: undefined,
+      authSurface: "http",
+    });
+  });
+
   it("allows explicit auth mode none", async () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "none", allowTailscale: false },

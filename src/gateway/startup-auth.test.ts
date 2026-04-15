@@ -93,6 +93,31 @@ describe("ensureGatewayStartupAuth", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("does not generate a token in cloud runtime mode when control plane identity exists", async () => {
+    const result = await ensureGatewayStartupAuth({
+      cfg: {
+        gateway: {
+          auth: {
+            mode: "token",
+          },
+        },
+      },
+      env: {
+        BUSTLY_CONTROL_PLANE_BASE_URL: "https://cp.example.com",
+        BUSTLY_RUNTIME_WORKSPACE_ID: "workspace-1",
+        BUSTLY_RUNTIME_ID: "runtime-1",
+        BUSTLY_RUNTIME_TOKEN: "runtime-token",
+      } as NodeJS.ProcessEnv,
+      persist: true,
+    });
+
+    expect(result.generatedToken).toBeUndefined();
+    expect(result.persistedGeneratedToken).toBe(false);
+    expect(result.auth.mode).toBe("token");
+    expect(result.auth.token).toBeUndefined();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("does not generate in password mode", async () => {
     await expectNoTokenGeneration(
       {

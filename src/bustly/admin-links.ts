@@ -1,3 +1,5 @@
+import { resolveBustlyAccountWebBaseUrl } from "./env.js";
+
 export type BustlyLinkKind =
   | "settings"
   | "workspace-settings"
@@ -7,11 +9,7 @@ export type BustlyLinkKind =
   | "workspace-create";
 
 export function resolveBustlyWebBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  const baseUrl = env.BUSTLY_WEB_BASE_URL?.trim();
-  if (!baseUrl) {
-    throw new Error("Missing BUSTLY_WEB_BASE_URL");
-  }
-  return baseUrl.replace(/\/+$/, "");
+  return resolveBustlyAccountWebBaseUrl(env);
 }
 
 export function buildBustlyAdminUrl(params: {

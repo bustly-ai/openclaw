@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { hasBustlyControlPlaneRuntimeIdentity } from "../bustly/control-plane-runtime.js";
 import type {
   GatewayAuthConfig,
   GatewayTailscaleConfig,
@@ -108,6 +109,10 @@ export async function ensureGatewayStartupAuth(params: {
     authOverride: params.authOverride,
     tailscaleOverride: params.tailscaleOverride,
   });
+  if (resolved.mode === "token" && hasBustlyControlPlaneRuntimeIdentity(env)) {
+    assertHooksTokenSeparateFromGatewayAuth({ cfg: params.cfg, auth: resolved });
+    return { cfg: params.cfg, auth: resolved, persistedGeneratedToken: false };
+  }
   if (resolved.mode !== "token" || (resolved.token?.trim().length ?? 0) > 0) {
     assertHooksTokenSeparateFromGatewayAuth({ cfg: params.cfg, auth: resolved });
     return { cfg: params.cfg, auth: resolved, persistedGeneratedToken: false };
