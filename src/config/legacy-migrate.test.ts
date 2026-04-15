@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 
 describe("legacy migrate audio transcription", () => {
   it("moves routing.transcribeAudio into tools.media.audio.models", () => {
@@ -102,5 +103,45 @@ describe("legacy migrate mention routing", () => {
     expect(
       (res.config?.channels?.telegram as { requireMention?: unknown } | undefined)?.requireMention,
     ).toBeUndefined();
+  });
+});
+
+describe("legacy migrate skills config", () => {
+  it("flags deprecated skills.allowBundled as a legacy config issue", () => {
+    const issues = findLegacyConfigIssues({
+      skills: {
+        allowBundled: ["peekaboo"],
+      },
+    });
+
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "skills.allowBundled",
+        }),
+      ]),
+    );
+  });
+
+  it("removes deprecated skills.allowBundled and preserves other skills config", () => {
+    const res = migrateLegacyConfig({
+      skills: {
+        allowBundled: ["peekaboo"],
+        entries: {
+          peekaboo: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain("Removed deprecated skills.allowBundled.");
+    expect(res.config?.skills).toEqual({
+      entries: {
+        peekaboo: {
+          enabled: true,
+        },
+      },
+    });
   });
 });

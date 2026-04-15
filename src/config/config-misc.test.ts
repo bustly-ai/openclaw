@@ -308,4 +308,5 @@ describe("config strict validation", () => {
       expect(snap.legacyIssues).not.toHaveLength(0);
     });
   });
+
 });

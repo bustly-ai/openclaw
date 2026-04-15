@@ -4,7 +4,7 @@
  * This module provides a simplified one-call initialization
  */
 
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -14,18 +14,11 @@ import type { OpenClawConfig } from "../../../../src/config/types";
 import { ensureOpenClawAgentEnv, resolveOpenClawAgentDir } from "../../../../src/agents/agent-paths";
 import { ensureOpenClawModelsJson } from "../../../../src/agents/models-config";
 import { ensurePiAuthJsonFromAuthProfiles } from "../../../../src/agents/pi-auth-json";
-import { resolveConfigPath as resolveConfigPathFromSrc } from "../../../../src/config/paths";
-import {
-  applyAuthProfileConfig,
-  applyOpenrouterProviderConfig,
-  setOpenrouterApiKey,
-} from "../../../../src/commands/onboard-auth";
-import { applyPrimaryModel } from "../../../../src/commands/model-picker";
+import { readBustlyOAuthState } from "../../../../src/bustly-oauth.js";
+import { applyBustlyOnlyConfig } from "../../../../src/bustly/runtime-config.js";
 import { resolveElectronRunAsNodeExecPath, resolveOpenClawCliPath } from "./cli-utils.js";
 import {
-  ELECTRON_DEFAULT_MODEL,
   ELECTRON_OPENCLAW_PROFILE,
-  getElectronOpenrouterApiKey,
   resolveElectronIsolatedConfigPath,
   resolveElectronIsolatedStateDir,
 } from "./defaults.js";
@@ -33,320 +26,6 @@ import { writeMainError, writeMainInfo } from "./logger.js";
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 let lastInitializationLogSignature: string | null = null;
-const BLOCKED_BUNDLED_SKILL_TOKENS = new Set(["skill-eval-ops"]);
-const BUNDLED_DEFAULT_ENABLED_MANIFEST_NAME = ".bustly-default-enabled.json";
-const DEFAULT_BUNDLED_SKILL_ALLOWLIST = [
-  "ads-core-ops",
-  "clawhub",
-  "coding-agent",
-  "commerce-core-ops",
-  "discord",
-  "gamma",
-  "gog",
-  "hubspot",
-  "meta-ads",
-  "minimax-docx",
-  "minimax-pdf",
-  "minimax-tts",
-  "minimax-xlsx",
-  "nano-banana-pro",
-  "pptx-generator",
-  "shipstation",
-  "skill-creator",
-  "slack",
-  "source-product",
-  "xurl",
-  "zendesk",
-];
-
-function normalizeSkillAllowlistValue(input: string): string {
-  return input.trim().toLowerCase().replace(/[\s_]+/g, "-");
-}
-
-function parseBundledDefaultAllowlist(raw: string): string[] {
-  try {
-    const payload = JSON.parse(raw) as { defaultEnabled?: unknown; allowBundled?: unknown };
-    const candidates = Array.isArray(payload.defaultEnabled)
-      ? payload.defaultEnabled
-      : Array.isArray(payload.allowBundled)
-        ? payload.allowBundled
-        : [];
-    const values = candidates
-      .map((entry) => normalizeSkillAllowlistValue(String(entry)))
-      .filter(Boolean);
-    return [...new Set(values)];
-  } catch {
-    return [];
-  }
-}
-
-function resolveBundledDefaultAllowlistFromManifest(
-  env: NodeJS.ProcessEnv = process.env,
-): string[] | undefined {
-  const candidates = new Set<string>();
-  const cliPath = resolveOpenClawCliPath();
-  if (cliPath) {
-    const root = resolveOpenClawRootFromCliPath(cliPath);
-    candidates.add(resolve(root, "skills", BUNDLED_DEFAULT_ENABLED_MANIFEST_NAME));
-    candidates.add(resolve(root, "bustly-skills", "skills", BUNDLED_DEFAULT_ENABLED_MANIFEST_NAME));
-  }
-
-  const resourcesPath = String((process as NodeJS.Process & { resourcesPath?: string }).resourcesPath || "").trim();
-  if (resourcesPath) {
-    candidates.add(resolve(resourcesPath, "skills", BUNDLED_DEFAULT_ENABLED_MANIFEST_NAME));
-    candidates.add(resolve(resourcesPath, "bustly-skills", "skills", BUNDLED_DEFAULT_ENABLED_MANIFEST_NAME));
-  }
-
-  candidates.add(resolve(__dirname, `../../../skills/${BUNDLED_DEFAULT_ENABLED_MANIFEST_NAME}`));
-  candidates.add(resolve(__dirname, `../../../../skills/${BUNDLED_DEFAULT_ENABLED_MANIFEST_NAME}`));
-  candidates.add(resolve(__dirname, `../../../bustly-skills/skills/${BUNDLED_DEFAULT_ENABLED_MANIFEST_NAME}`));
-  candidates.add(resolve(__dirname, `../../../../bustly-skills/skills/${BUNDLED_DEFAULT_ENABLED_MANIFEST_NAME}`));
-  const envManifestPath = env.BUSTLY_DEFAULT_BUNDLED_SKILLS_MANIFEST?.trim();
-  if (envManifestPath) {
-    candidates.add(resolve(envManifestPath));
-  }
-
-  for (const manifestPath of candidates) {
-    if (!existsSync(manifestPath)) {
-      continue;
-    }
-    try {
-      const values = parseBundledDefaultAllowlist(readFileSync(manifestPath, "utf-8"));
-      if (values.length > 0) {
-        writeMainInfo(
-          `[Init] Loaded default bundled skill allowlist from manifest ${manifestPath} (${values.length} skills)`,
-        );
-        return values;
-      }
-    } catch (error) {
-      writeMainError(`[Init] Failed to read bundled skill allowlist manifest ${manifestPath}`, error);
-    }
-  }
-  return undefined;
-}
-
-function resolveDefaultBundledSkillAllowlist(
-  env: NodeJS.ProcessEnv = process.env,
-): string[] {
-  const raw = env.BUSTLY_DEFAULT_BUNDLED_SKILLS?.trim();
-  const envValues =
-    raw && raw.length > 0
-      ? raw
-          .split(/[,\n]/)
-          .map((entry) => normalizeSkillAllowlistValue(entry))
-          .filter(Boolean)
-      : undefined;
-  const manifestValues = resolveBundledDefaultAllowlistFromManifest(env);
-  const values =
-    envValues && envValues.length > 0
-      ? envValues
-      : manifestValues && manifestValues.length > 0
-        ? manifestValues
-        : DEFAULT_BUNDLED_SKILL_ALLOWLIST.map((entry) => normalizeSkillAllowlistValue(entry));
-  return [...new Set(values)];
-}
-
-function normalizeConfiguredAllowBundled(input: unknown): string[] {
-  if (!Array.isArray(input)) {
-    return [];
-  }
-  return input
-    .map((entry) => String(entry).trim())
-    .filter((entry) => entry.length > 0);
-}
-
-function listBundledSkillNames(dir: string): string[] {
-  if (!existsSync(dir)) {
-    return [];
-  }
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name.trim())
-    .filter((name) => {
-      if (!name || name.startsWith(".")) {
-        return false;
-      }
-      if (BLOCKED_BUNDLED_SKILL_TOKENS.has(normalizeSkillAllowlistValue(name))) {
-        return false;
-      }
-      const skillMd = resolve(dir, name, "SKILL.md");
-      return existsSync(skillMd);
-    })
-    .sort((left, right) => left.localeCompare(right));
-}
-
-function resolveBundledSkillsDirCandidates(
-  env: NodeJS.ProcessEnv = process.env,
-): string[] {
-  const candidates = new Set<string>();
-  const cliPath = resolveOpenClawCliPath();
-  if (cliPath) {
-    const root = resolveOpenClawRootFromCliPath(cliPath);
-    candidates.add(resolve(root, "bustly-skills", "skills"));
-    candidates.add(resolve(root, "skills"));
-  }
-
-  const resourcesPath = String((process as NodeJS.Process & { resourcesPath?: string }).resourcesPath || "").trim();
-  if (resourcesPath) {
-    candidates.add(resolve(resourcesPath, "bustly-skills", "skills"));
-    candidates.add(resolve(resourcesPath, "skills"));
-  }
-
-  candidates.add(resolve(__dirname, "../../../bustly-skills/skills"));
-  candidates.add(resolve(__dirname, "../../../../bustly-skills/skills"));
-  candidates.add(resolve(__dirname, "../../../skills"));
-  candidates.add(resolve(__dirname, "../../../../skills"));
-
-  const explicitDir = env.OPENCLAW_BUNDLED_SKILLS_DIR?.trim();
-  if (explicitDir) {
-    candidates.add(resolve(explicitDir));
-  }
-
-  return [...candidates];
-}
-
-function resolveBundledSkillCatalog(
-  env: NodeJS.ProcessEnv = process.env,
-): string[] {
-  for (const dir of resolveBundledSkillsDirCandidates(env)) {
-    const names = listBundledSkillNames(dir);
-    if (names.length > 0) {
-      writeMainInfo(`[Init] Resolved bundled skills catalog from ${dir} (${names.length} skills)`);
-      return names;
-    }
-  }
-  return [];
-}
-
-function synchronizeBundledSkillSelection(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): OpenClawConfig {
-  const bundledSkills = resolveBundledSkillCatalog(env);
-  if (bundledSkills.length === 0) {
-    return config;
-  }
-  const defaultEnabled = new Set(
-    resolveDefaultBundledSkillAllowlist(env).map((entry) => normalizeSkillAllowlistValue(entry)),
-  );
-  const skills = { ...(config.skills ?? {}) };
-  const currentEntries = skills.entries ? { ...skills.entries } : {};
-  let entriesChanged = false;
-
-  for (const skillName of bundledSkills) {
-    const existing = currentEntries[skillName];
-    const next =
-      existing && typeof existing === "object" ? { ...existing } : {};
-    if (typeof (next as { enabled?: boolean }).enabled !== "boolean") {
-      (next as { enabled?: boolean }).enabled = defaultEnabled.has(
-        normalizeSkillAllowlistValue(skillName),
-      );
-      currentEntries[skillName] = next;
-      entriesChanged = true;
-    }
-  }
-
-  const nextAllowBundled = bundledSkills;
-  const currentAllowBundled = normalizeConfiguredAllowBundled(skills.allowBundled);
-  const allowBundledChanged = !hasSameNormalizedValues(
-    currentAllowBundled,
-    nextAllowBundled,
-  );
-
-  if (!entriesChanged && !allowBundledChanged) {
-    return config;
-  }
-
-  return {
-    ...config,
-    skills: {
-      ...skills,
-      allowBundled: nextAllowBundled,
-      entries: currentEntries,
-    },
-  };
-}
-
-function shouldApplyDefaultBundledSkillSelection(config: OpenClawConfig): boolean {
-  const allowBundled = config.skills?.allowBundled;
-  const hasAllowBundled = Boolean(Array.isArray(allowBundled) && allowBundled.length > 0);
-  return !hasAllowBundled;
-}
-
-function hasSameNormalizedValues(left: string[], right: string[]): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-  const leftSet = new Set(left.map((entry) => normalizeSkillAllowlistValue(entry)));
-  const rightSet = new Set(right.map((entry) => normalizeSkillAllowlistValue(entry)));
-  if (leftSet.size !== rightSet.size) {
-    return false;
-  }
-  for (const value of leftSet) {
-    if (!rightSet.has(value)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function shouldMigrateLegacyBundledSkillSelection(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  if (env.BUSTLY_DEFAULT_BUNDLED_SKILLS?.trim()) {
-    return false;
-  }
-  const current = config.skills?.allowBundled;
-  if (!Array.isArray(current) || current.length === 0) {
-    return false;
-  }
-  const legacyDefaults = DEFAULT_BUNDLED_SKILL_ALLOWLIST.map((entry) =>
-    normalizeSkillAllowlistValue(entry),
-  );
-  if (!hasSameNormalizedValues(current, legacyDefaults)) {
-    return false;
-  }
-  const manifestValues = resolveBundledDefaultAllowlistFromManifest(env);
-  return Boolean(manifestValues && manifestValues.length > 0 && !hasSameNormalizedValues(current, manifestValues));
-}
-
-function applyDefaultBundledSkillSelection(config: OpenClawConfig): OpenClawConfig {
-  const allowBundled = resolveDefaultBundledSkillAllowlist();
-  if (allowBundled.length === 0) {
-    return config;
-  }
-  return {
-    ...config,
-    skills: {
-      ...(config.skills ?? {}),
-      allowBundled,
-    },
-  };
-}
-
-function sanitizeBundledSkillAllowlist(config: OpenClawConfig): OpenClawConfig {
-  const current = config.skills?.allowBundled;
-  if (!Array.isArray(current) || current.length === 0) {
-    return config;
-  }
-  const filtered = current
-    .map((entry) => String(entry).trim())
-    .filter(
-      (entry) =>
-        entry.length > 0 && !BLOCKED_BUNDLED_SKILL_TOKENS.has(normalizeSkillAllowlistValue(entry)),
-    );
-  if (filtered.length === current.length) {
-    return config;
-  }
-  return {
-    ...config,
-    skills: {
-      ...(config.skills ?? {}),
-      allowBundled: [...new Set(filtered)],
-    },
-  };
-}
 
 function resolveOpenClawRootFromCliPath(cliPath: string): string {
   if (cliPath.endsWith("openclaw.mjs")) {
@@ -380,24 +59,8 @@ function isBundledExtension(extensionId: string): boolean {
 }
 
 async function ensureElectronDefaultConfig(configPath: string): Promise<OpenClawConfig> {
-  const openrouterApiKey = getElectronOpenrouterApiKey();
   const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
-  const currentModel = config.agents?.defaults?.model;
-  const primaryModel = typeof currentModel === "string" ? currentModel : currentModel?.primary;
   let nextConfig = config;
-
-  if (openrouterApiKey) {
-    await setOpenrouterApiKey(openrouterApiKey, resolveOpenClawAgentDir());
-    nextConfig = applyOpenrouterProviderConfig(nextConfig);
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "openrouter:default",
-      provider: "openrouter",
-      mode: "api_key",
-    });
-    if (!primaryModel?.trim() || primaryModel !== ELECTRON_DEFAULT_MODEL) {
-      nextConfig = applyPrimaryModel(nextConfig, ELECTRON_DEFAULT_MODEL);
-    }
-  }
 
   const hasWeixinPlugin = isBundledExtension("openclaw-weixin");
   const hasFeishuPlugin = isBundledExtension("openclaw-lark");
@@ -476,18 +139,10 @@ async function ensureElectronDefaultConfig(configPath: string): Promise<OpenClaw
     };
   }
 
-  const beforeBundledSync = nextConfig;
-  nextConfig = synchronizeBundledSkillSelection(nextConfig);
-  if (nextConfig !== beforeBundledSync) {
-    writeMainInfo(
-      `[Init] Synchronized bundled skill visibility (${nextConfig.skills?.allowBundled?.length ?? 0} skills, defaults seeded)`,
-    );
-  }
-
-  const sanitizedConfig = sanitizeBundledSkillAllowlist(nextConfig);
-  if (sanitizedConfig !== nextConfig) {
-    nextConfig = sanitizedConfig;
-    writeMainInfo("[Init] Removed blocked internal skills from bundled skill allowlist");
+  const workspaceId = readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
+  if (workspaceId) {
+    // Desktop runtime now always routes model/auth through the Bustly provider config.
+    nextConfig = applyBustlyOnlyConfig(nextConfig, { workspaceId });
   }
 
   if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
@@ -582,11 +237,7 @@ async function runCliOnboard(options: InitializationOptions): Promise<void> {
     args.push("--node-manager", options.nodeManager);
   }
 
-  if (options.openrouterApiKey) {
-    args.push("--auth-choice", "openrouter-api-key", "--openrouter-api-key", options.openrouterApiKey);
-  } else {
-    args.push("--auth-choice", "skip");
-  }
+  args.push("--auth-choice", "skip");
 
   const loginShellEnv = loadLoginShellEnvironment();
   const env = {
@@ -623,7 +274,6 @@ export interface InitializationResult {
 
 export interface InitializationOptions extends PresetConfigOptions {
   force?: boolean;
-  openrouterApiKey?: string;
   workspace?: string;
 }
 

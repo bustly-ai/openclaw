@@ -10,7 +10,7 @@ function requireElectronApi(): ElectronAPI {
 export const electronRendererHostAdapter: RendererHostAdapter = {
   platform: "electron",
   gatewayStatus: async () => await requireElectronApi().gatewayStatus(),
-  gatewayStart: async (apiKey?: string) => await requireElectronApi().gatewayStart(apiKey),
+  gatewayStart: async () => await requireElectronApi().gatewayStart(),
   gatewayConnectConfig: async () => await requireElectronApi().gatewayConnectConfig(),
   gatewayRestoreLastGoodConfig: async () =>
     await requireElectronApi().gatewayRestoreLastGoodConfig(),

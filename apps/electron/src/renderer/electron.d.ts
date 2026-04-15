@@ -11,8 +11,6 @@ interface PresetConfigOptions {
   workspace?: string;
   /** Node manager for skills (default: "pnpm") */
   nodeManager?: "npm" | "pnpm" | "bun";
-  /** OpenRouter API key for minimax model */
-  openrouterApiKey?: string;
 }
 
 interface InitializationResult {
@@ -169,7 +167,7 @@ interface ElectronAPI {
   openclawNeedsOnboard: () => Promise<boolean>;
 
   // Gateway management
-  gatewayStart: (apiKey?: string) => Promise<{ success: boolean; error?: string }>;
+  gatewayStart: () => Promise<{ success: boolean; error?: string }>;
   gatewayStop: () => Promise<{ success: boolean; error?: string }>;
   gatewayRestoreLastGoodConfig: () => Promise<{ success: boolean; error?: string }>;
   gatewayStatus: () => Promise<GatewayStatus>;

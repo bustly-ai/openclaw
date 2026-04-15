@@ -3,7 +3,7 @@ import { electronRendererHostAdapter } from "./host-electron";
 export type RendererHostAdapter = {
   readonly platform: "electron" | "cloud" | "custom";
   gatewayStatus: () => Promise<GatewayStatus>;
-  gatewayStart: (apiKey?: string) => Promise<{ success: boolean; error?: string }>;
+  gatewayStart: () => Promise<{ success: boolean; error?: string }>;
   gatewayConnectConfig: () => Promise<GatewayConnectConfig>;
   gatewayRestoreLastGoodConfig: () => Promise<{ success: boolean; error?: string }>;
   openclawInit: (options?: PresetConfigOptions) => Promise<InitializationResult>;

@@ -15,6 +15,22 @@ import {
 
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
   {
+    id: "skills.allowBundled-remove",
+    describe: "Remove deprecated skills.allowBundled",
+    apply: (raw, changes) => {
+      const skills = getRecord(raw.skills);
+      if (!skills || !Object.prototype.hasOwnProperty.call(skills, "allowBundled")) {
+        return;
+      }
+
+      delete skills.allowBundled;
+      if (Object.keys(skills).length === 0) {
+        delete raw.skills;
+      }
+      changes.push("Removed deprecated skills.allowBundled.");
+    },
+  },
+  {
     id: "memorySearch->agents.defaults.memorySearch",
     describe: "Move top-level memorySearch to agents.defaults.memorySearch",
     apply: (raw, changes) => {

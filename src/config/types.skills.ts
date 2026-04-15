@@ -37,7 +37,7 @@ export type SkillsLimitsConfig = {
 };
 
 export type SkillsConfig = {
-  /** Deprecated compatibility field. Bundled skill filtering is no longer applied at runtime. */
+  /** Deprecated compatibility field. Bundled skill filtering is no longer applied at runtime and startup migration removes it. */
   allowBundled?: string[];
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;

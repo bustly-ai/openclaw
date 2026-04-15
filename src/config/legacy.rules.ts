@@ -130,6 +130,11 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     message: "messages.tts.enabled was replaced by messages.tts.auto (auto-migrated on load).",
   },
   {
+    path: ["skills", "allowBundled"],
+    message:
+      "skills.allowBundled is deprecated and ignored at runtime; it will be removed automatically on load.",
+  },
+  {
     path: ["gateway", "token"],
     message: "gateway.token is ignored; use gateway.auth.token instead (auto-migrated on load).",
   },

@@ -5,7 +5,6 @@ type OpenClawInitOptions = {
   gatewayBind?: "loopback" | "lan" | "auto";
   workspace?: string;
   nodeManager?: "npm" | "pnpm" | "bun";
-  openrouterApiKey?: string;
 };
 
 type GatewayLogPayload = { stream: "stdout" | "stderr"; message: string };
@@ -46,7 +45,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   openclawNeedsOnboard: () => ipcRenderer.invoke("openclaw-needs-onboard"),
 
   // Gateway management
-  gatewayStart: (apiKey?: string) => ipcRenderer.invoke("gateway-start", apiKey),
+  gatewayStart: () => ipcRenderer.invoke("gateway-start"),
   gatewayStop: () => ipcRenderer.invoke("gateway-stop"),
   gatewayRestoreLastGoodConfig: () => ipcRenderer.invoke("gateway-restore-last-good-config"),
   gatewayStatus: () => ipcRenderer.invoke("gateway-status"),

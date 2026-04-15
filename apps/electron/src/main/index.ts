@@ -53,6 +53,7 @@ import { buildBustlyAdminUrl as buildSharedBustlyAdminUrl } from "../../../../sr
 import {
   resolveBustlyWorkspaceAgentWorkspaceDir as resolveSharedBustlyWorkspaceAgentWorkspaceDir,
   resolveBustlyWorkspaceIdFromOAuthState as resolveSharedBustlyWorkspaceIdFromOAuthState,
+  synchronizeBustlyWorkspaceContext,
 } from "../../../../src/bustly/workspace-runtime.js";
 import {
   ELECTRON_OPENCLAW_PROFILE,
@@ -271,7 +272,13 @@ let gatewayLastWorkerFailure: {
   kind: "config" | "runtime";
   message: string;
 } | null = null;
-type BustlyLoginAttemptState = "pending" | "completed" | "error" | "canceled";
+type BustlyLoginAttemptState =
+  | "pending"
+  | "exchanging"
+  | "initializing"
+  | "completed"
+  | "error"
+  | "canceled";
 type BustlyLoginAttempt = {
   loginTraceId: string;
   loginUrl: string;
@@ -800,6 +807,40 @@ function resolveBustlyWorkspaceAgentWorkspaceDir(
 
 function resolveBustlyWorkspaceIdFromOAuthState(): string {
   return resolveSharedBustlyWorkspaceIdFromOAuthState();
+}
+
+async function initializeDesktopConfigForBustlyWorkspace(params: {
+  workspaceId: string;
+  workspaceName?: string;
+}): Promise<void> {
+  const workspaceId = params.workspaceId.trim();
+  if (!workspaceId) {
+    throw new Error("Missing Bustly workspaceId for desktop initialization.");
+  }
+
+  const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId);
+  writeMainInfo(
+    `[Init] Ensuring desktop config for Bustly workspace ${workspaceId} at ${workspaceDir}`,
+  );
+  const result = await initializeOpenClaw({
+    workspace: workspaceDir,
+  });
+  if (!result.success) {
+    throw new Error(result.error ?? "Failed to initialize OpenClaw");
+  }
+
+  await synchronizeBustlyWorkspaceContext({
+    workspaceId,
+    workspaceName: params.workspaceName,
+    allowCreateConfig: true,
+    userAgent: "openclaw-desktop",
+    env: process.env,
+  });
+
+  applyInitializationResult({
+    ...result,
+    workspace: workspaceDir,
+  });
 }
 
 function prependPathEntry(pathValue: string, entry: string): string {
@@ -2606,7 +2647,10 @@ function setBustlyLoginAttempt(
 
 function finishBustlyLoginAttempt(
   loginTraceId: string,
-  params: { status: Exclude<BustlyLoginAttemptState, "pending">; error?: string | null },
+  params: {
+    status: Exclude<BustlyLoginAttemptState, "pending" | "exchanging" | "initializing">;
+    error?: string | null;
+  },
 ): BustlyLoginAttempt {
   if (activeBustlyLoginTraceId === loginTraceId) {
     activeBustlyLoginTraceId = null;
@@ -2670,6 +2714,10 @@ async function waitForBustlyDesktopAuthCode(
 async function runElectronBustlyLogin(loginTraceId: string): Promise<void> {
   try {
     const authCode = await waitForBustlyDesktopAuthCode(loginTraceId);
+    setBustlyLoginAttempt(loginTraceId, {
+      status: "exchanging",
+      error: null,
+    });
     const apiResponse = await exchangeToken(authCode);
     const supabaseSession = apiResponse.data.extras?.supabase_session;
     const supabaseAccessToken = supabaseSession?.access_token?.trim() ?? "";
@@ -2697,6 +2745,13 @@ async function runElectronBustlyLogin(loginTraceId: string): Promise<void> {
             anonKey: searchDataConfig.search_DATA_SUPABASE_ANON_KEY ?? "",
           }
         : undefined,
+    });
+    setBustlyLoginAttempt(loginTraceId, {
+      status: "initializing",
+      error: null,
+    });
+    await initializeDesktopConfigForBustlyWorkspace({
+      workspaceId: apiResponse.data.workspaceId,
     });
     syncSentryBustlyScope();
     finishBustlyLoginAttempt(loginTraceId, { status: "completed" });
@@ -2822,7 +2877,7 @@ function setupIpcHandlers(): void {
       }
       return { success: false, pending: false, error: "Login session not found" };
     }
-    if (attempt.status === "pending") {
+    if (attempt.status === "pending" || attempt.status === "exchanging" || attempt.status === "initializing") {
       return { success: true, pending: true };
     }
     if (attempt.status === "completed") {
@@ -2909,27 +2964,11 @@ function setupIpcHandlers(): void {
   });
 
   // Start gateway
-  ipcMain.handle("gateway-start", async (_event, apiKey?: string) => {
+  ipcMain.handle("gateway-start", async () => {
     try {
       if (!isFullyInitialized()) {
         return { success: false, error: "OpenClaw is not onboarded yet." };
       }
-      // If API key is provided, re-initialize config with the API key
-      if (apiKey && apiKey.trim()) {
-        writeMainInfo("[Gateway] Re-initializing with API key...");
-        const workspaceId = resolveBustlyWorkspaceIdFromOAuthState();
-        const result = await initializeOpenClaw({
-          force: true,
-          openrouterApiKey: apiKey.trim(),
-          workspace: workspaceId ? resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId) : undefined,
-        });
-        if (result.success) {
-          applyInitializationResult(result);
-        } else {
-          return { success: false, error: result.error ?? "Failed to initialize config" };
-        }
-      }
-
       await startGateway();
       return { success: true };
     } catch (error) {
@@ -3575,13 +3614,10 @@ void app.whenReady().then(async () => {
       writeMainLog("Bustly session found; initializing desktop config before starting gateway.");
       try {
         const workspaceId = resolveBustlyWorkspaceIdFromOAuthState();
-        const result = await initializeOpenClaw({
-          workspace: workspaceId ? resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId) : undefined,
-        });
-        if (!result.success) {
-          throw new Error(result.error ?? "Failed to initialize OpenClaw");
+        if (!workspaceId) {
+          throw new Error("Missing Bustly workspaceId in OAuth state");
         }
-        applyInitializationResult(result);
+        await initializeDesktopConfigForBustlyWorkspace({ workspaceId });
         shouldAutoStartGateway = true;
         writeMainLog("Desktop config initialization complete");
       } catch (error) {
