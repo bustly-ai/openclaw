@@ -1,8 +1,11 @@
-import { readBustlyOAuthState } from "../bustly-oauth.js";
+import { getBustlyAccessToken, readBustlyOAuthState } from "../bustly-oauth.js";
 import { loadEnabledBustlyRemoteAgentPresets } from "./agent-presets.js";
-import type { BustlyWorkspaceBinding } from "./workspace-runtime.js";
-import { resolveActiveBustlyWorkspaceBinding, setActiveBustlyWorkspace } from "./workspace-runtime.js";
 import { ensureBustlyWorkspacePresetAgents } from "./workspace-agents.js";
+import type { BustlyWorkspaceBinding } from "./workspace-runtime.js";
+import {
+  resolveActiveBustlyWorkspaceBinding,
+  setActiveBustlyWorkspace,
+} from "./workspace-runtime.js";
 
 export type BustlyRuntimePresetAgent = {
   slug: string;
@@ -31,9 +34,7 @@ export type BustlyRuntimeManifestApplyResult = BustlyWorkspaceBinding & {
 
 export type BustlyRuntimeBootstrapParams = BustlyRuntimeManifestApplyParams;
 
-function resolveWorkspaceId(params?: {
-  workspaceId?: string;
-}): string {
+function resolveWorkspaceId(params?: { workspaceId?: string }): string {
   return params?.workspaceId?.trim() || readBustlyOAuthState()?.user?.workspaceId?.trim() || "";
 }
 
@@ -47,15 +48,13 @@ export function getBustlyRuntimeHealthSnapshot(): {
 } {
   const state = readBustlyOAuthState();
   const workspaceId = state?.user?.workspaceId?.trim() ?? "";
-  const accessToken = state?.user?.userAccessToken?.trim() ?? "";
+  const accessToken = getBustlyAccessToken(state).trim();
   return {
     loggedIn: Boolean(accessToken),
     workspaceId,
     userId: state?.user?.userId?.trim() ?? "",
     userEmail: state?.user?.userEmail?.trim() ?? "",
-    hasSupabaseConfig: Boolean(
-      state?.supabase?.url?.trim() && state?.supabase?.anonKey?.trim(),
-    ),
+    hasSupabaseConfig: Boolean(state?.supabase?.url?.trim() && state?.supabase?.anonKey?.trim()),
     activeBinding: resolveActiveBustlyWorkspaceBinding(),
   };
 }
@@ -113,9 +112,11 @@ export async function applyBustlyRuntimeManifest(
 export async function bootstrapBustlyRuntime(
   params: BustlyRuntimeBootstrapParams = {},
 ): Promise<BustlyRuntimeManifestApplyResult> {
-  const presetAgents = params.presetAgents ?? await loadEnabledBustlyRemoteAgentPresets({
-    env: params.env,
-  });
+  const presetAgents =
+    params.presetAgents ??
+    (await loadEnabledBustlyRemoteAgentPresets({
+      env: params.env,
+    }));
   return await applyBustlyRuntimeManifest({
     ...params,
     presetAgents,

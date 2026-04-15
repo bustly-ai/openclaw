@@ -1,4 +1,4 @@
-import { readBustlyOAuthState } from "../bustly-oauth.js";
+import { getBustlyAccessToken, readBustlyOAuthState } from "../bustly-oauth.js";
 
 export type BustlyAccessibleWorkspace = {
   id: string;
@@ -34,7 +34,7 @@ export function getBustlySupabaseAuthConfig(): BustlySupabaseAuthConfig | null {
   const state = readBustlyOAuthState();
   const supabaseUrl = state?.supabase?.url?.trim() ?? "";
   const anonKey = state?.supabase?.anonKey?.trim() ?? "";
-  const accessToken = state?.user?.userAccessToken?.trim() ?? "";
+  const accessToken = getBustlyAccessToken(state).trim();
   const workspaceId = state?.user?.workspaceId?.trim() ?? "";
   const userId = state?.user?.userId?.trim() ?? "";
   const userEmail = state?.user?.userEmail?.trim() ?? "";
@@ -53,9 +53,7 @@ export function getBustlySupabaseAuthConfig(): BustlySupabaseAuthConfig | null {
   };
 }
 
-export async function bustlySupabaseFetch(
-  params: BustlySupabaseFetchParams,
-): Promise<Response> {
+export async function bustlySupabaseFetch(params: BustlySupabaseFetchParams): Promise<Response> {
   const config = getBustlySupabaseAuthConfig();
   if (!config) {
     throw new Error("Missing Bustly Supabase auth config");
@@ -71,27 +69,28 @@ export async function bustlySupabaseFetch(
       : 30_000;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(
-      `${config.url.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`,
-      {
-        method: params.method ?? "GET",
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${config.accessToken}`,
-          apikey: config.anonKey,
-          ...params.headers,
-        },
-        body: params.body,
-        signal: controller.signal,
+    return await fetch(`${config.url.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`, {
+      method: params.method ?? "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${config.accessToken}`,
+        apikey: config.anonKey,
+        ...params.headers,
       },
-    );
+      body: params.body,
+      signal: controller.signal,
+    });
   } finally {
     clearTimeout(timeout);
   }
 }
 
-export async function listAccessibleBustlyWorkspaces(limit = 20): Promise<BustlyAccessibleWorkspace[]> {
-  const normalizedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 20;
+export async function listAccessibleBustlyWorkspaces(
+  limit = 20,
+): Promise<BustlyAccessibleWorkspace[]> {
+  const normalizedLimit = Number.isFinite(limit)
+    ? Math.max(1, Math.min(100, Math.floor(limit)))
+    : 20;
   const query = new URLSearchParams({
     select: "id,name,status",
     status: "eq.ACTIVE",
@@ -109,7 +108,9 @@ export async function listAccessibleBustlyWorkspaces(limit = 20): Promise<Bustly
     return [];
   }
   return payload
-    .filter((entry): entry is BustlyAccessibleWorkspaceRow => typeof entry === "object" && entry !== null)
+    .filter(
+      (entry): entry is BustlyAccessibleWorkspaceRow => typeof entry === "object" && entry !== null,
+    )
     .map((entry) => ({
       id: typeof entry.id === "string" ? entry.id.trim() : "",
       name: typeof entry.name === "string" ? entry.name.trim() : "",

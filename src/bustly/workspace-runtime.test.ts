@@ -9,7 +9,12 @@ import {
   synchronizeBustlyWorkspaceContext,
 } from "./workspace-runtime.js";
 
-const { oauthStateRef, setActiveWorkspaceIdMock, bootstrapMock, resolveFirstAccessibleWorkspaceMock } = vi.hoisted(() => {
+const {
+  oauthStateRef,
+  setActiveWorkspaceIdMock,
+  bootstrapMock,
+  resolveFirstAccessibleWorkspaceMock,
+} = vi.hoisted(() => {
   return {
     oauthStateRef: { current: null as BustlyOAuthState | null },
     setActiveWorkspaceIdMock: vi.fn<(workspaceId: string) => void>(),
@@ -26,6 +31,9 @@ const { ensureModelsJsonMock, ensurePiAuthJsonMock } = vi.hoisted(() => {
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => oauthStateRef.current),
+  getBustlyAccessToken: (
+    state: { user?: { supabaseAccessToken?: string; userAccessToken?: string } } | null | undefined,
+  ) => state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "",
   setActiveWorkspaceId: (workspaceId: string) => setActiveWorkspaceIdMock(workspaceId),
 }));
 
@@ -99,6 +107,33 @@ describe("workspace-runtime", () => {
     );
   });
 
+  it("accepts a supabase access token even when platform token is stale", async () => {
+    oauthStateRef.current = {
+      deviceId: "device-1",
+      callbackPort: 17900,
+      user: {
+        userId: "u-1",
+        userName: "Tester",
+        userEmail: "tester@example.com",
+        userAccessToken: "platform-token",
+        supabaseAccessToken: "jwt-token",
+        workspaceId: "workspace-1",
+        skills: [],
+      },
+      supabase: {
+        url: "https://example.supabase.co",
+        anonKey: "anon-key",
+      },
+    };
+
+    const binding = await ensureBustlyCloudReady({
+      userAgent: "cloud-test-agent",
+    });
+
+    expect(binding.workspaceId).toBe("workspace-1");
+    expect(bootstrapMock).toHaveBeenCalledTimes(1);
+  });
+
   it("initializes config and workspace binding for cloud mode", async () => {
     oauthStateRef.current = {
       deviceId: "device-1",
@@ -121,7 +156,9 @@ describe("workspace-runtime", () => {
     });
     expect(binding.workspaceId).toBe("workspace-1");
     expect(binding.agentId).toBe("bustly-workspace-1-overview");
-    expect(binding.workspaceDir).toContain(path.join("workspaces", "workspace-1", "agents", "overview"));
+    expect(binding.workspaceDir).toContain(
+      path.join("workspaces", "workspace-1", "agents", "overview"),
+    );
     expect(bootstrapMock).toHaveBeenCalledTimes(1);
     const configPath = process.env.OPENCLAW_CONFIG_PATH!;
     const config = JSON.parse(readFileSync(configPath, "utf-8")) as {
@@ -191,7 +228,9 @@ describe("workspace-runtime", () => {
       allowCreateConfig: true,
     });
 
-    bootstrapMock.mockRejectedValueOnce(new Error("Workspace workspace-2 not found for bootstrap."));
+    bootstrapMock.mockRejectedValueOnce(
+      new Error("Workspace workspace-2 not found for bootstrap."),
+    );
     await expect(
       setActiveBustlyWorkspace({
         workspaceId: "workspace-2",
@@ -235,7 +274,9 @@ describe("workspace-runtime", () => {
       allowCreateConfig: true,
     });
 
-    bootstrapMock.mockRejectedValueOnce(new Error("Workspace workspace-2 not found for bootstrap."));
+    bootstrapMock.mockRejectedValueOnce(
+      new Error("Workspace workspace-2 not found for bootstrap."),
+    );
     resolveFirstAccessibleWorkspaceMock.mockResolvedValueOnce({
       id: "workspace-3",
       name: "Fallback Workspace",

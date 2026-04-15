@@ -32,6 +32,9 @@ const {
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => oauthStateRef.current),
+  getBustlyAccessToken: (
+    state: { user?: { supabaseAccessToken?: string; userAccessToken?: string } } | null | undefined,
+  ) => state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "",
 }));
 
 vi.mock("./workspace-runtime.js", () => ({
@@ -77,6 +80,29 @@ describe("bustly runtime manifest", () => {
       hasSupabaseConfig: true,
     });
     expect(resolveActiveBustlyWorkspaceBindingMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers supabase access token in runtime health snapshot", () => {
+    oauthStateRef.current = {
+      deviceId: "device-1",
+      callbackPort: 17900,
+      user: {
+        userId: "u-1",
+        userName: "Tester",
+        userEmail: "tester@example.com",
+        userAccessToken: "platform-token",
+        supabaseAccessToken: "jwt-token",
+        workspaceId: "workspace-1",
+        skills: [],
+      },
+      supabase: {
+        url: "https://example.supabase.co",
+        anonKey: "anon-key",
+      },
+    };
+
+    const health = getBustlyRuntimeHealthSnapshot();
+    expect(health.loggedIn).toBe(true);
   });
 
   it("applies runtime manifest and forwards preset agents", async () => {
