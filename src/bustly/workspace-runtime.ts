@@ -1,22 +1,26 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import {
+  getBustlyAccessToken,
+  readBustlyOAuthState,
+  setActiveWorkspaceId,
+} from "../bustly-oauth.js";
 import { applyAgentConfig, listAgentEntries } from "../commands/agents.config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import {
   applyBustlyOnlyConfig,
   BUSTLY_DEFAULT_MODEL_REF,
   syncBustlyConfigFile,
 } from "./runtime-config.js";
-import { readBustlyOAuthState, setActiveWorkspaceId } from "../bustly-oauth.js";
 import { resolveFirstAccessibleBustlyWorkspace } from "./supabase.js";
-import { initializeBustlyWorkspaceBootstrap } from "./workspace-bootstrap.js";
 import {
   buildBustlyWorkspaceAgentId,
   DEFAULT_BUSTLY_AGENT_NAME,
   normalizeBustlyAgentName,
   normalizeBustlyWorkspaceId,
 } from "./workspace-agent.js";
+import { initializeBustlyWorkspaceBootstrap } from "./workspace-bootstrap.js";
 
 type OpenClawAgentListEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
@@ -135,16 +139,15 @@ export async function ensureBustlyWorkspaceAgentConfig(params: {
   const agentId = buildBustlyWorkspaceAgentId(workspaceId, agentName);
   const config = readConfigFromPath(configPath);
 
-  const configWithoutMain =
-    listAgentEntries(config).some((entry) => entry.id === "main")
-      ? {
-          ...config,
-          agents: {
-            ...config.agents,
-            list: listAgentEntries(config).filter((entry) => entry.id !== "main"),
-          },
-        }
-      : config;
+  const configWithoutMain = listAgentEntries(config).some((entry) => entry.id === "main")
+    ? {
+        ...config,
+        agents: {
+          ...config.agents,
+          list: listAgentEntries(config).filter((entry) => entry.id !== "main"),
+        },
+      }
+    : config;
   const nextName = resolveWorkspaceDisplayName(agentName, params.workspaceName);
   const updated = applyAgentConfig(configWithoutMain, {
     agentId,
@@ -302,11 +305,11 @@ export async function ensureBustlyCloudReady(params?: {
 }): Promise<BustlyWorkspaceBinding & { workspaceId: string }> {
   const env = params?.env ?? process.env;
   const state = readBustlyOAuthState();
-  const userAccessToken = state?.user?.userAccessToken?.trim() ?? "";
+  const userAccessToken = getBustlyAccessToken(state).trim();
   const workspaceId = state?.user?.workspaceId?.trim() ?? "";
   if (!userAccessToken) {
     throw new Error(
-      "No Bustly token found in ~/.bustly/bustlyOauth.json (user.userAccessToken). Please sign in first.",
+      "No Bustly token found in ~/.bustly/bustlyOauth.json (user.supabaseAccessToken). Please sign in first.",
     );
   }
   if (!workspaceId) {

@@ -1,4 +1,4 @@
-import { readBustlyOAuthState } from "../../bustly-oauth.js";
+import { getBustlyAccessToken, readBustlyOAuthState } from "../../bustly-oauth.js";
 import { scheduleBustlySessionTitleGeneration } from "../../bustly/session-title.js";
 import {
   createBustlyWorkspaceAgent,
@@ -279,7 +279,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       const state = readBustlyOAuthState();
       const supabase = state?.supabase;
       const user = state?.user;
-      const accessToken = user?.userAccessToken?.trim() || "";
+      const accessToken = getBustlyAccessToken(state).trim();
       const workspaceId = user?.workspaceId?.trim() || "";
       if (!supabase?.url || !supabase.anonKey || !accessToken) {
         respond(true, null, undefined);
