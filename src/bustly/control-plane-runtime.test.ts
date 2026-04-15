@@ -15,6 +15,7 @@ describe("bustly control plane runtime helpers", () => {
     const identity = resolveBustlyControlPlaneRuntimeIdentity({
       BUSTLY_CONTROL_PLANE_BASE_URL: "https://cp.example.com/",
       BUSTLY_RUNTIME_WORKSPACE_ID: "workspace-1",
+      BUSTLY_RUNTIME_USER_ID: "user-1",
       BUSTLY_RUNTIME_ID: "runtime-1",
       BUSTLY_RUNTIME_TOKEN: "runtime-token",
     } as NodeJS.ProcessEnv);
@@ -22,6 +23,7 @@ describe("bustly control plane runtime helpers", () => {
     expect(identity).toEqual({
       baseUrl: "https://cp.example.com",
       workspaceId: "workspace-1",
+      userId: "user-1",
       runtimeId: "runtime-1",
       runtimeToken: "runtime-token",
     });
@@ -29,6 +31,7 @@ describe("bustly control plane runtime helpers", () => {
       hasBustlyControlPlaneRuntimeIdentity({
         BUSTLY_CONTROL_PLANE_BASE_URL: "https://cp.example.com",
         BUSTLY_RUNTIME_WORKSPACE_ID: "workspace-1",
+        BUSTLY_RUNTIME_USER_ID: "user-1",
         BUSTLY_RUNTIME_ID: "runtime-1",
         BUSTLY_RUNTIME_TOKEN: "runtime-token",
       } as NodeJS.ProcessEnv),
@@ -42,6 +45,7 @@ describe("bustly control plane runtime helpers", () => {
       expect(typeof body).toBe("string");
       expect(JSON.parse(body as string)).toMatchObject({
         workspaceId: "workspace-1",
+        userId: "user-1",
         runtimeId: "runtime-1",
         runtimeToken: "runtime-token",
         gatewayToken: "gateway-token",
@@ -64,6 +68,7 @@ describe("bustly control plane runtime helpers", () => {
       env: {
         BUSTLY_CONTROL_PLANE_BASE_URL: "https://cp.example.com",
         BUSTLY_RUNTIME_WORKSPACE_ID: "workspace-1",
+        BUSTLY_RUNTIME_USER_ID: "user-1",
         BUSTLY_RUNTIME_ID: "runtime-1",
         BUSTLY_RUNTIME_TOKEN: "runtime-token",
       } as NodeJS.ProcessEnv,
@@ -83,6 +88,7 @@ describe("bustly control plane runtime helpers", () => {
       env: {
         BUSTLY_CONTROL_PLANE_BASE_URL: "https://cp.example.com",
         BUSTLY_RUNTIME_WORKSPACE_ID: "workspace-1",
+        BUSTLY_RUNTIME_USER_ID: "user-1",
         BUSTLY_RUNTIME_ID: "runtime-1",
         BUSTLY_RUNTIME_TOKEN: "runtime-token",
       } as NodeJS.ProcessEnv,
@@ -103,6 +109,7 @@ describe("bustly control plane runtime helpers", () => {
       env: {
         BUSTLY_CONTROL_PLANE_BASE_URL: "https://cp.example.com",
         BUSTLY_RUNTIME_WORKSPACE_ID: "workspace-1",
+        BUSTLY_RUNTIME_USER_ID: "user-1",
         BUSTLY_RUNTIME_ID: "runtime-1",
         BUSTLY_RUNTIME_TOKEN: "runtime-token",
       } as NodeJS.ProcessEnv,
