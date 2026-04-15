@@ -12,7 +12,7 @@ import {
 } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import { randomUUID } from "node:crypto";
-import { resolve, dirname, basename, join } from "node:path";
+import { resolve, dirname, basename, join, delimiter as pathDelimiter } from "node:path";
 import { fork, spawn, spawnSync, ChildProcess } from "node:child_process";
 import {
   existsSync,
@@ -31,13 +31,17 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Socket, createServer } from "node:net";
 import updater from "electron-updater";
 import {
+  ensureGatewayRuntimeCliShim,
+  type GatewayRuntimeCliShim,
+} from "../../../../src/gateway/runtime-cli-shim.js";
+import { buildGatewayRuntimeEnv } from "../../../../src/gateway/runtime-env.js";
+import {
   initializeOpenClaw,
   getConfigPath,
   isFullyInitialized,
   type InitializationResult,
 } from "./auto-init.js";
 import {
-  ensureBundledOpenClawShim,
   resolveOpenClawCliPath,
   resolveElectronRunAsNodeExecPath,
 } from "./cli-utils.js";
@@ -842,32 +846,6 @@ async function initializeGatewayRuntimeForBustlyWorkspace(params: {
   });
 }
 
-function prependPathEntry(pathValue: string, entry: string): string {
-  const delimiter = process.platform === "win32" ? ";" : ":";
-  const parts = pathValue
-    .split(delimiter)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (!parts.includes(entry)) {
-    parts.unshift(entry);
-  }
-  return parts.join(delimiter);
-}
-
-function prependPathEntries(pathValue: string, entries: Array<string | null | undefined>): string {
-  return entries.reduceRight<string>((currentPath, entry) => {
-    const normalized = entry?.trim();
-    if (!normalized) {
-      return currentPath;
-    }
-    return prependPathEntry(currentPath, normalized);
-  }, pathValue);
-}
-
-function getPathDelimiter(): string {
-  return process.platform === "win32" ? ";" : ":";
-}
-
 function loadLoginShellEnvironment(shellPath: string, homeDir: string): Record<string, string> {
   try {
     const result = spawnSync(shellPath, ["-lc", "env -0"], {
@@ -944,31 +922,13 @@ function loadElectronEnvVars(): Record<string, string> {
   return envVars;
 }
 
-function resolveBundledSkillsDir(params: {
-  resourcesPath: string;
-  appPath: string;
-}): string | undefined {
-  const candidates = [
-    resolve(params.resourcesPath, "bustly-skills", "skills"),
-    resolve(params.resourcesPath, "skills"),
-    resolve(params.appPath, "resources", "bustly-skills", "skills"),
-    resolve(params.appPath, "resources", "skills"),
-    resolve(params.appPath, "..", "resources", "bustly-skills", "skills"),
-    resolve(params.appPath, "..", "resources", "skills"),
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      writeMainLog(`Using bundled skills dir: ${candidate}`);
-      return candidate;
-    }
-  }
-  return undefined;
-}
-
 function buildElectronCliEnv(params?: {
   cliPath?: string;
   oauthCallbackPort?: number;
-}): NodeJS.ProcessEnv {
+}): {
+  env: NodeJS.ProcessEnv;
+  cliShim: GatewayRuntimeCliShim | null;
+} {
   const homeDir = app.getPath("home");
   const stateDir = resolveElectronStateDir();
   const appPath = app.getAppPath();
@@ -980,21 +940,19 @@ function buildElectronCliEnv(params?: {
     process.env.PATH?.trim() ||
     "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
   const bundledCliShim = params?.cliPath
-    ? ensureBundledOpenClawShim(params.cliPath, stateDir, {
-      includeBundledNode: true,
+    ? ensureGatewayRuntimeCliShim({
+      cliPath: params.cliPath,
+      stateDir,
+      runtimeCommand: resolveElectronRunAsNodeExecPath(),
+      runtimeEnv: {
+        ELECTRON_RUN_AS_NODE: "1",
+      },
       resourcesPath,
       appPath,
     })
     : null;
-  const effectivePath = prependPathEntries(fixedPath, [
-    bundledCliShim?.shimDir,
-  ]);
   const bunInstall = process.env.BUN_INSTALL?.trim() || resolve(homeDir, ".bun");
   const homebrewPrefix = process.env.HOMEBREW_PREFIX?.trim() || "/opt/homebrew";
-  const bundledSkillsDir = resolveBundledSkillsDir({
-    resourcesPath,
-    appPath,
-  });
   const bundledPluginsDir = ensureBundledExtensionsDir({
     resourcesPath,
     appPath,
@@ -1013,43 +971,43 @@ function buildElectronCliEnv(params?: {
       .filter((value) => Boolean(value && value.length > 0))
       .join(":") || openclawNodeModules;
   const bundledVersion = resolveBundledOpenClawVersion();
+  const runtimeEnv = buildGatewayRuntimeEnv({
+    env: {
+      ...process.env,
+      ...loadElectronEnvVars(),
+      ...loginShellEnv,
+      PATH: fixedPath,
+    },
+    resourcesPath,
+    appPath,
+    bundledPluginsDir,
+    stateDir,
+    configPath: resolveElectronConfigPath(),
+    profile: ELECTRON_OPENCLAW_PROFILE,
+    logFile: resolveElectronBackendLogPath(),
+    bundledVersion: bundledVersion ?? undefined,
+    preferBundledPlugins: true,
+    oauthCallbackPort: params?.oauthCallbackPort,
+    pathPrepend: [bundledCliShim?.shimDir],
+    execPathPrepend: [bundledCliShim?.shimDir],
+  });
 
   return {
-    ...process.env,
-    ...loadElectronEnvVars(),
-    ...loginShellEnv,
-    NODE_ENV: "production",
-    OPENCLAW_PROFILE: ELECTRON_OPENCLAW_PROFILE,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-    OPENCLAW_PREFER_BUNDLED_PLUGINS: "1",
-    ...(bundledSkillsDir ? { OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir } : {}),
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_CONFIG_PATH: resolveElectronConfigPath(),
-    OPENCLAW_LOG_FILE: resolveElectronBackendLogPath(),
-    HOME: homeDir,
-    USERPROFILE: homeDir,
-    OPENCLAW_LOAD_SHELL_ENV: "1",
-    SHELL: shellPath,
-    PATH: effectivePath,
-    BUN_INSTALL: bunInstall,
-    HOMEBREW_PREFIX: homebrewPrefix,
-    TERM: process.env.TERM?.trim() || "xterm-256color",
-    COLORTERM: process.env.COLORTERM?.trim() || "truecolor",
-    TERM_PROGRAM: process.env.TERM_PROGRAM?.trim() || "OpenClaw",
-    NODE_PATH: effectiveNodePath,
-    ...(bundledCliShim
-      ? {
-        OPENCLAW_EXEC_PATH_PREPEND: [
-          bundledCliShim?.shimDir,
-        ]
-          .filter((value) => Boolean(value && value.length > 0))
-          .join(getPathDelimiter()),
-      }
-      : {}),
-    ...(typeof params?.oauthCallbackPort === "number"
-      ? { OPENCLAW_OAUTH_CALLBACK_PORT: String(params.oauthCallbackPort) }
-      : {}),
-    ...(bundledVersion ? { OPENCLAW_BUNDLED_VERSION: bundledVersion } : {}),
+    cliShim: bundledCliShim,
+    env: {
+      ...runtimeEnv,
+      NODE_ENV: "production",
+      HOME: homeDir,
+      USERPROFILE: homeDir,
+      OPENCLAW_LOAD_SHELL_ENV: "1",
+      SHELL: shellPath,
+      BUN_INSTALL: bunInstall,
+      HOMEBREW_PREFIX: homebrewPrefix,
+      TERM: process.env.TERM?.trim() || "xterm-256color",
+      COLORTERM: process.env.COLORTERM?.trim() || "truecolor",
+      TERM_PROGRAM: process.env.TERM_PROGRAM?.trim() || "OpenClaw",
+      NODE_PATH: effectiveNodePath,
+    },
   };
 }
 
@@ -1840,12 +1798,6 @@ async function startGateway(): Promise<boolean> {
 
     const appPath = app.getAppPath();
     const resourcesPath = process.resourcesPath || appPath;
-    const bundledPluginsDir = ensureBundledExtensionsDir({
-      resourcesPath,
-      appPath,
-    });
-    const bundledSkillsDir = resolve(resourcesPath, "skills");
-    writeMainLog(`Bundled skills dir: ${bundledSkillsDir}`);
     const bundledVersion = resolveBundledOpenClawVersion();
     if (bundledVersion) {
       writeMainLog(`Bundled OpenClaw version: ${bundledVersion}`);
@@ -1858,14 +1810,6 @@ async function startGateway(): Promise<boolean> {
       loginShellEnv.PATH?.trim() ||
       process.env.PATH?.trim() ||
       "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
-    const bundledCliShim = ensureBundledOpenClawShim(cliPath, stateDir, {
-      includeBundledNode: true,
-      resourcesPath,
-      appPath,
-    });
-    const effectivePath = prependPathEntries(fixedPath, [
-      bundledCliShim?.shimDir,
-    ]);
     const appNodeModules = resolve(appPath, "node_modules");
     const resourcesNodeModules = resolve(resourcesPath, "node_modules");
     const openclawNodeModules = resolve(resourcesPath, "openclaw", "node_modules");
@@ -1889,10 +1833,10 @@ async function startGateway(): Promise<boolean> {
       `Gateway runtime: execPath=${nodePath} mode=electron-run-as-node helper=${nodePath !== process.execPath ? "yes" : "no"}`,
     );
 
-    const spawnEnv = buildElectronCliEnv({ cliPath, oauthCallbackPort });
-    if (existsSync(bundledPluginsDir)) {
-      spawnEnv.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-    }
+    const { env: spawnEnv, cliShim: bundledCliShim } = buildElectronCliEnv({
+      cliPath,
+      oauthCallbackPort,
+    });
     spawnEnv.ELECTRON_RUN_AS_NODE = "1";
     spawnEnv.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
     spawnEnv.OPENCLAW_ELECTRON_GATEWAY_BIND = gatewayBind;
@@ -1902,7 +1846,7 @@ async function startGateway(): Promise<boolean> {
       delete spawnEnv.OPENCLAW_GATEWAY_TOKEN;
     }
     writeMainLog(
-      `Gateway env: SHELL=${shellPath} OPENCLAW_LOAD_SHELL_ENV=1 NODE_PATH=${effectiveNodePath || "(empty)"} PATH_HEAD=${effectivePath.split(getPathDelimiter())[0] ?? "(empty)"} cliShim=${bundledCliShim?.shimPath ?? "(none)"} appPath=${appPath} resourcesPath=${resourcesPath} candidates=${nodePathStatus || "(none)"} rawOpenClawNodeModules=${openclawNodeModules} rawResourcesNodeModules=${resourcesNodeModules} rawAppNodeModules=${appNodeModules} inheritedNodePath=${inheritedNodePath ?? "(none)"} worker=${gatewayWorkerPath}`,
+      `Gateway env: SHELL=${shellPath} OPENCLAW_LOAD_SHELL_ENV=1 NODE_PATH=${effectiveNodePath || "(empty)"} PATH_HEAD=${spawnEnv.PATH?.split(pathDelimiter)[0] ?? fixedPath.split(pathDelimiter)[0] ?? "(empty)"} cliShim=${bundledCliShim?.openclawShimPath ?? "(none)"} appPath=${appPath} resourcesPath=${resourcesPath} candidates=${nodePathStatus || "(none)"} rawOpenClawNodeModules=${openclawNodeModules} rawResourcesNodeModules=${resourcesNodeModules} rawAppNodeModules=${appNodeModules} inheritedNodePath=${inheritedNodePath ?? "(none)"} worker=${gatewayWorkerPath}`,
     );
 
     writeMainLog(

@@ -71,16 +71,26 @@ export function resolveBundledSkillsDir(
       cwd,
     });
     if (packageRoot) {
-      const candidate = path.join(packageRoot, "skills");
-      if (looksLikeSkillsDir(candidate)) {
-        return candidate;
+      const packageRootCandidates = [
+        path.join(packageRoot, "bustly-skills", "skills"),
+        path.join(packageRoot, "skills"),
+      ];
+      for (const candidate of packageRootCandidates) {
+        if (looksLikeSkillsDir(candidate)) {
+          return candidate;
+        }
       }
     }
     let current = moduleDir;
     for (let depth = 0; depth < 6; depth += 1) {
-      const candidate = path.join(current, "skills");
-      if (looksLikeSkillsDir(candidate)) {
-        return candidate;
+      const candidates = [
+        path.join(current, "bustly-skills", "skills"),
+        path.join(current, "skills"),
+      ];
+      for (const candidate of candidates) {
+        if (looksLikeSkillsDir(candidate)) {
+          return candidate;
+        }
       }
       const next = path.dirname(current);
       if (next === current) {
@@ -91,6 +101,5 @@ export function resolveBundledSkillsDir(
   } catch {
     // ignore
   }
-
   return undefined;
 }

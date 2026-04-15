@@ -54,4 +54,35 @@ describe("resolveBundledSkillsDir", () => {
 
     expect(resolved).toBe(path.join(root, "skills"));
   });
+
+  it("resolves bundled skills from bustly-skills/skills in repo layouts", async () => {
+    delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bustly-skills-"));
+    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+
+    await writeSkill({
+      dir: path.join(root, "bustly-skills", "skills", "peekaboo"),
+      name: "peekaboo",
+      description: "peekaboo",
+    });
+
+    const distDir = path.join(root, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    const argv1 = path.join(distDir, "index.js");
+    await fs.writeFile(argv1, "// stub", "utf-8");
+
+    const moduleUrl = pathToFileURL(path.join(distDir, "skills.js")).href;
+    const execPath = path.join(root, "bin", "node");
+    await fs.mkdir(path.dirname(execPath), { recursive: true });
+
+    const resolved = resolveBundledSkillsDir({
+      argv1,
+      moduleUrl,
+      cwd: distDir,
+      execPath,
+    });
+
+    expect(resolved).toBe(path.join(root, "bustly-skills", "skills"));
+  });
 });

@@ -11,6 +11,8 @@ import {
   resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
+import { ensureGatewayRuntimeCliShim } from "../../gateway/runtime-cli-shim.js";
+import { buildGatewayRuntimeEnv } from "../../gateway/runtime-env.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { startGatewayServer } from "../../gateway/server.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
@@ -169,6 +171,28 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
   }
   if (opts.cloud) {
+    const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || resolveStateDir(process.env);
+    const configPath = process.env.OPENCLAW_CONFIG_PATH?.trim() || CONFIG_PATH;
+    const runtimeCliShim = ensureGatewayRuntimeCliShim({
+      stateDir,
+      runtimeCommand: process.execPath,
+      cwd: process.cwd(),
+      argv1: process.argv[1],
+      moduleUrl: import.meta.url,
+    });
+    const cloudRuntimeEnv = buildGatewayRuntimeEnv({
+      env: process.env,
+      cwd: process.cwd(),
+      argv1: process.argv[1],
+      moduleUrl: import.meta.url,
+      stateDir,
+      configPath,
+      preferBundledPlugins: true,
+      profile: process.env.OPENCLAW_PROFILE,
+      pathPrepend: [runtimeCliShim?.shimDir],
+      execPathPrepend: [runtimeCliShim?.shimDir],
+    });
+    Object.assign(process.env, cloudRuntimeEnv);
     const cloudBinding = await ensureBustlyCloudReady({
       gatewayPort: portOverride ?? undefined,
       gatewayBind:

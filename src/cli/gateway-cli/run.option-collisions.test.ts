@@ -1,3 +1,4 @@
+import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
@@ -19,6 +20,19 @@ const ensureBustlyCloudReady = vi.fn(async () => ({
   agentId: "bustly-workspace-1-overview",
   workspaceDir: "/tmp/workspaces/workspace-1/agents/overview",
 }));
+const ensureGatewayRuntimeCliShim = vi.fn((_opts?: unknown) => ({
+  shimDir: "/tmp/runtime-shim",
+  openclawShimPath: "/tmp/runtime-shim/openclaw",
+  bustlyShimPath: "/tmp/runtime-shim/bustly",
+}));
+const buildGatewayRuntimeEnv = vi.fn((opts?: Record<string, unknown>) => ({
+  ...(opts?.env as Record<string, string> | undefined),
+  OPENCLAW_BUNDLED_SKILLS_DIR: "/tmp/bundled-skills",
+  OPENCLAW_BUNDLED_PLUGINS_DIR: "/tmp/bundled-plugins",
+  OPENCLAW_PREFER_BUNDLED_PLUGINS: "1",
+  PATH: `/tmp/runtime-shim${path.delimiter}${opts?.env && "PATH" in opts.env ? (opts.env as Record<string, string>).PATH ?? "" : ""}`,
+  OPENCLAW_EXEC_PATH_PREPEND: "/tmp/runtime-shim",
+}));
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
@@ -26,6 +40,7 @@ const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }
 const { defaultRuntime, resetRuntimeCapture, runtimeErrors } = createCliRuntimeCapture();
 
 vi.mock("../../config/config.js", () => ({
+  CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
   loadConfig: () => ({}),
   readConfigFileSnapshot: async () => ({ exists: false }),
@@ -96,6 +111,14 @@ vi.mock("../../bustly/workspace-runtime.js", () => ({
   ensureBustlyCloudReady: (opts?: unknown) => ensureBustlyCloudReady(opts),
 }));
 
+vi.mock("../../gateway/runtime-env.js", () => ({
+  buildGatewayRuntimeEnv: (opts?: unknown) => buildGatewayRuntimeEnv(opts as Record<string, unknown> | undefined),
+}));
+
+vi.mock("../../gateway/runtime-cli-shim.js", () => ({
+  ensureGatewayRuntimeCliShim: (opts?: unknown) => ensureGatewayRuntimeCliShim(opts),
+}));
+
 vi.mock("./run-loop.js", () => ({
   runGatewayLoop: (params: { start: () => Promise<unknown> }) => runGatewayLoop(params),
 }));
@@ -115,6 +138,8 @@ describe("gateway run option collisions", () => {
     forceFreePortAndWait.mockClear();
     ensureDevGatewayConfig.mockClear();
     ensureBustlyCloudReady.mockClear();
+    ensureGatewayRuntimeCliShim.mockClear();
+    buildGatewayRuntimeEnv.mockClear();
     runGatewayLoop.mockClear();
   });
 
@@ -166,6 +191,14 @@ describe("gateway run option collisions", () => {
   it("runs bustly cloud preflight before startup when --cloud is enabled", async () => {
     await runGatewayCli(["gateway", "run", "--cloud", "--allow-unconfigured"]);
 
+    expect(ensureGatewayRuntimeCliShim).toHaveBeenCalledTimes(1);
+    expect(buildGatewayRuntimeEnv).toHaveBeenCalledTimes(1);
+    expect(buildGatewayRuntimeEnv).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pathPrepend: ["/tmp/runtime-shim"],
+        execPathPrepend: ["/tmp/runtime-shim"],
+      }),
+    );
     expect(ensureBustlyCloudReady).toHaveBeenCalledWith({
       gatewayBind: undefined,
       gatewayPort: undefined,
@@ -189,6 +222,8 @@ describe("gateway run option collisions", () => {
       "cloud_tok",
     ]);
 
+    expect(ensureGatewayRuntimeCliShim).toHaveBeenCalledTimes(1);
+    expect(buildGatewayRuntimeEnv).toHaveBeenCalledTimes(1);
     expect(ensureBustlyCloudReady).toHaveBeenCalledWith({
       gatewayBind: "lan",
       gatewayPort: 17999,
@@ -212,6 +247,7 @@ describe("gateway run option collisions", () => {
   it("runs bustly cloud preflight for top-level gateway command", async () => {
     await runGatewayCli(["gateway", "--cloud", "--allow-unconfigured"]);
 
+    expect(buildGatewayRuntimeEnv).toHaveBeenCalledTimes(1);
     expect(ensureBustlyCloudReady).toHaveBeenCalledWith({
       gatewayBind: undefined,
       gatewayPort: undefined,
