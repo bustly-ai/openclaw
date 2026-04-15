@@ -96,4 +96,50 @@ describe("loadDotEnv", () => {
       });
     });
   });
+
+  it("loads OPENCLAW_ENV-specific files before generic dotenv files", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(path.join(cwdDir, ".env"), "OVERRIDE=from-base\nBASE_ONLY=1\n");
+        await writeEnvFile(path.join(cwdDir, ".env.local"), "OVERRIDE=from-local\nLOCAL_ONLY=1\n");
+        await writeEnvFile(path.join(cwdDir, ".env.test"), "OVERRIDE=from-test\nTEST_ONLY=1\n");
+        await writeEnvFile(
+          path.join(cwdDir, ".env.test.local"),
+          "OVERRIDE=from-test-local\nTEST_LOCAL_ONLY=1\n",
+        );
+
+        process.chdir(cwdDir);
+        process.env.OPENCLAW_ENV = "test";
+        delete process.env.OVERRIDE;
+        delete process.env.BASE_ONLY;
+        delete process.env.LOCAL_ONLY;
+        delete process.env.TEST_ONLY;
+        delete process.env.TEST_LOCAL_ONLY;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.OVERRIDE).toBe("from-test-local");
+        expect(process.env.BASE_ONLY).toBe("1");
+        expect(process.env.LOCAL_ONLY).toBe("1");
+        expect(process.env.TEST_ONLY).toBe("1");
+        expect(process.env.TEST_LOCAL_ONLY).toBe("1");
+      });
+    });
+  });
+
+  it("loads environment-specific fallback files from state dir when cwd files are absent", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(path.join(stateDir, ".env.test"), "FOO=from-state-test\n");
+
+        process.chdir(cwdDir);
+        process.env.OPENCLAW_ENV = "test";
+        delete process.env.FOO;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-state-test");
+      });
+    });
+  });
 });

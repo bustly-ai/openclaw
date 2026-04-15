@@ -122,6 +122,10 @@ describe("resolveGatewayRuntimeConfig", () => {
       } else {
         delete process.env.OPENCLAW_GATEWAY_TOKEN;
       }
+      delete process.env.BUSTLY_CONTROL_PLANE_BASE_URL;
+      delete process.env.BUSTLY_RUNTIME_WORKSPACE_ID;
+      delete process.env.BUSTLY_RUNTIME_ID;
+      delete process.env.BUSTLY_RUNTIME_TOKEN;
     });
 
     it.each([
@@ -229,6 +233,26 @@ describe("resolveGatewayRuntimeConfig", () => {
         port: 18789,
       });
       expect(result.bindHost).toBe("0.0.0.0");
+    });
+
+    it("allows cloud runtime token mode without static token when control plane identity is present", async () => {
+      process.env.BUSTLY_CONTROL_PLANE_BASE_URL = "https://cp.example.com";
+      process.env.BUSTLY_RUNTIME_WORKSPACE_ID = "workspace-1";
+      process.env.BUSTLY_RUNTIME_ID = "runtime-1";
+      process.env.BUSTLY_RUNTIME_TOKEN = "runtime-token";
+
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "token" },
+          },
+        },
+        port: 18789,
+      });
+
+      expect(result.authMode).toBe("token");
+      expect(typeof result.resolvedAuth.verifier).toBe("function");
     });
   });
 
