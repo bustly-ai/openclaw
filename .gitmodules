@@ -7,3 +7,7 @@
 [submodule "bustly-skills"]
 	path = bustly-skills
 	url = git@github.com:bustly-ai/bustly-skills.git
+[submodule "www.salerio"]
+	path = www.salerio
+	url = git@github.com:bustly-ai/www.salerio.git
+	branch = testing

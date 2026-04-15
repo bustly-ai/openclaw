@@ -1,204 +1,57 @@
-import { useEffect, useRef, type ReactElement } from "react";
-import { HashRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
-
-// Types are defined in electron.d.ts
-import BustlyLoginPage from "./components/Onboard/BustlyLoginPage";
-import ChatPage from "./components/ChatPage/index";
-import ClientAppShell from "./components/ClientAppShell";
-import SkillPage from "./components/SkillPage";
-import { AppStateProvider, useAppState } from "./providers/AppStateProvider";
-import DeepLinkBridge from "./providers/DeepLinkBridge";
-import { GlobalLoaderProvider, useGlobalLoader } from "./providers/GlobalLoaderProvider";
-
-function AppShell() {
-  const {
-    loggedIn,
-    checking,
-    error,
-    gatewayPhase,
-    gatewayMessage,
-    gatewayCanRestoreLastGoodConfig,
-    gatewayReady,
-    restoreGatewayLastGoodConfig,
-  } = useAppState();
-  const { showGlobalLoading, hideGlobalLoading } = useGlobalLoader();
-  const location = useLocation();
-  const pathname = location.pathname || "/";
-  const isBustlyLoginWindow = pathname === "/bustly-login";
-  const hasCompletedInitialGatewayBootRef = useRef(false);
-
-  useEffect(() => {
-    if (!loggedIn || hasCompletedInitialGatewayBootRef.current) {
-      return;
-    }
-    if (gatewayReady) {
-      hasCompletedInitialGatewayBootRef.current = true;
-    }
-  }, [gatewayPhase, gatewayReady, loggedIn]);
-
-  const showGatewayLoading =
-    !isBustlyLoginWindow &&
-    loggedIn &&
-    !hasCompletedInitialGatewayBootRef.current &&
-    (gatewayPhase === "starting" || gatewayPhase === "checking");
-  const shouldShowGatewayRecovery =
-    Boolean(error?.trim()) && gatewayCanRestoreLastGoodConfig;
-  const shouldShowAppLoading =
-    ((!loggedIn && checking) || showGatewayLoading || Boolean(error?.trim()));
-  const appLoadingMessage = shouldShowGatewayRecovery
-    ? "Bustly configuration is corrupted. Restore from backup?"
-    : (error?.trim() || gatewayMessage?.trim() || "Loading...");
-  const appLoadingTone = error?.trim() ? "error" : "loading";
-  const appLoadingActions =
-    shouldShowGatewayRecovery
-      ? [
-          {
-            label: "Restore",
-            onClick: () => {
-              void restoreGatewayLastGoodConfig();
-            },
-          },
-        ]
-      : undefined;
-
-  useEffect(() => {
-    if (shouldShowAppLoading) {
-      showGlobalLoading(appLoadingMessage, "app-shell", appLoadingTone, 0, appLoadingActions);
-      return;
-    }
-    hideGlobalLoading("app-shell");
-  }, [
-    appLoadingActions,
-    appLoadingMessage,
-    appLoadingTone,
-    checking,
-    error,
-    hideGlobalLoading,
-    loggedIn,
-    shouldShowAppLoading,
-    showGatewayLoading,
-    showGlobalLoading,
-  ]);
-
-  const renderLoginRoute = () => {
-    if (loggedIn) {
-      return <Navigate to="/chat" replace />;
-    }
-    if (checking) {
-      return null;
-    }
-    return (
-      <BustlyLoginPage
-        onContinue={() => {}}
-        autoContinue={false}
-        showSignOut={false}
-        showContinueWhenLoggedIn={false}
-      />
-    );
-  };
-
-  const renderProtectedRoute = (element: ReactElement) => {
-    if (loggedIn) {
-      return element;
-    }
-    if (checking) {
-      return null;
-    }
-    if (!loggedIn) {
-      return <Navigate to="/bustly-login" replace />;
-    }
-    return null;
-  };
-
-  const renderDefault = () => {
-    if (loggedIn) {
-      return <Navigate to="/chat" replace />;
-    }
-    if (checking) {
-      return null;
-    }
-    return <Navigate to="/bustly-login" replace />;
-  };
-
-  const isClientRoute = pathname === "/chat" || pathname === "/skill";
-  const activeClientPage = pathname === "/skill" ? "skill" : "chat";
-
-  if (isClientRoute) {
-    return (
-      <>
-        <DeepLinkBridge />
-        {renderProtectedRoute(
-          <ClientAppShell
-            activePage={activeClientPage}
-            chatPage={<ChatPage />}
-            skillPage={activeClientPage === "skill" ? <SkillPage /> : undefined}
-          />,
-        )}
-      </>
-    );
-  }
-
-  return (
-    <>
-      <DeepLinkBridge />
-      <Routes>
-        <Route
-          path="/bustly-login"
-          element={renderLoginRoute()}
-        />
-        <Route
-          path="/provider-setup"
-          element={<Navigate to="/chat" replace />}
-        />
-        <Route
-          path="/devpanel"
-          element={<Navigate to="/chat" replace />}
-        />
-        <Route path="/" element={renderDefault()} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </>
-  );
-}
-
-function GatewayLoaderBridge() {
-  const { gatewayPhase, loggedIn } = useAppState();
-  const { showLoader, hideLoader } = useGlobalLoader();
-  const hasCompletedInitialGatewayBootRef = useRef(false);
-
-  useEffect(() => {
-    if (!loggedIn) {
-      hasCompletedInitialGatewayBootRef.current = false;
-      hideLoader();
-      return;
-    }
-    if (gatewayPhase === "ready") {
-      hasCompletedInitialGatewayBootRef.current = true;
-      hideLoader();
-      return;
-    }
-    const shouldShow =
-      hasCompletedInitialGatewayBootRef.current &&
-      (gatewayPhase === "starting" || gatewayPhase === "checking");
-    if (shouldShow) {
-      showLoader("Loading...", 0);
-      return;
-    }
-    hideLoader();
-  }, [gatewayPhase, hideLoader, loggedIn, showLoader]);
-
-  return null;
-}
+import { useState } from "react";
+import { ArrowClockwise, WarningCircle } from "@phosphor-icons/react";
 
 export default function App() {
+  const [reloading, setReloading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleReload = async () => {
+    if (reloading) {
+      return;
+    }
+    setReloading(true);
+    setError(null);
+    try {
+      const result = await window.electronAPI.reloadRemoteRenderer();
+      if (!result.success) {
+        setError(result.error ?? "Bustly could not retry the remote renderer.");
+        setReloading(false);
+      }
+    } catch (reloadError) {
+      setError(reloadError instanceof Error ? reloadError.message : String(reloadError));
+      setReloading(false);
+    }
+  };
+
   return (
-    <HashRouter>
-      <AppStateProvider>
-        <GlobalLoaderProvider>
-          <GatewayLoaderBridge />
-          <AppShell />
-        </GlobalLoaderProvider>
-      </AppStateProvider>
-    </HashRouter>
+    <div className="onboard-loading">
+      <div className="onboard-loading-minimal">
+        <div className="flex h-[116px] w-[116px] items-center justify-center text-red-500">
+          <WarningCircle size={44} weight="bold" />
+        </div>
+        <p className="onboard-loading-title">Bustly could not load the renderer from the CDN.</p>
+        <p className="mt-2 max-w-[360px] text-center text-sm leading-6 text-[#666F8D]">
+          Check your network connection and reload to retry the remote renderer.
+        </p>
+        {error ? (
+          <p className="mt-3 max-w-[360px] text-center text-sm leading-6 text-[#C24A3A]">
+            {error}
+          </p>
+        ) : null}
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              void handleReload();
+            }}
+            disabled={reloading}
+            className="inline-flex items-center gap-2 rounded-full bg-[#1A162F] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#2B2550] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <ArrowClockwise size={16} weight="bold" className={reloading ? "animate-spin" : ""} />
+            {reloading ? "Reloading..." : "Reload"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

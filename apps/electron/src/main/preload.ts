@@ -74,6 +74,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // App info
   getAppInfo: () => ipcRenderer.invoke("get-app-info"),
   getNativeFullscreenStatus: () => ipcRenderer.invoke("window-native-fullscreen-status"),
+  reloadRemoteRenderer: () => ipcRenderer.invoke("renderer-reload-remote"),
   updaterCheck: () => ipcRenderer.invoke("updater-check"),
   updaterStartInstall: () => ipcRenderer.invoke("updater-start-install"),
   updaterInstall: () => ipcRenderer.invoke("updater-install"),

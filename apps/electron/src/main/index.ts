@@ -2119,6 +2119,27 @@ function normalizeRendererHash(hash?: string): string | null {
   return withoutHash.startsWith("/") ? withoutHash : `/${withoutHash}`;
 }
 
+const REMOTE_RENDERER_FALLBACK_HASH = "/cdn-load-error";
+const LOCAL_RENDERER_ONLY_HASHES = new Set(["/update-helper"]);
+let lastRequestedRendererHash: string | undefined;
+
+function loadRendererFallbackWindow(targetWindow: BrowserWindow, options?: { hash?: string }) {
+  if (process.env.NODE_ENV === "development") {
+    const normalizedHash = normalizeRendererHash(options?.hash);
+    const url = normalizedHash ? `http://localhost:5180/#${normalizedHash}` : "http://localhost:5180";
+    targetWindow.loadURL(url).catch((error) => {
+      writeMainLog(`Renderer fallback load failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    return;
+  }
+
+  const filePath = resolve(__dirname, "../renderer/index.html");
+  const loadOptions = options?.hash ? { hash: options.hash } : undefined;
+  targetWindow.loadFile(filePath, loadOptions).catch((error) => {
+    writeMainLog(`Renderer fallback load failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
+}
+
 function resolveRemoteRendererUrl(hash?: string): string | null {
   if (!BUSTLY_RENDERER_URL) {
     return null;
@@ -2139,10 +2160,32 @@ function resolveRemoteRendererUrl(hash?: string): string | null {
 }
 
 function loadRendererWindow(targetWindow: BrowserWindow, options?: { hash?: string }) {
+  lastRequestedRendererHash = options?.hash;
+  const normalizedHash = normalizeRendererHash(options?.hash);
+  if (normalizedHash && LOCAL_RENDERER_ONLY_HASHES.has(normalizedHash)) {
+    loadRendererFallbackWindow(targetWindow, { hash: normalizedHash });
+    return;
+  }
+
   const remoteRendererUrl = resolveRemoteRendererUrl(options?.hash);
   if (remoteRendererUrl) {
+    let didFallback = false;
+    targetWindow.webContents.once("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame || validatedURL !== remoteRendererUrl || errorCode === -3 || didFallback) {
+        return;
+      }
+      didFallback = true;
+      writeMainError(
+        `[Renderer] Remote renderer failed to load (${errorCode}): ${errorDescription || "unknown error"}`,
+      );
+      loadRendererFallbackWindow(targetWindow, { hash: REMOTE_RENDERER_FALLBACK_HASH });
+    });
     targetWindow.loadURL(remoteRendererUrl).catch((error) => {
       writeMainLog(`Renderer load failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (!didFallback) {
+        didFallback = true;
+        loadRendererFallbackWindow(targetWindow, { hash: REMOTE_RENDERER_FALLBACK_HASH });
+      }
     });
     return;
   }
@@ -2153,11 +2196,7 @@ function loadRendererWindow(targetWindow: BrowserWindow, options?: { hash?: stri
       writeMainLog(`Renderer load failed: ${error instanceof Error ? error.message : String(error)}`);
     });
   } else {
-    const filePath = resolve(__dirname, "../renderer/index.html");
-    const loadOptions = options?.hash ? { hash: options.hash } : undefined;
-    targetWindow.loadFile(filePath, loadOptions).catch((error) => {
-      writeMainLog(`Renderer load failed: ${error instanceof Error ? error.message : String(error)}`);
-    });
+    loadRendererFallbackWindow(targetWindow, { hash: options?.hash ?? REMOTE_RENDERER_FALLBACK_HASH });
   }
 }
 
@@ -3099,6 +3138,16 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle("window-native-fullscreen-status", () => {
     return { isNativeFullscreen: Boolean(mainWindow?.isFullScreen()) };
+  });
+  ipcMain.handle("renderer-reload-remote", async () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return { success: false, error: "Main window is not available" };
+    }
+    if (!BUSTLY_RENDERER_URL) {
+      return { success: false, error: "BUSTLY_RENDERER_URL is not configured" };
+    }
+    loadRendererWindow(mainWindow, { hash: lastRequestedRendererHash });
+    return { success: true };
   });
 
   ipcMain.handle("updater-check", async () => {

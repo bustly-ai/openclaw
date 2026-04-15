@@ -192,6 +192,7 @@ interface ElectronAPI {
   openExternalUrl: (url: string) => Promise<{ success: boolean; error?: string }>;
   getAppInfo: () => Promise<AppInfo>;
   getNativeFullscreenStatus: () => Promise<{ isNativeFullscreen: boolean }>;
+  reloadRemoteRenderer: () => Promise<{ success: boolean; error?: string }>;
 
   // Onboarding
   bustlyLogin: () => Promise<{ success: boolean; loginTraceId?: string; error?: string }>;

@@ -1,10 +1,66 @@
 # Repository Guidelines
 
-- Repo: https://github.com/openclaw/openclaw
-- GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
-- GitHub comment footgun: never use `gh issue/pr comment -b "..."` when body contains backticks or shell chars. Always use single-quoted heredoc (`-F - <<'EOF'`) so no command substitution/escaping corruption.
-- GitHub linking footgun: don’t wrap issue/PR refs like `#24643` in backticks when you want auto-linking. Use plain `#24643` (optionally add full URL).
-- Security advisory analysis: before triage/severity decisions, read `SECURITY.md` to align with OpenClaw's trust model and design boundaries.
+- Product: **Bustly**
+- Upstream/fork base: https://github.com/openclaw/openclaw
+- Default naming rule: use `Bustly` for product, UI, architecture, and user-facing copy. Use `OpenClaw` / `openclaw` only when the literal upstream repo/package/binary/config name matters.
+
+## Product Architecture
+
+- This repo is the Bustly desktop/runtime repo. It owns the local gateway/runtime, Electron shell, native bridges, packaging, and desktop-specific auth/integration flows.
+- `www.salerio` is now a first-class submodule and is the source of truth for Bustly web surfaces and the shared renderer.
+- The current architecture is intentionally split into two product surfaces:
+  - Local Electron: local gateway + Electron shell + shared renderer.
+  - Cloud Web: website host + shared renderer + remote gateway.
+
+### Local Electron
+
+- `apps/electron/**` is the Bustly desktop shell.
+- Electron main should stay focused on:
+  - window lifecycle
+  - preload bridge
+  - desktop OAuth/login callback flow
+  - native dialogs/filesystem/open/external integrations
+  - updater/packaging
+  - bootstrapping and supervising the local Bustly gateway
+- Renderer business logic should not migrate back into Electron main unless it is truly desktop-only.
+- Agent/session/workspace runtime behavior should live in the gateway or shared renderer, not in Electron main.
+
+### Cloud Web
+
+- `www.salerio/packages/website` hosts the Bustly web admin experience.
+- `www.salerio/packages/client-app` is the shared renderer used by both Electron and cloud.
+- `www.salerio/packages/www` is the Vercel site shell and distribution entrypoint.
+- In cloud mode:
+  - website owns web auth/session
+  - website owns workspace chrome, settings, invite flows, and user menu
+  - client-app runs inside the website host
+  - renderer agent capabilities still talk to gateway, not to Electron
+
+### Frontend Ownership
+
+- Shared renderer source of truth: `www.salerio/packages/client-app`
+- Cloud host shell source of truth: `www.salerio/packages/website`
+- Marketing/Vercel distribution shell: `www.salerio/packages/www`
+- Desktop shell source of truth: `apps/electron`
+- Design source of truth for Bustly desktop surfaces: `bustly_admin_design/`
+
+### Current Delivery Model
+
+- `/admin` is distributed by Vercel from `www.salerio/packages/www/public/html/index.html`, which is copied from the website build.
+- `/client-app` is distributed by Vercel from `www.salerio/packages/www/public/html/client-app.html`, which is copied from the client-app build.
+- Website and client-app static assets are published to the same OSS bucket / CDN.
+- Current intended split:
+  - HTML entrypoints: Vercel
+  - hashed JS/CSS/assets: OSS/CDN
+- Electron should prefer a Vercel-served renderer HTML entrypoint over loading the CDN HTML directly when cache freshness matters.
+
+### Architectural Rules
+
+- Renderer-side agent capabilities must go through gateway.
+- Do not add new agent-facing business logic to Electron main if gateway or renderer can own it.
+- Cloud-specific workspace switcher, settings, invite members, and logout should reuse website state/components when possible.
+- Desktop login/logout can remain Electron-specific when the cloud login model differs.
+- Avoid duplicating the renderer into separate Electron-only and cloud-only apps unless a hard product fork is explicitly intended.
 
 ## Electron Client Override
 
@@ -32,12 +88,21 @@
 
 ## Project Structure & Module Organization
 
-- Source code: `src/` (CLI wiring in `src/cli`, commands in `src/commands`, web provider in `src/provider-web.ts`, infra in `src/infra`, media pipeline in `src/media`).
+- Core runtime/backend source: `src/` (CLI wiring in `src/cli`, commands in `src/commands`, gateway/runtime in `src/gateway` + `src/bustly`, infra in `src/infra`, media pipeline in `src/media`).
+- Desktop shell: `apps/electron/`
+- Shared web/frontend submodule: `www.salerio/`
+  - `packages/client-app`: shared renderer for Electron + cloud
+  - `packages/website`: cloud host/admin shell
+  - `packages/www`: Vercel/Next distribution shell
 - Tests: colocated `*.test.ts`.
 - Docs: `docs/` (images, queue, Pi config). Built output lives in `dist/`.
+- Product/design submodules:
+  - `bustly_admin_design/`
+  - `bustly-prompts/`
+  - `bustly-skills/`
 - Plugins/extensions: live under `extensions/*` (workspace packages). Keep plugin-only deps in the extension `package.json`; do not add them to the root `package.json` unless core uses them.
 - Plugins: install runs `npm install --omit=dev` in plugin dir; runtime deps must live in `dependencies`. Avoid `workspace:*` in `dependencies` (npm install breaks); put `openclaw` in `devDependencies` or `peerDependencies` instead (runtime resolves `openclaw/plugin-sdk` via jiti alias).
-- Installers served from `https://openclaw.ai/*`: live in the sibling repo `../openclaw.ai` (`public/install.sh`, `public/install-cli.sh`, `public/install.ps1`).
+- Legacy/upstream installer assets served from `https://openclaw.ai/*`: live in the sibling repo `../openclaw.ai` (`public/install.sh`, `public/install-cli.sh`, `public/install.ps1`).
 - Messaging channels: always consider **all** built-in + extension channels when refactoring shared logic (routing, allowlists, pairing, command gating, onboarding, docs).
   - Core channel docs: `docs/channels/`
   - Core channel code: `src/telegram`, `src/discord`, `src/slack`, `src/signal`, `src/imessage`, `src/web` (WhatsApp web), `src/channels`, `src/routing`
@@ -79,11 +144,16 @@
 
 - Runtime baseline: Node **22+** (keep Node + Bun paths working).
 - Install deps: `pnpm install`
+- Frontend submodule install: `git submodule update --init --recursive` then `cd www.salerio && pnpm install`
 - If deps are missing (for example `node_modules` missing, `vitest not found`, or `command not found`), run the repo’s package-manager install command (prefer lockfile/README-defined PM), then rerun the exact requested command once. Apply this to test/build/lint/typecheck/dev commands; if retry still fails, report the command and first actionable error.
 - Pre-commit hooks: `prek install` (runs same checks as CI)
 - Also supported: `bun install` (keep `pnpm-lock.yaml` + Bun patching in sync when touching deps/patches).
 - Prefer Bun for TypeScript execution (scripts, dev, tests): `bun <file.ts>` / `bunx <tool>`.
 - Run CLI in dev: `pnpm openclaw ...` (bun) or `pnpm dev`.
+- Shared renderer local dev lives in `www.salerio`:
+  - `pnpm --filter @salerio/client-app dev`
+  - `pnpm --filter @salerio/website dev`
+  - `pnpm --filter @salerio/www build`
 - Node remains supported for running built output (`dist/*`) and production installs.
 - Mac packaging (dev): `scripts/package-mac-app.sh` defaults to current arch. Release checklist: `docs/platforms/mac/release.md`.
 - Type-check/build: `pnpm build`
@@ -100,7 +170,7 @@
 - Add brief code comments for tricky or non-obvious logic.
 - Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
-- Naming: use **OpenClaw** for upstream project/docs/CLI contexts, but preserve existing Electron client product wording and Bustly-facing UI copy where the client/design project already uses it. Use `openclaw` for CLI command, package/binary, and config keys. Default state paths live under `~/.bustly`.
+- Naming: default to **Bustly** for product/docs/UI. Use `OpenClaw` for upstream project references and `openclaw` only for literal CLI command, package/binary, or config keys. Default state paths live under `~/.bustly`.
 
 ## Release Channels (Naming)
 
@@ -190,7 +260,7 @@
 - Patching dependencies (pnpm patches, overrides, or vendored changes) requires explicit approval; do not do this by default.
 - CLI progress: use `src/cli/progress.ts` (`osc-progress` + `@clack/prompts` spinner); don’t hand-roll spinners/bars.
 - Status output: keep tables + ANSI-safe wrapping (`src/terminal/table.ts`); `status --all` = read-only/pasteable, `status --deep` = probes.
-- Gateway currently runs only as the menubar app; there is no separate LaunchAgent/helper label installed. Restart via the OpenClaw Mac app or `scripts/restart-mac.sh`; to verify/kill use `launchctl print gui/$UID | grep openclaw` rather than assuming a fixed label. **When debugging on macOS, start/stop the gateway via the app, not ad-hoc tmux sessions; kill any temporary tunnels before handoff.**
+- Gateway currently runs only as the menubar app; there is no separate LaunchAgent/helper label installed. Restart via the Bustly Mac app or `scripts/restart-mac.sh`; to verify/kill use `launchctl print gui/$UID | grep openclaw` rather than assuming a fixed label. **When debugging on macOS, start/stop the gateway via the app, not ad-hoc tmux sessions; kill any temporary tunnels before handoff.**
 - macOS logs: use `./scripts/clawlog.sh` to query unified logs for the OpenClaw subsystem; it supports follow/tail/category filters and expects passwordless sudo for `/usr/bin/log`.
 - If shared guardrails are available locally, review them; otherwise follow this repo's guidance.
 - SwiftUI state management (iOS/macOS): prefer the `Observation` framework (`@Observable`, `@Bindable`) over `ObservableObject`/`@StateObject`; don’t introduce new `ObservableObject` unless required for compatibility, and migrate existing usages when touching related code.
