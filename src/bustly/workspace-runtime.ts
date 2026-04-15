@@ -299,6 +299,10 @@ export async function ensureBustlyCloudReady(params?: {
   env?: NodeJS.ProcessEnv;
   userAgent?: string;
   baseUrl?: string;
+  gatewayPort?: number;
+  gatewayBind?: "loopback" | "lan" | "auto";
+  gatewayToken?: string;
+  nodeManager?: "npm" | "pnpm" | "bun";
 }): Promise<BustlyWorkspaceBinding & { workspaceId: string }> {
   const env = params?.env ?? process.env;
   const state = readBustlyOAuthState();
@@ -314,16 +318,23 @@ export async function ensureBustlyCloudReady(params?: {
       "No Bustly workspace found in ~/.bustly/bustlyOauth.json (user.workspaceId). Please sign in first.",
     );
   }
-  const binding = await synchronizeBustlyWorkspaceContext({
+  // Use a lazy import to avoid a static cycle: gateway-runtime-init depends on
+  // workspace-runtime for workspace binding and bootstrap helpers.
+  const { ensureGatewayRuntimeInit } = await import("./gateway-runtime-init.js");
+  const runtime = await ensureGatewayRuntimeInit({
     workspaceId,
     configPath: params?.configPath,
-    allowCreateConfig: true,
+    gatewayPort: params?.gatewayPort,
+    gatewayBind: params?.gatewayBind,
+    gatewayToken: params?.gatewayToken,
+    nodeManager: params?.nodeManager,
     userAgent: params?.userAgent ?? "openclaw-cloud",
     baseUrl: params?.baseUrl,
     env,
   });
-  if (!binding) {
-    throw new Error("Failed to initialize Bustly cloud workspace context.");
-  }
-  return binding;
+  return {
+    workspaceId,
+    agentId: runtime.agentId,
+    workspaceDir: runtime.workspace,
+  };
 }

@@ -38,7 +38,6 @@ import {
 } from "./auto-init.js";
 import {
   ensureBundledOpenClawShim,
-  resolveBundledBustlySkillsDir,
   resolveOpenClawCliPath,
   resolveElectronRunAsNodeExecPath,
 } from "./cli-utils.js";
@@ -809,18 +808,18 @@ function resolveBustlyWorkspaceIdFromOAuthState(): string {
   return resolveSharedBustlyWorkspaceIdFromOAuthState();
 }
 
-async function initializeDesktopConfigForBustlyWorkspace(params: {
+async function initializeGatewayRuntimeForBustlyWorkspace(params: {
   workspaceId: string;
   workspaceName?: string;
 }): Promise<void> {
   const workspaceId = params.workspaceId.trim();
   if (!workspaceId) {
-    throw new Error("Missing Bustly workspaceId for desktop initialization.");
+    throw new Error("Missing Bustly workspaceId for gateway runtime initialization.");
   }
 
   const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId);
   writeMainInfo(
-    `[Init] Ensuring desktop config for Bustly workspace ${workspaceId} at ${workspaceDir}`,
+    `[Init] Ensuring gateway runtime for Bustly workspace ${workspaceId} at ${workspaceDir}`,
   );
   const result = await initializeOpenClaw({
     workspace: workspaceDir,
@@ -2750,7 +2749,7 @@ async function runElectronBustlyLogin(loginTraceId: string): Promise<void> {
       status: "initializing",
       error: null,
     });
-    await initializeDesktopConfigForBustlyWorkspace({
+    await initializeGatewayRuntimeForBustlyWorkspace({
       workspaceId: apiResponse.data.workspaceId,
     });
     syncSentryBustlyScope();
@@ -3611,17 +3610,17 @@ void app.whenReady().then(async () => {
 
   if (needsInit) {
     if (bustlyLoggedIn) {
-      writeMainLog("Bustly session found; initializing desktop config before starting gateway.");
+      writeMainLog("Bustly session found; initializing gateway runtime before starting gateway.");
       try {
         const workspaceId = resolveBustlyWorkspaceIdFromOAuthState();
         if (!workspaceId) {
           throw new Error("Missing Bustly workspaceId in OAuth state");
         }
-        await initializeDesktopConfigForBustlyWorkspace({ workspaceId });
+        await initializeGatewayRuntimeForBustlyWorkspace({ workspaceId });
         shouldAutoStartGateway = true;
-        writeMainLog("Desktop config initialization complete");
+        writeMainLog("Gateway runtime initialization complete");
       } catch (error) {
-        writeMainError("[Init] Failed to initialize desktop config for Bustly session:", error);
+        writeMainError("[Init] Failed to initialize gateway runtime for Bustly session:", error);
       }
     } else {
       writeMainLog("Skipping auto-initialization; waiting for login.");

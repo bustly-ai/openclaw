@@ -17,6 +17,12 @@ const { oauthStateRef, setActiveWorkspaceIdMock, bootstrapMock, resolveFirstAcce
     resolveFirstAccessibleWorkspaceMock: vi.fn(async () => null),
   };
 });
+const { ensureModelsJsonMock, ensurePiAuthJsonMock } = vi.hoisted(() => {
+  return {
+    ensureModelsJsonMock: vi.fn(async () => ({ agentDir: "", wrote: true })),
+    ensurePiAuthJsonMock: vi.fn(async () => ({ authPath: "", wrote: true })),
+  };
+});
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => oauthStateRef.current),
@@ -25,6 +31,14 @@ vi.mock("../bustly-oauth.js", () => ({
 
 vi.mock("./workspace-bootstrap.js", () => ({
   initializeBustlyWorkspaceBootstrap: (params: unknown) => bootstrapMock(params),
+}));
+
+vi.mock("../agents/models-config.js", () => ({
+  ensureOpenClawModelsJson: (config: unknown, agentDir: string) => ensureModelsJsonMock(config, agentDir),
+}));
+
+vi.mock("../agents/pi-auth-json.js", () => ({
+  ensurePiAuthJsonFromAuthProfiles: (agentDir: string) => ensurePiAuthJsonMock(agentDir),
 }));
 
 vi.mock("./supabase.js", () => ({
@@ -48,6 +62,10 @@ describe("workspace-runtime", () => {
     bootstrapMock.mockResolvedValue(undefined);
     resolveFirstAccessibleWorkspaceMock.mockReset();
     resolveFirstAccessibleWorkspaceMock.mockResolvedValue(null);
+    ensureModelsJsonMock.mockReset();
+    ensureModelsJsonMock.mockResolvedValue({ agentDir: "", wrote: true });
+    ensurePiAuthJsonMock.mockReset();
+    ensurePiAuthJsonMock.mockResolvedValue({ authPath: "", wrote: true });
   });
 
   afterEach(() => {
@@ -107,11 +125,19 @@ describe("workspace-runtime", () => {
     expect(bootstrapMock).toHaveBeenCalledTimes(1);
     const configPath = process.env.OPENCLAW_CONFIG_PATH!;
     const config = JSON.parse(readFileSync(configPath, "utf-8")) as {
+      gateway?: {
+        mode?: string;
+        auth?: { token?: string };
+      };
       agents?: { defaults?: { workspace?: string } };
       models?: { providers?: Record<string, unknown> };
     };
+    expect(config.gateway?.mode).toBe("local");
+    expect(config.gateway?.auth?.token).toBeTruthy();
     expect(config.agents?.defaults?.workspace).toBe(binding.workspaceDir);
     expect(Object.keys(config.models?.providers ?? {})).toEqual(["bustly"]);
+    expect(ensureModelsJsonMock).toHaveBeenCalledTimes(1);
+    expect(ensurePiAuthJsonMock).toHaveBeenCalledTimes(1);
   });
 
   it("is idempotent when switching to the current workspace", async () => {

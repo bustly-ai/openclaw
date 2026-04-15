@@ -167,9 +167,34 @@ describe("gateway run option collisions", () => {
     await runGatewayCli(["gateway", "run", "--cloud", "--allow-unconfigured"]);
 
     expect(ensureBustlyCloudReady).toHaveBeenCalledWith({
+      gatewayBind: undefined,
+      gatewayPort: undefined,
+      gatewayToken: undefined,
       userAgent: "openclaw-cloud",
     });
     expect(startGatewayServer).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards cloud runtime init overrides before gateway startup", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--cloud",
+      "--allow-unconfigured",
+      "--port",
+      "17999",
+      "--bind",
+      "lan",
+      "--token",
+      "cloud_tok",
+    ]);
+
+    expect(ensureBustlyCloudReady).toHaveBeenCalledWith({
+      gatewayBind: "lan",
+      gatewayPort: 17999,
+      gatewayToken: "cloud_tok",
+      userAgent: "openclaw-cloud",
+    });
   });
 
   it("rejects --cloud with --dev", async () => {
@@ -188,6 +213,9 @@ describe("gateway run option collisions", () => {
     await runGatewayCli(["gateway", "--cloud", "--allow-unconfigured"]);
 
     expect(ensureBustlyCloudReady).toHaveBeenCalledWith({
+      gatewayBind: undefined,
+      gatewayPort: undefined,
+      gatewayToken: undefined,
       userAgent: "openclaw-cloud",
     });
     expect(startGatewayServer).toHaveBeenCalledTimes(1);

@@ -5,18 +5,16 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { homedir } from "node:os";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFile, execFileSync } from "node:child_process";
-import type { PresetConfigOptions } from "../config/default-config.js";
 import type { OpenClawConfig } from "../../../../src/config/types";
-import { ensureOpenClawAgentEnv, resolveOpenClawAgentDir } from "../../../../src/agents/agent-paths";
-import { ensureOpenClawModelsJson } from "../../../../src/agents/models-config";
-import { ensurePiAuthJsonFromAuthProfiles } from "../../../../src/agents/pi-auth-json";
 import { readBustlyOAuthState } from "../../../../src/bustly-oauth.js";
-import { applyBustlyOnlyConfig } from "../../../../src/bustly/runtime-config.js";
-import { resolveElectronRunAsNodeExecPath, resolveOpenClawCliPath } from "./cli-utils.js";
+import {
+  ensureGatewayRuntimeInit,
+  getGatewayRuntimeConfigPath,
+  isGatewayRuntimeFullyInitialized,
+} from "../../../../src/bustly/gateway-runtime-init.js";
+import { resolveOpenClawCliPath } from "./cli-utils.js";
 import {
   ELECTRON_OPENCLAW_PROFILE,
   resolveElectronIsolatedConfigPath,
@@ -26,6 +24,13 @@ import { writeMainError, writeMainInfo } from "./logger.js";
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 let lastInitializationLogSignature: string | null = null;
+
+export interface PresetConfigOptions {
+  gatewayPort?: number;
+  gatewayBind?: "loopback" | "lan" | "auto";
+  workspace?: string;
+  nodeManager?: "npm" | "pnpm" | "bun";
+}
 
 function resolveOpenClawRootFromCliPath(cliPath: string): string {
   if (cliPath.endsWith("openclaw.mjs")) {
@@ -128,69 +133,11 @@ async function ensureElectronDefaultConfig(configPath: string): Promise<OpenClaw
     };
   }
 
-  const currentDmScope = nextConfig.session?.dmScope;
-  if (!currentDmScope || currentDmScope === "main") {
-    nextConfig = {
-      ...nextConfig,
-      session: {
-        ...(nextConfig.session ?? {}),
-        dmScope: "per-account-channel-peer",
-      },
-    };
-  }
-
-  const workspaceId = readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
-  if (workspaceId) {
-    // Desktop runtime now always routes model/auth through the Bustly provider config.
-    nextConfig = applyBustlyOnlyConfig(nextConfig, { workspaceId });
-  }
-
   if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
     writeFileSync(configPath, JSON.stringify(nextConfig, null, 2));
   }
 
   return nextConfig;
-}
-
-async function ensureElectronAgentModelFiles(config: OpenClawConfig): Promise<void> {
-  ensureOpenClawAgentEnv();
-  const agentDir = resolveOpenClawAgentDir();
-  await ensureOpenClawModelsJson(config, agentDir);
-  await ensurePiAuthJsonFromAuthProfiles(agentDir);
-}
-
-function loadLoginShellEnvironment(): Record<string, string> {
-  try {
-    const shellPath = process.env.SHELL?.trim() || "/bin/zsh";
-    const result = execFileSync(shellPath, ["-lc", "env -0"], {
-      encoding: "buffer",
-      env: {
-        ...process.env,
-        HOME: homedir(),
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const out = result.toString("utf8");
-    const env: Record<string, string> = {};
-    for (const entry of out.split("\0")) {
-      if (!entry) {
-        continue;
-      }
-      const eq = entry.indexOf("=");
-      if (eq <= 0) {
-        continue;
-      }
-      const key = entry.slice(0, eq);
-      const value = entry.slice(eq + 1);
-      if (!key) {
-        continue;
-      }
-      env[key] = value;
-    }
-    return env;
-  } catch {
-    return {};
-  }
 }
 
 function resolveConfigPathSafe(): string {
@@ -199,67 +146,6 @@ function resolveConfigPathSafe(): string {
   } catch {
     return resolveElectronIsolatedConfigPath();
   }
-}
-
-function resolveDefaultWorkspaceDir(explicit?: string): string {
-  if (explicit?.trim()) {
-    return explicit.trim();
-  }
-  return join(resolveElectronIsolatedStateDir(), "workspace");
-}
-
-async function runCliOnboard(options: InitializationOptions): Promise<void> {
-  const cliPath = resolveOpenClawCliPath();
-  if (!cliPath) {
-    throw new Error("OpenClaw CLI not found. Ensure openclaw.mjs is bundled.");
-  }
-
-  const args: string[] = [
-    "onboard",
-    "--non-interactive",
-    "--accept-risk",
-    "--skip-channels",
-    "--skip-skills",
-    "--skip-health",
-    "--skip-ui",
-    "--json",
-  ];
-
-  const workspace = resolveDefaultWorkspaceDir(options.workspace);
-  args.push("--workspace", workspace);
-  if (options.gatewayPort) {
-    args.push("--gateway-port", String(options.gatewayPort));
-  }
-  if (options.gatewayBind) {
-    args.push("--gateway-bind", options.gatewayBind);
-  }
-  if (options.nodeManager) {
-    args.push("--node-manager", options.nodeManager);
-  }
-
-  args.push("--auth-choice", "skip");
-
-  const loginShellEnv = loadLoginShellEnvironment();
-  const env = {
-    ...process.env,
-    ...loginShellEnv,
-    ELECTRON_RUN_AS_NODE: "1",
-    OPENCLAW_LOAD_SHELL_ENV: "1",
-    OPENCLAW_PROFILE: ELECTRON_OPENCLAW_PROFILE,
-    OPENCLAW_PREFER_BUNDLED_PLUGINS: "1",
-    OPENCLAW_STATE_DIR: resolveElectronIsolatedStateDir(),
-    OPENCLAW_CONFIG_PATH: resolveElectronIsolatedConfigPath(),
-  };
-
-  await new Promise<void>((resolvePromise, rejectPromise) => {
-    execFile(resolveElectronRunAsNodeExecPath(), [cliPath, ...args], { env }, (error) => {
-      if (error) {
-        rejectPromise(error);
-        return;
-      }
-      resolvePromise();
-    });
-  });
 }
 
 export interface InitializationResult {
@@ -281,34 +167,38 @@ export async function initializeOpenClaw(
   options: InitializationOptions = {},
 ): Promise<InitializationResult> {
   try {
-    const { force = false, ...configOptions } = options;
     const configPath = resolveConfigPathSafe();
-
-    if (!force && existsSync(configPath)) {
-      writeMainInfo("Configuration already exists, skipping initialization");
-    } else {
-      writeMainInfo("Initializing OpenClaw via CLI onboarding...");
-      await runCliOnboard(configOptions);
-      if (!existsSync(configPath)) {
-        throw new Error("OpenClaw CLI did not create config file");
-      }
+    const workspaceId = readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
+    if (!workspaceId) {
+      throw new Error("Missing Bustly workspaceId in OAuth state");
     }
 
+    const runtimeEnv = {
+      ...process.env,
+      OPENCLAW_PROFILE: ELECTRON_OPENCLAW_PROFILE,
+      OPENCLAW_PREFER_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: resolveElectronIsolatedStateDir(),
+      OPENCLAW_CONFIG_PATH: resolveElectronIsolatedConfigPath(),
+    };
+    writeMainInfo("Initializing Bustly gateway runtime...");
+    const result = await ensureGatewayRuntimeInit({
+      workspaceId,
+      gatewayPort: options.gatewayPort,
+      gatewayBind: options.gatewayBind,
+      nodeManager: options.nodeManager,
+      userAgent: "openclaw-desktop",
+      configPath,
+      env: runtimeEnv,
+    });
     const config = await ensureElectronDefaultConfig(configPath);
-    await ensureElectronAgentModelFiles(config);
-    const workspaceDir =
-      config.agents?.defaults?.workspace || resolveDefaultWorkspaceDir(options.workspace);
-    const resolvedWorkspace = workspaceDir.startsWith("~")
-      ? join(homedir(), workspaceDir.slice(1))
-      : workspaceDir;
 
     return {
       success: true,
       configPath,
-      gatewayPort: config.gateway?.port || 17999,
-      gatewayBind: config.gateway?.bind || "loopback",
-      gatewayToken: config.gateway?.auth?.token,
-      workspace: resolvedWorkspace,
+      gatewayPort: config.gateway?.port || result.gatewayPort || 17999,
+      gatewayBind: config.gateway?.bind || result.gatewayBind || "loopback",
+      gatewayToken: config.gateway?.auth?.token || result.gatewayToken,
+      workspace: config.agents?.defaults?.workspace || result.workspace,
     };
   } catch (error) {
     writeMainError("Initialization failed:", error);
@@ -323,15 +213,6 @@ export async function initializeOpenClaw(
   }
 }
 
-export function isInitialized(): boolean {
-  try {
-    const configPath = resolveConfigPathSafe();
-    return existsSync(configPath);
-  } catch {
-    return false;
-  }
-}
-
 export function isFullyInitialized(): boolean {
   try {
     const configPath = resolveConfigPathSafe();
@@ -343,6 +224,14 @@ export function isFullyInitialized(): boolean {
       }
       return false;
     }
+    const initialized = isGatewayRuntimeFullyInitialized({
+      configPath,
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: resolveElectronIsolatedStateDir(),
+        OPENCLAW_CONFIG_PATH: resolveElectronIsolatedConfigPath(),
+      },
+    });
     const raw = readFileSync(configPath, "utf-8");
     const config = JSON.parse(raw) as {
       auth?: { profiles?: Record<string, unknown> };
@@ -353,7 +242,6 @@ export function isFullyInitialized(): boolean {
     const model = config.agents?.defaults?.model;
     const primary = typeof model === "string" ? model : model?.primary;
     const hasPrimaryModel = typeof primary === "string" && primary.trim().length > 0;
-    const initialized = hasProfiles && hasPrimaryModel;
     const signature = [
       configPath,
       initialized ? "ready" : "not-ready",
@@ -374,7 +262,14 @@ export function isFullyInitialized(): boolean {
 
 export function getConfigPath(): string | null {
   try {
-    return resolveConfigPathSafe();
+    return getGatewayRuntimeConfigPath({
+      configPath: resolveConfigPathSafe(),
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: resolveElectronIsolatedStateDir(),
+        OPENCLAW_CONFIG_PATH: resolveElectronIsolatedConfigPath(),
+      },
+    });
   } catch {
     return null;
   }

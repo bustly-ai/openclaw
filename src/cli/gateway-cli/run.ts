@@ -142,12 +142,40 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   if (rawStreamPath) {
     process.env.OPENCLAW_RAW_STREAM_PATH = rawStreamPath;
   }
+  const portOverride = parsePort(opts.port);
+  if (opts.port !== undefined && portOverride === null) {
+    defaultRuntime.error("Invalid port");
+    defaultRuntime.exit(1);
+    return;
+  }
+  const bindOverrideRaw = toOptionString(opts.bind);
+  const bindOverride =
+    bindOverrideRaw === undefined ||
+    bindOverrideRaw === "loopback" ||
+    bindOverrideRaw === "lan" ||
+    bindOverrideRaw === "auto" ||
+    bindOverrideRaw === "custom" ||
+    bindOverrideRaw === "tailnet"
+      ? bindOverrideRaw
+      : null;
+  if (opts.bind !== undefined && !bindOverride) {
+    defaultRuntime.error('Invalid --bind (use "loopback", "lan", "tailnet", "auto", or "custom")');
+    defaultRuntime.exit(1);
+    return;
+  }
+  const tokenOverride = toOptionString(opts.token);
 
   if (devMode) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
   }
   if (opts.cloud) {
     const cloudBinding = await ensureBustlyCloudReady({
+      gatewayPort: portOverride ?? undefined,
+      gatewayBind:
+        bindOverride === "loopback" || bindOverride === "lan" || bindOverride === "auto"
+          ? bindOverride
+          : undefined,
+      gatewayToken: tokenOverride ?? undefined,
       userAgent: "openclaw-cloud",
     });
     gatewayLog.info(
@@ -156,11 +184,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
 
   const cfg = loadConfig();
-  const portOverride = parsePort(opts.port);
-  if (opts.port !== undefined && portOverride === null) {
-    defaultRuntime.error("Invalid port");
-    defaultRuntime.exit(1);
-  }
   const port = portOverride ?? resolveGatewayPort(cfg);
   if (!Number.isFinite(port) || port <= 0) {
     defaultRuntime.error("Invalid port");
@@ -194,11 +217,8 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       return;
     }
   }
-  if (opts.token) {
-    const token = toOptionString(opts.token);
-    if (token) {
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
-    }
+  if (tokenOverride) {
+    process.env.OPENCLAW_GATEWAY_TOKEN = tokenOverride;
   }
   const authModeRaw = toOptionString(opts.auth);
   const authMode: GatewayAuthMode | null =
@@ -219,7 +239,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     return;
   }
   const passwordRaw = toOptionString(opts.password);
-  const tokenRaw = toOptionString(opts.token);
+  const tokenRaw = tokenOverride;
 
   const snapshot = await readConfigFileSnapshot().catch(() => null);
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
@@ -239,7 +259,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  const bindRaw = toOptionString(opts.bind) ?? cfg.gateway?.bind ?? "loopback";
+  const bindRaw = bindOverride ?? cfg.gateway?.bind ?? "loopback";
   const bind =
     bindRaw === "loopback" ||
     bindRaw === "lan" ||
