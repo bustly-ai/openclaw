@@ -1,5 +1,17 @@
 import { readBustlyOAuthState } from "../bustly-oauth.js";
 
+export type BustlyAccessibleWorkspace = {
+  id: string;
+  name: string;
+  status: string;
+};
+
+type BustlyAccessibleWorkspaceRow = {
+  id?: unknown;
+  name?: unknown;
+  status?: unknown;
+};
+
 export type BustlySupabaseAuthConfig = {
   url: string;
   anonKey: string;
@@ -76,4 +88,37 @@ export async function bustlySupabaseFetch(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function listAccessibleBustlyWorkspaces(limit = 20): Promise<BustlyAccessibleWorkspace[]> {
+  const normalizedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 20;
+  const query = new URLSearchParams({
+    select: "id,name,status",
+    status: "eq.ACTIVE",
+    order: "created_at.desc",
+    limit: String(normalizedLimit),
+  });
+  const response = await bustlySupabaseFetch({
+    path: `rest/v1/workspaces?${query.toString()}`,
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to list accessible Bustly workspaces (${response.status})`);
+  }
+  const payload = (await response.json()) as unknown;
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+  return payload
+    .filter((entry): entry is BustlyAccessibleWorkspaceRow => typeof entry === "object" && entry !== null)
+    .map((entry) => ({
+      id: typeof entry.id === "string" ? entry.id.trim() : "",
+      name: typeof entry.name === "string" ? entry.name.trim() : "",
+      status: typeof entry.status === "string" ? entry.status.trim() : "",
+    }))
+    .filter((entry) => Boolean(entry.id && entry.name));
+}
+
+export async function resolveFirstAccessibleBustlyWorkspace(): Promise<BustlyAccessibleWorkspace | null> {
+  const workspaces = await listAccessibleBustlyWorkspaces(1);
+  return workspaces[0] ?? null;
 }

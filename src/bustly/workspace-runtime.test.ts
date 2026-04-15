@@ -9,11 +9,12 @@ import {
   synchronizeBustlyWorkspaceContext,
 } from "./workspace-runtime.js";
 
-const { oauthStateRef, setActiveWorkspaceIdMock, bootstrapMock } = vi.hoisted(() => {
+const { oauthStateRef, setActiveWorkspaceIdMock, bootstrapMock, resolveFirstAccessibleWorkspaceMock } = vi.hoisted(() => {
   return {
     oauthStateRef: { current: null as BustlyOAuthState | null },
     setActiveWorkspaceIdMock: vi.fn<(workspaceId: string) => void>(),
     bootstrapMock: vi.fn(async () => {}),
+    resolveFirstAccessibleWorkspaceMock: vi.fn(async () => null),
   };
 });
 
@@ -24,6 +25,10 @@ vi.mock("../bustly-oauth.js", () => ({
 
 vi.mock("./workspace-bootstrap.js", () => ({
   initializeBustlyWorkspaceBootstrap: (params: unknown) => bootstrapMock(params),
+}));
+
+vi.mock("./supabase.js", () => ({
+  resolveFirstAccessibleBustlyWorkspace: () => resolveFirstAccessibleWorkspaceMock(),
 }));
 
 describe("workspace-runtime", () => {
@@ -41,6 +46,8 @@ describe("workspace-runtime", () => {
     setActiveWorkspaceIdMock.mockReset();
     bootstrapMock.mockReset();
     bootstrapMock.mockResolvedValue(undefined);
+    resolveFirstAccessibleWorkspaceMock.mockReset();
+    resolveFirstAccessibleWorkspaceMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -134,6 +141,100 @@ describe("workspace-runtime", () => {
     });
     expect(switched?.workspaceId).toBe("workspace-1");
     expect(setActiveWorkspaceIdMock).not.toHaveBeenCalled();
+  });
+
+  it("does not persist a workspace switch when bootstrap fails", async () => {
+    oauthStateRef.current = {
+      deviceId: "device-1",
+      callbackPort: 17900,
+      user: {
+        userId: "u-1",
+        userName: "Tester",
+        userEmail: "tester@example.com",
+        userAccessToken: "token-1",
+        workspaceId: "workspace-1",
+        skills: [],
+      },
+      supabase: {
+        url: "https://example.supabase.co",
+        anonKey: "anon-key",
+      },
+    };
+    await synchronizeBustlyWorkspaceContext({
+      workspaceId: "workspace-1",
+      allowCreateConfig: true,
+    });
+
+    bootstrapMock.mockRejectedValueOnce(new Error("Workspace workspace-2 not found for bootstrap."));
+    await expect(
+      setActiveBustlyWorkspace({
+        workspaceId: "workspace-2",
+        allowCreateConfig: true,
+      }),
+    ).rejects.toThrow("Workspace workspace-2 not found for bootstrap.");
+
+    expect(setActiveWorkspaceIdMock).not.toHaveBeenCalled();
+
+    const config = JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH!, "utf-8")) as {
+      models?: {
+        providers?: {
+          bustly?: {
+            headers?: Record<string, string>;
+          };
+        };
+      };
+    };
+    expect(config.models?.providers?.bustly?.headers?.["X-Workspace-Id"]).toBe("workspace-1");
+  });
+
+  it("falls back to the first accessible workspace when target workspace is missing", async () => {
+    oauthStateRef.current = {
+      deviceId: "device-1",
+      callbackPort: 17900,
+      user: {
+        userId: "u-1",
+        userName: "Tester",
+        userEmail: "tester@example.com",
+        userAccessToken: "token-1",
+        workspaceId: "workspace-1",
+        skills: [],
+      },
+      supabase: {
+        url: "https://example.supabase.co",
+        anonKey: "anon-key",
+      },
+    };
+    await synchronizeBustlyWorkspaceContext({
+      workspaceId: "workspace-1",
+      allowCreateConfig: true,
+    });
+
+    bootstrapMock.mockRejectedValueOnce(new Error("Workspace workspace-2 not found for bootstrap."));
+    resolveFirstAccessibleWorkspaceMock.mockResolvedValueOnce({
+      id: "workspace-3",
+      name: "Fallback Workspace",
+      status: "ACTIVE",
+    });
+
+    const switched = await setActiveBustlyWorkspace({
+      workspaceId: "workspace-2",
+      allowCreateConfig: true,
+    });
+
+    expect(switched?.workspaceId).toBe("workspace-3");
+    expect(resolveFirstAccessibleWorkspaceMock).toHaveBeenCalledTimes(1);
+    expect(setActiveWorkspaceIdMock).toHaveBeenCalledWith("workspace-3");
+
+    const config = JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH!, "utf-8")) as {
+      models?: {
+        providers?: {
+          bustly?: {
+            headers?: Record<string, string>;
+          };
+        };
+      };
+    };
+    expect(config.models?.providers?.bustly?.headers?.["X-Workspace-Id"]).toBe("workspace-3");
   });
 
   it("preserves openclaw-lark plugin settings during cloud preflight", async () => {

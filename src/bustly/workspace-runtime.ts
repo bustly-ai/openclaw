@@ -9,6 +9,7 @@ import {
   syncBustlyConfigFile,
 } from "./runtime-config.js";
 import { readBustlyOAuthState, setActiveWorkspaceId } from "../bustly-oauth.js";
+import { resolveFirstAccessibleBustlyWorkspace } from "./supabase.js";
 import { initializeBustlyWorkspaceBootstrap } from "./workspace-bootstrap.js";
 import {
   buildBustlyWorkspaceAgentId,
@@ -182,6 +183,13 @@ export async function ensureBustlyWorkspaceAgentConfig(params: {
       env,
     },
   );
+  await initializeBustlyWorkspaceBootstrap({
+    workspaceDir,
+    workspaceId,
+    workspaceName: params.workspaceName,
+    agentName,
+  });
+
   if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
     writeConfigToPath(configPath, nextConfig);
   } else {
@@ -193,13 +201,6 @@ export async function ensureBustlyWorkspaceAgentConfig(params: {
       env,
     });
   }
-
-  await initializeBustlyWorkspaceBootstrap({
-    workspaceDir,
-    workspaceId,
-    workspaceName: params.workspaceName,
-    agentName,
-  });
 
   return { agentId, workspaceDir };
 }
@@ -252,20 +253,45 @@ export async function setActiveBustlyWorkspace(params: {
     throw new Error("Missing workspaceId");
   }
   const currentWorkspaceId = resolveBustlyWorkspaceIdFromOAuthState();
-  if (currentWorkspaceId !== nextWorkspaceId) {
-    setActiveWorkspaceId(nextWorkspaceId);
+  let binding: (BustlyWorkspaceBinding & { workspaceId: string }) | null;
+  try {
+    binding = await synchronizeBustlyWorkspaceContext({
+      workspaceId: nextWorkspaceId,
+      workspaceName: params.workspaceName,
+      agentName: params.agentName,
+      selectedModelInput: params.selectedModelInput,
+      configPath: params.configPath,
+      allowCreateConfig: params.allowCreateConfig,
+      userAgent: params.userAgent,
+      baseUrl: params.baseUrl,
+      env: params.env,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/not found for bootstrap/i.test(message)) {
+      throw error;
+    }
+    const fallbackWorkspace = await resolveFirstAccessibleBustlyWorkspace();
+    if (!fallbackWorkspace || fallbackWorkspace.id === nextWorkspaceId) {
+      throw error;
+    }
+    binding = await synchronizeBustlyWorkspaceContext({
+      workspaceId: fallbackWorkspace.id,
+      workspaceName: fallbackWorkspace.name,
+      agentName: params.agentName,
+      selectedModelInput: params.selectedModelInput,
+      configPath: params.configPath,
+      allowCreateConfig: params.allowCreateConfig,
+      userAgent: params.userAgent,
+      baseUrl: params.baseUrl,
+      env: params.env,
+    });
   }
-  return await synchronizeBustlyWorkspaceContext({
-    workspaceId: nextWorkspaceId,
-    workspaceName: params.workspaceName,
-    agentName: params.agentName,
-    selectedModelInput: params.selectedModelInput,
-    configPath: params.configPath,
-    allowCreateConfig: params.allowCreateConfig,
-    userAgent: params.userAgent,
-    baseUrl: params.baseUrl,
-    env: params.env,
-  });
+  const resolvedWorkspaceId = binding?.workspaceId?.trim() ?? "";
+  if (binding && resolvedWorkspaceId && currentWorkspaceId !== resolvedWorkspaceId) {
+    setActiveWorkspaceId(resolvedWorkspaceId);
+  }
+  return binding;
 }
 
 export async function ensureBustlyCloudReady(params?: {
