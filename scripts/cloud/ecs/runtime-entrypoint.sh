@@ -17,6 +17,8 @@ USER_NAME="${BUSTLY_USER_NAME:-}"
 USER_EMAIL="${BUSTLY_USER_EMAIL:-}"
 SUPABASE_URL="${BUSTLY_SUPABASE_URL:-}"
 SUPABASE_ANON_KEY="${BUSTLY_SUPABASE_ANON_KEY:-}"
+CONTROL_UI_ALLOWED_ORIGINS="${BUSTLY_CONTROL_UI_ALLOWED_ORIGINS:-}"
+CONTROL_UI_DISABLE_DEVICE_AUTH="${BUSTLY_CONTROL_UI_DISABLE_DEVICE_AUTH:-0}"
 
 if [[ -n "$OAUTH_STATE_B64" ]]; then
   mkdir -p "$(dirname "$OAUTH_PATH")"
@@ -120,12 +122,22 @@ fi
 
 if [[ "${OPENCLAW_CLOUD_CONTROL_UI_HOST_FALLBACK:-1}" == "1" ]]; then
   mkdir -p "$(dirname "$CONFIG_PATH")"
-  OPENCLAW_CONFIG_PATH="$CONFIG_PATH" BUSTLY_ACCOUNT_WEB_BASE_URL="${BUSTLY_ACCOUNT_WEB_BASE_URL:-}" BUSTLY_WEB_BASE_URL="${BUSTLY_WEB_BASE_URL:-}" node <<'NODE'
+  OPENCLAW_CONFIG_PATH="$CONFIG_PATH" \
+  BUSTLY_ACCOUNT_WEB_BASE_URL="${BUSTLY_ACCOUNT_WEB_BASE_URL:-}" \
+  BUSTLY_WEB_BASE_URL="${BUSTLY_WEB_BASE_URL:-}" \
+  BUSTLY_CONTROL_UI_ALLOWED_ORIGINS="${CONTROL_UI_ALLOWED_ORIGINS:-}" \
+  BUSTLY_CONTROL_UI_DISABLE_DEVICE_AUTH="${CONTROL_UI_DISABLE_DEVICE_AUTH:-0}" \
+  node <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 
 const configPath = process.env.OPENCLAW_CONFIG_PATH;
-const webBaseUrl = (process.env.BUSTLY_ACCOUNT_WEB_BASE_URL || process.env.BUSTLY_WEB_BASE_URL || "").trim();
+const explicitAllowedOrigins = (process.env.BUSTLY_CONTROL_UI_ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+const disableDeviceAuth = process.env.BUSTLY_CONTROL_UI_DISABLE_DEVICE_AUTH === "1";
+const webBaseUrl = (process.env.BUSTLY_WEB_BASE_URL || process.env.BUSTLY_ACCOUNT_WEB_BASE_URL || "").trim();
 
 let config = {};
 try {
@@ -150,19 +162,33 @@ if (
 }
 
 config.gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
+if (disableDeviceAuth) {
+  config.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
+}
+
+const allowedOrigins = [];
+
+for (const origin of explicitAllowedOrigins) {
+  try {
+    allowedOrigins.push(new URL(origin).origin);
+  } catch {
+    // Ignore invalid explicit origin.
+  }
+}
 
 if (webBaseUrl) {
   try {
-    const origin = new URL(webBaseUrl).origin;
-    if (
-      !Array.isArray(config.gateway.controlUi.allowedOrigins) ||
-      config.gateway.controlUi.allowedOrigins.length === 0
-    ) {
-      config.gateway.controlUi.allowedOrigins = [origin];
-    }
+    allowedOrigins.push(new URL(webBaseUrl).origin);
   } catch {
     // Ignore invalid web url and keep fallback mode enabled.
   }
+}
+
+if (allowedOrigins.length > 0) {
+  const existing = Array.isArray(config.gateway.controlUi.allowedOrigins)
+    ? config.gateway.controlUi.allowedOrigins.filter((value) => typeof value === "string")
+    : [];
+  config.gateway.controlUi.allowedOrigins = Array.from(new Set([...existing, ...allowedOrigins]));
 }
 
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
