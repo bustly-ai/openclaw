@@ -4,7 +4,7 @@ set -euo pipefail
 STATE_DIR="${OPENCLAW_STATE_DIR:-/home/node/.bustly}"
 OAUTH_PATH="${BUSTLY_OAUTH_PATH:-${STATE_DIR}/bustlyOauth.json}"
 CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-${STATE_DIR}/openclaw.json}"
-WORKSPACE_ID="${BUSTLY_WORKSPACE_ID:-}"
+WORKSPACE_ID="${BUSTLY_RUNTIME_ACTIVE_WORKSPACE_ID:-${BUSTLY_WORKSPACE_ID:-}}"
 OAUTH_STATE_B64="${BUSTLY_OAUTH_STATE_B64:-}"
 USER_ACCESS_TOKEN="${BUSTLY_USER_ACCESS_TOKEN:-}"
 REFRESH_TOKEN="${BUSTLY_REFRESH_TOKEN:-}"
@@ -12,6 +12,11 @@ LEGACY_SUPABASE_REFRESH_TOKEN="${BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN:-}"
 SUPABASE_ACCESS_TOKEN_EXPIRES_AT="${BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT:-}"
 SESSION_ID="${BUSTLY_SESSION_ID:-}"
 LOGIN_TRACE_ID="${BUSTLY_LOGIN_TRACE_ID:-}"
+USER_ID="${BUSTLY_RUNTIME_USER_ID:-${BUSTLY_USER_ID:-}}"
+USER_NAME="${BUSTLY_USER_NAME:-}"
+USER_EMAIL="${BUSTLY_USER_EMAIL:-}"
+SUPABASE_URL="${BUSTLY_SUPABASE_URL:-}"
+SUPABASE_ANON_KEY="${BUSTLY_SUPABASE_ANON_KEY:-}"
 
 if [[ -n "$OAUTH_STATE_B64" ]]; then
   mkdir -p "$(dirname "$OAUTH_PATH")"
@@ -49,6 +54,11 @@ elif [[ -n "$USER_ACCESS_TOKEN" && -n "$WORKSPACE_ID" ]]; then
   BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN="$LEGACY_SUPABASE_REFRESH_TOKEN" \
   BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT="$SUPABASE_ACCESS_TOKEN_EXPIRES_AT" \
   BUSTLY_SESSION_ID="$SESSION_ID" \
+  BUSTLY_USER_ID="$USER_ID" \
+  BUSTLY_USER_NAME="$USER_NAME" \
+  BUSTLY_USER_EMAIL="$USER_EMAIL" \
+  BUSTLY_SUPABASE_URL="$SUPABASE_URL" \
+  BUSTLY_SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
   node <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
@@ -62,6 +72,11 @@ const legacySupabaseRefreshToken = (
   process.env.BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN || ""
 ).trim();
 const sessionId = (process.env.BUSTLY_SESSION_ID || "").trim();
+const userId = (process.env.BUSTLY_USER_ID || "").trim();
+const userName = (process.env.BUSTLY_USER_NAME || "").trim();
+const userEmail = (process.env.BUSTLY_USER_EMAIL || "").trim();
+const supabaseUrl = (process.env.BUSTLY_SUPABASE_URL || "").trim();
+const supabaseAnonKey = (process.env.BUSTLY_SUPABASE_ANON_KEY || "").trim();
 const expiresAtRaw = (process.env.BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT || "").trim();
 
 let expiresAt;
@@ -74,7 +89,18 @@ if (expiresAtRaw) {
 
 const state = {
   loginTraceId,
+  ...(supabaseUrl || supabaseAnonKey
+    ? {
+        supabase: {
+          ...(supabaseUrl ? { url: supabaseUrl } : {}),
+          ...(supabaseAnonKey ? { anonKey: supabaseAnonKey } : {}),
+        },
+      }
+    : {}),
   user: {
+    ...(userId ? { userId } : {}),
+    ...(userName ? { userName } : {}),
+    ...(userEmail ? { userEmail } : {}),
     userAccessToken: accessToken,
     supabaseAccessToken: accessToken,
     workspaceId,

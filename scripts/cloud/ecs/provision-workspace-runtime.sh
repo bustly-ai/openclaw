@@ -577,6 +577,47 @@ TASK_DEF_FILE="$(mktemp)"
 SERVICE_FILE="$(mktemp)"
 trap 'rm -f "$TASK_DEF_FILE" "$SERVICE_FILE"' EXIT
 
+ENVIRONMENT_JSON="$(
+  python3 - <<'PY'
+import json
+import os
+
+env = [
+    {"name": "OPENCLAW_GATEWAY_TOKEN", "value": os.environ.get("GATEWAY_TOKEN", "")},
+    {"name": "OPENCLAW_SKIP_CHANNELS", "value": os.environ.get("SKIP_CHANNELS", "")},
+    {"name": "OPENCLAW_SKIP_CRON", "value": os.environ.get("SKIP_CRON", "")},
+    {"name": "OPENCLAW_STATE_DIR", "value": "/home/node/.bustly"},
+    {"name": "OPENCLAW_CONFIG_PATH", "value": "/home/node/.bustly/openclaw.json"},
+    {"name": "BUSTLY_WORKSPACE_ID", "value": os.environ.get("WORKSPACE_ID", "")},
+    {"name": "BUSTLY_OAUTH_STATE_B64", "value": os.environ.get("BUSTLY_OAUTH_STATE_B64", "")},
+    {"name": "BUSTLY_USER_ACCESS_TOKEN", "value": os.environ.get("BUSTLY_USER_ACCESS_TOKEN", "")},
+    {"name": "BUSTLY_REFRESH_TOKEN", "value": os.environ.get("BUSTLY_REFRESH_TOKEN", "")},
+    {
+        "name": "BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN",
+        "value": os.environ.get("BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN", ""),
+    },
+    {
+        "name": "BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT",
+        "value": os.environ.get("BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT", ""),
+    },
+    {"name": "BUSTLY_SESSION_ID", "value": os.environ.get("BUSTLY_SESSION_ID", "")},
+    {"name": "BUSTLY_USER_ID", "value": os.environ.get("BUSTLY_USER_ID", "")},
+    {"name": "BUSTLY_USER_NAME", "value": os.environ.get("BUSTLY_USER_NAME", "")},
+    {"name": "BUSTLY_USER_EMAIL", "value": os.environ.get("BUSTLY_USER_EMAIL", "")},
+    {"name": "BUSTLY_SUPABASE_URL", "value": os.environ.get("BUSTLY_SUPABASE_URL", "")},
+    {"name": "BUSTLY_SUPABASE_ANON_KEY", "value": os.environ.get("BUSTLY_SUPABASE_ANON_KEY", "")},
+    {"name": "BUSTLY_LOGIN_TRACE_ID", "value": os.environ.get("BUSTLY_LOGIN_TRACE_ID", "")},
+    {"name": "BUSTLY_ACCOUNT_API_BASE_URL", "value": os.environ.get("BUSTLY_ACCOUNT_API_BASE_URL", "")},
+    {"name": "BUSTLY_ACCOUNT_WEB_BASE_URL", "value": os.environ.get("BUSTLY_ACCOUNT_WEB_BASE_URL", "")},
+    {"name": "BUSTLY_API_BASE_URL", "value": os.environ.get("BUSTLY_API_BASE_URL", "")},
+    {"name": "BUSTLY_WEB_BASE_URL", "value": os.environ.get("BUSTLY_WEB_BASE_URL", "")},
+    {"name": "BUSTLY_CLIENT_ID", "value": os.environ.get("BUSTLY_CLIENT_ID", "")},
+]
+
+print(json.dumps(env))
+PY
+)"
+
 cat >"$TASK_DEF_FILE" <<JSON
 {
   "family": "${FAMILY_NAME}",
@@ -599,26 +640,7 @@ cat >"$TASK_DEF_FILE" <<JSON
           "protocol": "tcp"
         }
       ],
-      "environment": [
-        {"name": "OPENCLAW_GATEWAY_TOKEN", "value": "${GATEWAY_TOKEN}"},
-        {"name": "OPENCLAW_SKIP_CHANNELS", "value": "${SKIP_CHANNELS}"},
-        {"name": "OPENCLAW_SKIP_CRON", "value": "${SKIP_CRON}"},
-        {"name": "OPENCLAW_STATE_DIR", "value": "/home/node/.bustly"},
-        {"name": "OPENCLAW_CONFIG_PATH", "value": "/home/node/.bustly/openclaw.json"},
-        {"name": "BUSTLY_WORKSPACE_ID", "value": "${WORKSPACE_ID}"},
-        {"name": "BUSTLY_OAUTH_STATE_B64", "value": "${BUSTLY_OAUTH_STATE_B64}"},
-        {"name": "BUSTLY_USER_ACCESS_TOKEN", "value": "${BUSTLY_USER_ACCESS_TOKEN}"},
-        {"name": "BUSTLY_REFRESH_TOKEN", "value": "${BUSTLY_REFRESH_TOKEN}"},
-        {"name": "BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN", "value": "${BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN}"},
-        {"name": "BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT", "value": "${BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT}"},
-        {"name": "BUSTLY_SESSION_ID", "value": "${BUSTLY_SESSION_ID}"},
-        {"name": "BUSTLY_LOGIN_TRACE_ID", "value": "${BUSTLY_LOGIN_TRACE_ID}"},
-        {"name": "BUSTLY_ACCOUNT_API_BASE_URL", "value": "${BUSTLY_ACCOUNT_API_BASE_URL}"},
-        {"name": "BUSTLY_ACCOUNT_WEB_BASE_URL", "value": "${BUSTLY_ACCOUNT_WEB_BASE_URL}"},
-        {"name": "BUSTLY_API_BASE_URL", "value": "${BUSTLY_API_BASE_URL}"},
-        {"name": "BUSTLY_WEB_BASE_URL", "value": "${BUSTLY_WEB_BASE_URL}"},
-        {"name": "BUSTLY_CLIENT_ID", "value": "${BUSTLY_CLIENT_ID}"}
-      ],
+      "environment": ${ENVIRONMENT_JSON},
       "mountPoints": ${MOUNT_POINTS_JSON},
       "logConfiguration": {
         "logDriver": "awslogs",
