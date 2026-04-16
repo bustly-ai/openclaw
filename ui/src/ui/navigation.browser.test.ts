@@ -146,6 +146,68 @@ describe("control UI routing", () => {
     expect(container.scrollTop).toBe(maxScroll);
   });
 
+  it("scrolls to bottom after switching chat sessions", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    app.connected = true;
+    app.sessionsResult = {
+      sessions: [
+        { key: "main", label: "Main", updatedAt: Date.now() },
+        { key: "agent:main:subagent:quit-before-client", label: "退出客户端前", updatedAt: Date.now() },
+      ],
+    };
+    app.chatMessages = Array.from({ length: 60 }, (_, index) => ({
+      role: "assistant",
+      content: `Old ${index} - ${"x".repeat(200)}`,
+      timestamp: Date.now() + index,
+    }));
+    app.client = {
+      request: async (method: string) => {
+        if (method === "chat.history") {
+          return {
+            messages: Array.from({ length: 80 }, (_, index) => ({
+              role: "assistant",
+              content: `New ${index} - ${"y".repeat(200)}`,
+              timestamp: Date.now() + index,
+            })),
+            thinkingLevel: null,
+          };
+        }
+        return {};
+      },
+    } as never;
+
+    await app.updateComplete;
+
+    const container = app.querySelector<HTMLElement>(".chat-thread");
+    expect(container).not.toBeNull();
+    if (!container) {
+      return;
+    }
+    container.style.maxHeight = "180px";
+    container.style.overflow = "auto";
+    container.scrollTop = 0;
+
+    const select = app.querySelector<HTMLSelectElement>(".chat-controls__session select");
+    expect(select).not.toBeNull();
+    if (!select) {
+      return;
+    }
+    select.value = "agent:main:subagent:quit-before-client";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await app.updateComplete;
+    for (let i = 0; i < 12; i++) {
+      await nextFrame();
+    }
+
+    const maxScroll = container.scrollHeight - container.clientHeight;
+    expect(maxScroll).toBeGreaterThan(0);
+    expect(app.sessionKey).toBe("agent:main:subagent:quit-before-client");
+    expect(container.scrollTop).toBe(maxScroll);
+  });
+
   it("hydrates token from URL params and strips it", async () => {
     const app = mountApp("/ui/overview?token=abc123");
     await app.updateComplete;

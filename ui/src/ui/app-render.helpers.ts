@@ -143,7 +143,9 @@ export function renderChatControls(state: AppViewState) {
               next,
               true,
             );
-            void loadChatHistory(state as unknown as ChatState);
+            void loadChatHistory(state as unknown as ChatState).then(() => {
+              (state as unknown as OpenClawApp).scrollToBottom({ smooth: true });
+            });
           }}
         >
           ${repeat(

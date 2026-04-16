@@ -1071,6 +1071,7 @@ export function renderApp(state: AppViewState) {
             ? renderChat({
                 sessionKey: state.sessionKey,
                 onSessionKeyChange: (next) => {
+                  const app = state as unknown as OpenClawApp;
                   state.sessionKey = next;
                   state.chatMessage = "";
                   state.chatAttachments = [];
@@ -1092,7 +1093,9 @@ export function renderApp(state: AppViewState) {
                     lastActiveSessionKey: next,
                   });
                   void state.loadAssistantIdentity();
-                  void refreshChat(state, { scheduleScroll: true });
+                  void refreshChat(state, { scheduleScroll: false }).then(() => {
+                    app.scrollToBottom({ smooth: true });
+                  });
                 },
                 thinkingLevel: state.chatThinkingLevel,
                 showThinking,
