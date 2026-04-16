@@ -1733,7 +1733,7 @@ async function startGateway(): Promise<boolean> {
   gatewayShutdownExpected = false;
   gatewayStartupInFlight = true;
   gatewayLastWorkerFailure = null;
-  emitGatewayLifecycle("starting", "Starting bustly...");
+  emitGatewayLifecycle("starting", "Opening Bustly...");
 
   const cliPath = resolveOpenClawCliPath({
     info: (message) => writeMainInfo(message),
@@ -2018,7 +2018,7 @@ function stopGateway(): Promise<boolean> {
     clearGatewayAutoRestartTimer();
     gatewayShutdownExpected = true;
     writeMainInfo("Stopping gateway");
-    emitGatewayLifecycle("stopping", "Restarting gateway...");
+    emitGatewayLifecycle("stopping", "Restarting Bustly...");
 
     gatewayProcess.kill("SIGTERM");
 
@@ -2938,7 +2938,7 @@ function setupIpcHandlers(): void {
       restoreGatewayLastGoodConfigSnapshot();
       gatewayLastWorkerFailure = null;
       gatewayAutoRestartAttempt = 0;
-      emitGatewayLifecycle("starting", "Restoring last working gateway config...");
+      emitGatewayLifecycle("starting", "Restoring your last working settings...");
       await startGateway();
       return { success: true };
     } catch (error) {
