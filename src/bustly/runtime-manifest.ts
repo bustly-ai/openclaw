@@ -1,4 +1,8 @@
-import { getBustlyAccessToken, readBustlyOAuthState } from "../bustly-oauth.js";
+import {
+  getBustlyAccessToken,
+  readBustlyOAuthState,
+  readBustlyOAuthStateEnsuringFreshToken,
+} from "../bustly-oauth.js";
 import { loadEnabledBustlyRemoteAgentPresets } from "./agent-presets.js";
 import { ensureBustlyWorkspacePresetAgents } from "./workspace-agents.js";
 import type { BustlyWorkspaceBinding } from "./workspace-runtime.js";
@@ -34,8 +38,12 @@ export type BustlyRuntimeManifestApplyResult = BustlyWorkspaceBinding & {
 
 export type BustlyRuntimeBootstrapParams = BustlyRuntimeManifestApplyParams;
 
-function resolveWorkspaceId(params?: { workspaceId?: string }): string {
-  return params?.workspaceId?.trim() || readBustlyOAuthState()?.user?.workspaceId?.trim() || "";
+async function resolveWorkspaceId(params?: { workspaceId?: string }): Promise<string> {
+  const explicitWorkspaceId = params?.workspaceId?.trim();
+  if (explicitWorkspaceId) {
+    return explicitWorkspaceId;
+  }
+  return (await readBustlyOAuthStateEnsuringFreshToken())?.user?.workspaceId?.trim() || "";
 }
 
 export function getBustlyRuntimeHealthSnapshot(): {
@@ -59,10 +67,31 @@ export function getBustlyRuntimeHealthSnapshot(): {
   };
 }
 
+export async function getBustlyRuntimeHealthSnapshotEnsuringFreshToken(): Promise<{
+  loggedIn: boolean;
+  workspaceId: string;
+  userId: string;
+  userEmail: string;
+  hasSupabaseConfig: boolean;
+  activeBinding: (BustlyWorkspaceBinding & { workspaceId: string }) | null;
+}> {
+  const state = await readBustlyOAuthStateEnsuringFreshToken();
+  const workspaceId = state?.user?.workspaceId?.trim() ?? "";
+  const accessToken = getBustlyAccessToken(state).trim();
+  return {
+    loggedIn: Boolean(accessToken),
+    workspaceId,
+    userId: state?.user?.userId?.trim() ?? "",
+    userEmail: state?.user?.userEmail?.trim() ?? "",
+    hasSupabaseConfig: Boolean(state?.supabase?.url?.trim() && state?.supabase?.anonKey?.trim()),
+    activeBinding: resolveActiveBustlyWorkspaceBinding(),
+  };
+}
+
 export async function applyBustlyRuntimeManifest(
   params: BustlyRuntimeManifestApplyParams,
 ): Promise<BustlyRuntimeManifestApplyResult> {
-  const workspaceId = resolveWorkspaceId({
+  const workspaceId = await resolveWorkspaceId({
     workspaceId: params.workspaceId,
   });
   if (!workspaceId) {

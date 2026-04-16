@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import {
   getBustlyAccessToken,
   readBustlyOAuthState,
+  readBustlyOAuthStateEnsuringFreshToken,
   setActiveWorkspaceId,
 } from "../bustly-oauth.js";
 import { applyAgentConfig, listAgentEntries } from "../commands/agents.config.js";
@@ -308,7 +309,7 @@ export async function ensureBustlyCloudReady(params?: {
   nodeManager?: "npm" | "pnpm" | "bun";
 }): Promise<BustlyWorkspaceBinding & { workspaceId: string }> {
   const env = params?.env ?? process.env;
-  const state = readBustlyOAuthState();
+  const state = await readBustlyOAuthStateEnsuringFreshToken();
   const userAccessToken = getBustlyAccessToken(state).trim();
   const workspaceId = state?.user?.workspaceId?.trim() ?? "";
   if (!userAccessToken) {

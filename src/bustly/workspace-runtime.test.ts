@@ -11,13 +11,18 @@ import {
 
 const {
   oauthStateRef,
+  oauthFreshStateRef,
   setActiveWorkspaceIdMock,
+  readBustlyOAuthStateEnsuringFreshTokenMock,
   bootstrapMock,
   resolveFirstAccessibleWorkspaceMock,
 } = vi.hoisted(() => {
   return {
     oauthStateRef: { current: null as BustlyOAuthState | null },
+    oauthFreshStateRef: { current: null as BustlyOAuthState | null },
     setActiveWorkspaceIdMock: vi.fn<(workspaceId: string) => void>(),
+    readBustlyOAuthStateEnsuringFreshTokenMock:
+      vi.fn<(options?: { forceRefresh?: boolean }) => Promise<BustlyOAuthState | null>>(),
     bootstrapMock: vi.fn(async () => {}),
     resolveFirstAccessibleWorkspaceMock: vi.fn(async () => null),
   };
@@ -31,6 +36,8 @@ const { ensureModelsJsonMock, ensurePiAuthJsonMock } = vi.hoisted(() => {
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => oauthStateRef.current),
+  readBustlyOAuthStateEnsuringFreshToken: (options?: { forceRefresh?: boolean }) =>
+    readBustlyOAuthStateEnsuringFreshTokenMock(options),
   getBustlyAccessToken: (
     state: { user?: { supabaseAccessToken?: string; userAccessToken?: string } } | null | undefined,
   ) => state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "",
@@ -42,7 +49,8 @@ vi.mock("./workspace-bootstrap.js", () => ({
 }));
 
 vi.mock("../agents/models-config.js", () => ({
-  ensureOpenClawModelsJson: (config: unknown, agentDir: string) => ensureModelsJsonMock(config, agentDir),
+  ensureOpenClawModelsJson: (config: unknown, agentDir: string) =>
+    ensureModelsJsonMock(config, agentDir),
 }));
 
 vi.mock("../agents/pi-auth-json.js", () => ({
@@ -65,7 +73,12 @@ describe("workspace-runtime", () => {
     process.env.OPENCLAW_STATE_DIR = path.join(tempDir, "state");
     process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, "state", "openclaw.json");
     oauthStateRef.current = null;
+    oauthFreshStateRef.current = null;
     setActiveWorkspaceIdMock.mockReset();
+    readBustlyOAuthStateEnsuringFreshTokenMock.mockReset();
+    readBustlyOAuthStateEnsuringFreshTokenMock.mockImplementation(async () => {
+      return oauthFreshStateRef.current ?? oauthStateRef.current;
+    });
     bootstrapMock.mockReset();
     bootstrapMock.mockResolvedValue(undefined);
     resolveFirstAccessibleWorkspaceMock.mockReset();
@@ -130,6 +143,40 @@ describe("workspace-runtime", () => {
       userAgent: "cloud-test-agent",
     });
 
+    expect(binding.workspaceId).toBe("workspace-1");
+    expect(bootstrapMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a refreshed oauth state before cloud preflight", async () => {
+    oauthStateRef.current = {
+      deviceId: "device-1",
+      callbackPort: 17900,
+      user: {
+        userId: "u-1",
+        userName: "Tester",
+        userEmail: "tester@example.com",
+        workspaceId: "workspace-1",
+        skills: [],
+      },
+      supabase: {
+        url: "https://example.supabase.co",
+        anonKey: "anon-key",
+      },
+    };
+    oauthFreshStateRef.current = {
+      ...oauthStateRef.current,
+      user: {
+        ...oauthStateRef.current.user!,
+        supabaseAccessToken: "fresh-jwt-token",
+        userAccessToken: "fresh-jwt-token",
+      },
+    };
+
+    const binding = await ensureBustlyCloudReady({
+      userAgent: "cloud-test-agent",
+    });
+
+    expect(readBustlyOAuthStateEnsuringFreshTokenMock).toHaveBeenCalledTimes(1);
     expect(binding.workspaceId).toBe("workspace-1");
     expect(bootstrapMock).toHaveBeenCalledTimes(1);
   });

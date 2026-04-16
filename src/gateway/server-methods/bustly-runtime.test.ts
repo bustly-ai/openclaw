@@ -1,16 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayRequestHandlers } from "./types.js";
 import { bustlyRuntimeHandlers } from "./bustly-runtime.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 const {
   readBustlyOAuthStateMock,
   getBustlyRuntimeHealthSnapshotMock,
+  getBustlyRuntimeHealthSnapshotEnsuringFreshTokenMock,
   applyBustlyRuntimeManifestMock,
   bootstrapBustlyRuntimeMock,
   createBustlyIssueReportArchiveMock,
 } = vi.hoisted(() => ({
   readBustlyOAuthStateMock: vi.fn(),
   getBustlyRuntimeHealthSnapshotMock: vi.fn(),
+  getBustlyRuntimeHealthSnapshotEnsuringFreshTokenMock: vi.fn(),
   applyBustlyRuntimeManifestMock: vi.fn(),
   bootstrapBustlyRuntimeMock: vi.fn(),
   createBustlyIssueReportArchiveMock: vi.fn(),
@@ -22,6 +24,8 @@ vi.mock("../../bustly-oauth.js", () => ({
 
 vi.mock("../../bustly/runtime-manifest.js", () => ({
   getBustlyRuntimeHealthSnapshot: () => getBustlyRuntimeHealthSnapshotMock(),
+  getBustlyRuntimeHealthSnapshotEnsuringFreshToken: () =>
+    getBustlyRuntimeHealthSnapshotEnsuringFreshTokenMock(),
   applyBustlyRuntimeManifest: (params: unknown) => applyBustlyRuntimeManifestMock(params),
   bootstrapBustlyRuntime: (params: unknown) => bootstrapBustlyRuntimeMock(params),
 }));
@@ -83,13 +87,14 @@ describe("gateway bustly.runtime methods", () => {
   beforeEach(() => {
     readBustlyOAuthStateMock.mockReset();
     getBustlyRuntimeHealthSnapshotMock.mockReset();
+    getBustlyRuntimeHealthSnapshotEnsuringFreshTokenMock.mockReset();
     applyBustlyRuntimeManifestMock.mockReset();
     bootstrapBustlyRuntimeMock.mockReset();
     createBustlyIssueReportArchiveMock.mockReset();
   });
 
   it("returns runtime health snapshot", async () => {
-    getBustlyRuntimeHealthSnapshotMock.mockReturnValue({
+    getBustlyRuntimeHealthSnapshotEnsuringFreshTokenMock.mockResolvedValue({
       loggedIn: true,
       workspaceId: "workspace-1",
       userId: "u-1",
@@ -110,15 +115,12 @@ describe("gateway bustly.runtime methods", () => {
       }),
       error: undefined,
     });
+    expect(getBustlyRuntimeHealthSnapshotEnsuringFreshTokenMock).toHaveBeenCalledTimes(1);
   });
 
   it("validates workspace id for runtime manifest apply", async () => {
     readBustlyOAuthStateMock.mockReturnValue(null);
-    const respond = await invoke(
-      bustlyRuntimeHandlers,
-      "bustly.runtime.manifest.apply",
-      {},
-    );
+    const respond = await invoke(bustlyRuntimeHandlers, "bustly.runtime.manifest.apply", {});
     expect(respond).toEqual({
       ok: false,
       result: undefined,
@@ -141,14 +143,10 @@ describe("gateway bustly.runtime methods", () => {
       workspaceDir: "/tmp/workspaces/workspace-from-oauth/agents/overview",
       presetAgentsApplied: 1,
     });
-    const respond = await invoke(
-      bustlyRuntimeHandlers,
-      "bustly.runtime.manifest.apply",
-      {
-        model: "bustly/chat.standard",
-        presetAgents: [{ slug: "growth", label: "Growth", icon: "ChartLine" }],
-      },
-    );
+    const respond = await invoke(bustlyRuntimeHandlers, "bustly.runtime.manifest.apply", {
+      model: "bustly/chat.standard",
+      presetAgents: [{ slug: "growth", label: "Growth", icon: "ChartLine" }],
+    });
     expect(applyBustlyRuntimeManifestMock).toHaveBeenCalledWith({
       workspaceId: "workspace-from-oauth",
       workspaceName: undefined,
@@ -182,13 +180,9 @@ describe("gateway bustly.runtime methods", () => {
       workspaceDir: "/tmp/workspaces/workspace-from-oauth/agents/overview",
       presetAgentsApplied: 2,
     });
-    const respond = await invoke(
-      bustlyRuntimeHandlers,
-      "bustly.runtime.bootstrap",
-      {
-        model: "bustly/chat.ultra",
-      },
-    );
+    const respond = await invoke(bustlyRuntimeHandlers, "bustly.runtime.bootstrap", {
+      model: "bustly/chat.ultra",
+    });
     expect(bootstrapBustlyRuntimeMock).toHaveBeenCalledWith({
       workspaceId: "workspace-from-oauth",
       workspaceName: undefined,
@@ -216,11 +210,10 @@ describe("gateway bustly.runtime methods", () => {
       stateDir: "/tmp/state/.bustly",
       outputDir: "/tmp/reports",
     });
-    const respond = await invoke(
-      bustlyRuntimeHandlers,
-      "bustly.runtime.report-issue",
-      { outputDir: "/tmp/reports", stateDir: "/tmp/state/.bustly" },
-    );
+    const respond = await invoke(bustlyRuntimeHandlers, "bustly.runtime.report-issue", {
+      outputDir: "/tmp/reports",
+      stateDir: "/tmp/state/.bustly",
+    });
     expect(createBustlyIssueReportArchiveMock).toHaveBeenCalledWith({
       outputDir: "/tmp/reports",
       stateDir: "/tmp/state/.bustly",

@@ -1,4 +1,8 @@
-import { getBustlyAccessToken, readBustlyOAuthState } from "../bustly-oauth.js";
+import {
+  getBustlyAccessToken,
+  readBustlyOAuthState,
+  readBustlyOAuthStateEnsuringFreshToken,
+} from "../bustly-oauth.js";
 
 export type BustlyAccessibleWorkspace = {
   id: string;
@@ -32,6 +36,17 @@ export type BustlySupabaseFetchParams = {
 
 export function getBustlySupabaseAuthConfig(): BustlySupabaseAuthConfig | null {
   const state = readBustlyOAuthState();
+  return mapBustlySupabaseAuthConfig(state);
+}
+
+export async function getBustlySupabaseAuthConfigEnsuringFreshToken(): Promise<BustlySupabaseAuthConfig | null> {
+  const state = await readBustlyOAuthStateEnsuringFreshToken();
+  return mapBustlySupabaseAuthConfig(state);
+}
+
+function mapBustlySupabaseAuthConfig(
+  state: ReturnType<typeof readBustlyOAuthState>,
+): BustlySupabaseAuthConfig | null {
   const supabaseUrl = state?.supabase?.url?.trim() ?? "";
   const anonKey = state?.supabase?.anonKey?.trim() ?? "";
   const accessToken = getBustlyAccessToken(state).trim();
@@ -54,7 +69,7 @@ export function getBustlySupabaseAuthConfig(): BustlySupabaseAuthConfig | null {
 }
 
 export async function bustlySupabaseFetch(params: BustlySupabaseFetchParams): Promise<Response> {
-  const config = getBustlySupabaseAuthConfig();
+  const config = await getBustlySupabaseAuthConfigEnsuringFreshToken();
   if (!config) {
     throw new Error("Missing Bustly Supabase auth config");
   }

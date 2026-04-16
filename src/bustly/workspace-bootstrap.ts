@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { loadWorkspaceTemplate } from "../agents/workspace.js";
-import { getBustlyAccessToken, readBustlyOAuthState } from "../bustly-oauth.js";
+import { getBustlyAccessToken, readBustlyOAuthStateEnsuringFreshToken } from "../bustly-oauth.js";
 import type { BustlyOAuthState } from "../config/types.base.js";
 import { normalizeBustlyAgentName } from "./workspace-agent.js";
 
@@ -500,7 +500,7 @@ async function buildBustlyBootstrapContext(params: {
   workspaceId: string;
   workspaceName?: string;
 }): Promise<BustlyBootstrapContext> {
-  const state = readBustlyOAuthState();
+  const state = await readBustlyOAuthStateEnsuringFreshToken();
   if (!state?.user?.userId) {
     throw new Error("Missing Bustly OAuth user for workspace bootstrap.");
   }

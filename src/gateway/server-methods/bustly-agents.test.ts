@@ -3,6 +3,7 @@ import { ErrorCodes } from "../protocol/index.js";
 
 const mocks = vi.hoisted(() => ({
   readBustlyOAuthState: vi.fn(),
+  getBustlySupabaseAuthConfigEnsuringFreshToken: vi.fn(),
   listBustlyWorkspaceAgents: vi.fn(),
   createBustlyWorkspaceAgent: vi.fn(),
   updateBustlyWorkspaceAgent: vi.fn(),
@@ -35,6 +36,11 @@ vi.mock("../../config/config.js", () => ({
   loadConfig: () => mocks.loadConfig(),
 }));
 
+vi.mock("../../bustly/supabase.js", () => ({
+  getBustlySupabaseAuthConfigEnsuringFreshToken: () =>
+    mocks.getBustlySupabaseAuthConfigEnsuringFreshToken(),
+}));
+
 vi.mock("../../bustly/session-title.js", () => ({
   scheduleBustlySessionTitleGeneration: (params: unknown) =>
     mocks.scheduleBustlySessionTitleGeneration(params),
@@ -62,6 +68,7 @@ async function invoke(
 describe("gateway bustly agent/session handlers", () => {
   beforeEach(() => {
     mocks.readBustlyOAuthState.mockReset();
+    mocks.getBustlySupabaseAuthConfigEnsuringFreshToken.mockReset();
     mocks.listBustlyWorkspaceAgents.mockReset();
     mocks.createBustlyWorkspaceAgent.mockReset();
     mocks.updateBustlyWorkspaceAgent.mockReset();
@@ -251,18 +258,14 @@ describe("gateway bustly agent/session handlers", () => {
   });
 
   it("returns supabase config payload", async () => {
-    mocks.readBustlyOAuthState.mockReturnValue({
-      supabase: {
-        url: "https://example.supabase.co",
-        anonKey: "anon-key",
-      },
-      user: {
-        userAccessToken: "access-token",
-        workspaceId: "workspace-1",
-        userId: "user-1",
-        userEmail: "user@example.com",
-        userName: "User One",
-      },
+    mocks.getBustlySupabaseAuthConfigEnsuringFreshToken.mockResolvedValue({
+      url: "https://example.supabase.co",
+      anonKey: "anon-key",
+      accessToken: "access-token",
+      workspaceId: "workspace-1",
+      userId: "user-1",
+      userEmail: "user@example.com",
+      userName: "User One",
     });
     const { respond } = await invoke("bustly.supabase.get-config");
     expect(respond).toHaveBeenCalledWith(
@@ -276,6 +279,42 @@ describe("gateway bustly agent/session handlers", () => {
         userEmail: "user@example.com",
         userName: "User One",
       },
+      undefined,
+    );
+  });
+
+  it("refreshes bustly supabase config before returning it", async () => {
+    mocks.readBustlyOAuthState.mockReturnValue({
+      supabase: {
+        url: "https://example.supabase.co",
+        anonKey: "anon-key",
+      },
+      user: {
+        userAccessToken: "stale-token",
+        workspaceId: "workspace-1",
+        userId: "user-1",
+        userEmail: "user@example.com",
+        userName: "User One",
+      },
+    });
+    mocks.getBustlySupabaseAuthConfigEnsuringFreshToken.mockResolvedValue({
+      url: "https://example.supabase.co",
+      anonKey: "anon-key",
+      accessToken: "fresh-token",
+      workspaceId: "workspace-1",
+      userId: "user-1",
+      userEmail: "user@example.com",
+      userName: "User One",
+    });
+
+    const { respond } = await invoke("bustly.supabase.get-config");
+
+    expect(mocks.getBustlySupabaseAuthConfigEnsuringFreshToken).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        accessToken: "fresh-token",
+      }),
       undefined,
     );
   });

@@ -1,5 +1,6 @@
-import { getBustlyAccessToken, readBustlyOAuthState } from "../../bustly-oauth.js";
+import { readBustlyOAuthState } from "../../bustly-oauth.js";
 import { scheduleBustlySessionTitleGeneration } from "../../bustly/session-title.js";
+import { getBustlySupabaseAuthConfigEnsuringFreshToken } from "../../bustly/supabase.js";
 import {
   createBustlyWorkspaceAgent,
   createBustlyWorkspaceAgentSession,
@@ -274,30 +275,14 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       );
     }
   },
-  "bustly.supabase.get-config": ({ respond }) => {
+  "bustly.supabase.get-config": async ({ respond }) => {
     try {
-      const state = readBustlyOAuthState();
-      const supabase = state?.supabase;
-      const user = state?.user;
-      const accessToken = getBustlyAccessToken(state).trim();
-      const workspaceId = user?.workspaceId?.trim() || "";
-      if (!supabase?.url || !supabase.anonKey || !accessToken) {
+      const config = await getBustlySupabaseAuthConfigEnsuringFreshToken();
+      if (!config) {
         respond(true, null, undefined);
         return;
       }
-      respond(
-        true,
-        {
-          url: supabase.url,
-          anonKey: supabase.anonKey,
-          accessToken,
-          workspaceId,
-          userId: user?.userId || "",
-          userEmail: user?.userEmail || "",
-          userName: user?.userName || "",
-        },
-        undefined,
-      );
+      respond(true, config, undefined);
     } catch (err) {
       respond(
         false,
