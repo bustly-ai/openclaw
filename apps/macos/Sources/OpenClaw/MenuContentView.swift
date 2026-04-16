@@ -153,7 +153,11 @@ struct MenuContent: View {
             if let updater, updater.isAvailable, self.updateStatus.isUpdateReady {
                 Button("Update ready, restart now?") { updater.checkForUpdates(nil) }
             }
-            Button("Quit") { NSApplication.shared.terminate(nil) }
+            Button("Quit") {
+                Task { @MainActor in
+                    self.confirmAndQuitIfNeeded()
+                }
+            }
         }
         .task(id: self.state.swabbleEnabled) {
             if self.state.swabbleEnabled {
@@ -524,6 +528,23 @@ struct MenuContent: View {
             alert.alertStyle = .warning
         }
         alert.runModal()
+    }
+
+    @MainActor
+    private func confirmAndQuitIfNeeded() {
+        if self.activityStore.current != nil {
+            let alert = NSAlert()
+            alert.messageText = "Quit Bustly?"
+            alert.informativeText = "Any running tasks will stop if you quit now."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Quit")
+            let response = alert.runModal()
+            if response != .alertSecondButtonReturn {
+                return
+            }
+        }
+        NSApplication.shared.terminate(nil)
     }
 
     @MainActor
