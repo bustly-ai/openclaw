@@ -458,7 +458,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.errorText == nil })
     }
 
-    @Test func sessionChoicesPreferMainAndRecent() async throws {
+    @Test func sessionChoicesPreferMainAndKeepOlderHistory() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (2 * 60 * 60 * 1000)
         let recentOlder = now - (5 * 60 * 60 * 1000)
@@ -560,7 +560,7 @@ extension TestChatTransportState {
         try await waitUntil("sessions loaded") { await MainActor.run { !vm.sessions.isEmpty } }
 
         let keys = await MainActor.run { vm.sessionChoices.map(\.key) }
-        #expect(keys == ["main", "recent-1", "recent-2"])
+        #expect(keys == ["main", "recent-1", "recent-2", "old-1"])
     }
 
     @Test func sessionChoicesIncludeCurrentWhenMissing() async throws {

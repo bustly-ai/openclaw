@@ -100,8 +100,6 @@ public final class OpenClawChatViewModel {
     }
 
     public var sessionChoices: [OpenClawChatSessionEntry] {
-        let now = Date().timeIntervalSince1970 * 1000
-        let cutoff = now - (24 * 60 * 60 * 1000)
         let sorted = self.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
 
         var result: [OpenClawChatSessionEntry] = []
@@ -118,7 +116,6 @@ public final class OpenClawChatViewModel {
 
         for entry in sorted {
             guard !included.contains(entry.key) else { continue }
-            guard (entry.updatedAt ?? 0) >= cutoff else { continue }
             result.append(entry)
             included.insert(entry.key)
         }
@@ -178,7 +175,7 @@ public final class OpenClawChatViewModel {
                 self.thinkingLevel = level
             }
             await self.pollHealthIfNeeded(force: true)
-            await self.fetchSessions(limit: 50)
+            await self.fetchSessions(limit: 200)
             self.errorText = nil
         } catch {
             self.errorText = error.localizedDescription

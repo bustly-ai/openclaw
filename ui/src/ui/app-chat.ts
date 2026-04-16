@@ -28,7 +28,9 @@ export type ChatHost = {
   refreshSessionsAfterChat: Set<string>;
 };
 
-export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+// Keep full workspace task/session history visible in chat selectors.
+// Time-window filtering makes older tasks look "lost" after app upgrades.
+export const CHAT_SESSIONS_ACTIVE_MINUTES = 0;
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
