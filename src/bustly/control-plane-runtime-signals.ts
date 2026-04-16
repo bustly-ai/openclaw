@@ -49,6 +49,7 @@ async function postRuntimeSignal(params: {
     },
     body: JSON.stringify({
       workspaceId: identity.workspaceId,
+      userId: identity.userId,
       runtimeId: identity.runtimeId,
       runtimeToken: identity.runtimeToken,
       ...params.body,

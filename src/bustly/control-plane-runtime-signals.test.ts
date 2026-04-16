@@ -21,6 +21,7 @@ describe("bustly control plane runtime signals", () => {
       expect(typeof body).toBe("string");
       expect(JSON.parse(body as string)).toMatchObject({
         workspaceId: "workspace-1",
+        userId: "user-1",
         runtimeId: "runtime-1",
         runtimeToken: "runtime-token",
         hostId: "openclaw-cloud",
@@ -37,6 +38,7 @@ describe("bustly control plane runtime signals", () => {
       env: {
         BUSTLY_CONTROL_PLANE_BASE_URL: "https://cp.example.com",
         BUSTLY_RUNTIME_WORKSPACE_ID: "workspace-1",
+        BUSTLY_RUNTIME_USER_ID: "user-1",
         BUSTLY_RUNTIME_ID: "runtime-1",
         BUSTLY_RUNTIME_TOKEN: "runtime-token",
       } as NodeJS.ProcessEnv,
@@ -59,6 +61,7 @@ describe("bustly control plane runtime signals", () => {
       env: {
         BUSTLY_CONTROL_PLANE_BASE_URL: "https://cp.example.com",
         BUSTLY_RUNTIME_WORKSPACE_ID: "workspace-1",
+        BUSTLY_RUNTIME_USER_ID: "user-1",
         BUSTLY_RUNTIME_ID: "runtime-1",
         BUSTLY_RUNTIME_TOKEN: "runtime-token",
       } as NodeJS.ProcessEnv,

@@ -3,6 +3,7 @@ import type { GatewayAuthSurface } from "../gateway/auth.js";
 export type BustlyControlPlaneRuntimeIdentity = {
   baseUrl: string;
   workspaceId: string;
+  userId: string;
   runtimeId: string;
   runtimeToken: string;
 };
@@ -14,16 +15,18 @@ export function resolveBustlyControlPlaneRuntimeIdentity(
 ): BustlyControlPlaneRuntimeIdentity | null {
   const baseUrl = env.BUSTLY_CONTROL_PLANE_BASE_URL?.trim() ?? "";
   const workspaceId = env.BUSTLY_RUNTIME_WORKSPACE_ID?.trim() ?? "";
+  const userId = env.BUSTLY_RUNTIME_USER_ID?.trim() ?? "";
   const runtimeId = env.BUSTLY_RUNTIME_ID?.trim() ?? "";
   const runtimeToken = env.BUSTLY_RUNTIME_TOKEN?.trim() ?? "";
 
-  if (!baseUrl || !workspaceId || !runtimeId || !runtimeToken) {
+  if (!baseUrl || !workspaceId || !userId || !runtimeId || !runtimeToken) {
     return null;
   }
 
   return {
     baseUrl: baseUrl.replace(/\/+$/, ""),
     workspaceId,
+    userId,
     runtimeId,
     runtimeToken,
   };
@@ -58,6 +61,7 @@ export async function verifyBustlyGatewayTokenWithControlPlane(params: {
       },
       body: JSON.stringify({
         workspaceId: identity.workspaceId,
+        userId: identity.userId,
         runtimeId: identity.runtimeId,
         runtimeToken: identity.runtimeToken,
         gatewayToken: params.gatewayToken,
@@ -100,6 +104,7 @@ export async function fetchBustlyRuntimeManifest(params?: {
   const fetchImpl = params?.fetchImpl ?? fetch;
   const url = new URL(`${identity.baseUrl}/runtime/manifest`);
   url.searchParams.set("workspaceId", identity.workspaceId);
+  url.searchParams.set("userId", identity.userId);
   url.searchParams.set("runtimeId", identity.runtimeId);
   url.searchParams.set("runtimeToken", identity.runtimeToken);
 
