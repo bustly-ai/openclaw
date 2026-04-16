@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BustlyOAuthState } from "../config/types.base.js";
 import {
   applyBustlyRuntimeManifest,
@@ -11,22 +11,34 @@ const {
   setActiveBustlyWorkspaceMock,
   resolveActiveBustlyWorkspaceBindingMock,
   ensureBustlyWorkspacePresetAgentsMock,
-  loadEnabledBustlyRemoteAgentPresetsMock,
 } = vi.hoisted(() => {
   return {
     oauthStateRef: { current: null as BustlyOAuthState | null },
-    setActiveBustlyWorkspaceMock: vi.fn(async () => ({
+    setActiveBustlyWorkspaceMock: vi.fn<
+      (params: unknown) => Promise<{
+        workspaceId: string;
+        agentId: string;
+        workspaceDir: string;
+      }>
+    >(async () => ({
       workspaceId: "workspace-1",
       agentId: "bustly-workspace-1-overview",
       workspaceDir: "/tmp/workspaces/workspace-1/agents/overview",
     })),
-    resolveActiveBustlyWorkspaceBindingMock: vi.fn(() => ({
+    resolveActiveBustlyWorkspaceBindingMock: vi.fn<
+      () => {
+        workspaceId: string;
+        agentId: string;
+        workspaceDir: string;
+      }
+    >(() => ({
       workspaceId: "workspace-1",
       agentId: "bustly-workspace-1-overview",
       workspaceDir: "/tmp/workspaces/workspace-1/agents/overview",
     })),
-    ensureBustlyWorkspacePresetAgentsMock: vi.fn(async () => undefined),
-    loadEnabledBustlyRemoteAgentPresetsMock: vi.fn(async () => []),
+    ensureBustlyWorkspacePresetAgentsMock: vi.fn<(params: unknown) => Promise<number>>(
+      async () => 0,
+    ),
   };
 });
 
@@ -47,12 +59,25 @@ vi.mock("./workspace-agents.js", () => ({
     ensureBustlyWorkspacePresetAgentsMock(params),
 }));
 
-vi.mock("./agent-presets.js", () => ({
-  loadEnabledBustlyRemoteAgentPresets: (params: unknown) =>
-    loadEnabledBustlyRemoteAgentPresetsMock(params),
-}));
-
 describe("bustly runtime manifest", () => {
+  beforeEach(() => {
+    oauthStateRef.current = null;
+    setActiveBustlyWorkspaceMock.mockReset();
+    setActiveBustlyWorkspaceMock.mockResolvedValue({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+      workspaceDir: "/tmp/workspaces/workspace-1/agents/overview",
+    });
+    resolveActiveBustlyWorkspaceBindingMock.mockReset();
+    resolveActiveBustlyWorkspaceBindingMock.mockReturnValue({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+      workspaceDir: "/tmp/workspaces/workspace-1/agents/overview",
+    });
+    ensureBustlyWorkspacePresetAgentsMock.mockReset();
+    ensureBustlyWorkspacePresetAgentsMock.mockResolvedValue(0);
+  });
+
   it("returns runtime health snapshot", () => {
     oauthStateRef.current = {
       deviceId: "device-1",
@@ -107,6 +132,7 @@ describe("bustly runtime manifest", () => {
 
   it("applies runtime manifest and forwards preset agents", async () => {
     oauthStateRef.current = null;
+    ensureBustlyWorkspacePresetAgentsMock.mockResolvedValueOnce(1);
     const applied = await applyBustlyRuntimeManifest({
       workspaceId: "workspace-1",
       workspaceName: "Workspace One",
@@ -151,19 +177,13 @@ describe("bustly runtime manifest", () => {
         skills: [],
       },
     };
-    loadEnabledBustlyRemoteAgentPresetsMock.mockResolvedValue([
-      { slug: "overview", label: "Overview", icon: "Robot", order: 0, isMain: true },
-      { slug: "marketing", label: "Marketing", icon: "TrendUp", order: 40 },
-    ]);
+    ensureBustlyWorkspacePresetAgentsMock.mockResolvedValueOnce(2);
 
     const applied = await bootstrapBustlyRuntime({
       selectedModelInput: "bustly/chat.ultra",
       userAgent: "desktop-gateway",
     });
 
-    expect(loadEnabledBustlyRemoteAgentPresetsMock).toHaveBeenCalledWith({
-      env: undefined,
-    });
     expect(setActiveBustlyWorkspaceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceId: "workspace-from-oauth",
@@ -171,15 +191,11 @@ describe("bustly runtime manifest", () => {
         userAgent: "desktop-gateway",
       }),
     );
-    expect(ensureBustlyWorkspacePresetAgentsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceId: "workspace-from-oauth",
-        presets: [
-          { slug: "overview", label: "Overview", icon: "Robot", isMain: true },
-          { slug: "marketing", label: "Marketing", icon: "TrendUp", isMain: undefined },
-        ],
-      }),
-    );
+    const bootstrapArgs = ensureBustlyWorkspacePresetAgentsMock.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(bootstrapArgs?.workspaceId).toBe("workspace-from-oauth");
+    expect(Object.prototype.hasOwnProperty.call(bootstrapArgs ?? {}, "presets")).toBe(false);
     expect(applied.presetAgentsApplied).toBe(2);
   });
 

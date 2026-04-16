@@ -3,6 +3,7 @@ import { ErrorCodes } from "../protocol/index.js";
 
 const mocks = vi.hoisted(() => ({
   readBustlyOAuthState: vi.fn(),
+  loadBustlyRemoteAgentMetadata: vi.fn(),
   listBustlyWorkspaceAgents: vi.fn(),
   createBustlyWorkspaceAgent: vi.fn(),
   updateBustlyWorkspaceAgent: vi.fn(),
@@ -18,6 +19,10 @@ vi.mock("../../bustly-oauth.js", () => ({
   getBustlyAccessToken: (
     state: { user?: { supabaseAccessToken?: string; userAccessToken?: string } } | null | undefined,
   ) => state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "",
+}));
+
+vi.mock("../../bustly/agent-presets.js", () => ({
+  loadBustlyRemoteAgentMetadata: (slug: string) => mocks.loadBustlyRemoteAgentMetadata(slug),
 }));
 
 vi.mock("../../bustly/workspace-agents.js", () => ({
@@ -62,6 +67,7 @@ async function invoke(
 describe("gateway bustly agent/session handlers", () => {
   beforeEach(() => {
     mocks.readBustlyOAuthState.mockReset();
+    mocks.loadBustlyRemoteAgentMetadata.mockReset();
     mocks.listBustlyWorkspaceAgents.mockReset();
     mocks.createBustlyWorkspaceAgent.mockReset();
     mocks.updateBustlyWorkspaceAgent.mockReset();
@@ -71,6 +77,50 @@ describe("gateway bustly agent/session handlers", () => {
     mocks.loadConfig.mockReset();
     mocks.scheduleBustlySessionTitleGeneration.mockReset();
     mocks.loadConfig.mockReturnValue({ providers: [] });
+  });
+
+  it("returns remote agent config for a slug", async () => {
+    mocks.loadBustlyRemoteAgentMetadata.mockResolvedValue({
+      label: "Marketing",
+      icon: "Web3_Avatar_1.png",
+      skills: ["ads-core-ops", "commerce-core-ops"],
+      useCases: [
+        {
+          label: "Campaign Diagnosis",
+          prompt: "Find wasted spend.",
+        },
+      ],
+    });
+    const { respond } = await invoke("bustly.agents.get-config", { slug: "marketing" });
+    expect(mocks.loadBustlyRemoteAgentMetadata).toHaveBeenCalledWith("marketing");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        slug: "marketing",
+        label: "Marketing",
+        icon: "Web3_Avatar_1.png",
+        skills: ["ads-core-ops", "commerce-core-ops"],
+        useCases: [
+          {
+            label: "Campaign Diagnosis",
+            prompt: "Find wasted spend.",
+          },
+        ],
+      },
+      undefined,
+    );
+  });
+
+  it("validates bustly.agents.get-config slug", async () => {
+    const { respond } = await invoke("bustly.agents.get-config", {});
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "slug is required",
+      }),
+    );
   });
 
   it("lists empty agent list when workspace id is unavailable", async () => {

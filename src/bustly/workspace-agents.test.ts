@@ -13,10 +13,16 @@ import {
   updateBustlyWorkspaceAgent,
 } from "./workspace-agents.js";
 
-const bootstrapMock = vi.hoisted(() => vi.fn(async () => {}));
+const { bootstrapMock, loadBootstrapAgentsMock } = vi.hoisted(() => ({
+  bootstrapMock: vi.fn<(params: unknown) => Promise<void>>(async () => {}),
+  loadBootstrapAgentsMock: vi.fn<
+    () => Promise<Array<{ slug: string; label: string; icon?: string; isMain?: boolean }>>
+  >(async () => []),
+}));
 
 vi.mock("./workspace-bootstrap.js", () => ({
   initializeBustlyWorkspaceBootstrap: (params: unknown) => bootstrapMock(params),
+  loadEnabledBustlyWorkspaceBootstrapAgents: () => loadBootstrapAgentsMock(),
 }));
 
 describe("workspace-agents", () => {
@@ -36,6 +42,8 @@ describe("workspace-agents", () => {
     process.env.OPENCLAW_CONFIG_PATH = configPath;
     bootstrapMock.mockReset();
     bootstrapMock.mockResolvedValue(undefined);
+    loadBootstrapAgentsMock.mockReset();
+    loadBootstrapAgentsMock.mockResolvedValue([]);
     mkdirSync(stateDir, { recursive: true });
     const seedConfig: OpenClawConfig = {
       agents: {
@@ -213,7 +221,13 @@ describe("workspace-agents", () => {
           {
             id: `bustly-${normalizedWorkspaceId}-overview`,
             name: "Overview",
-            workspace: path.join(stateDir, "workspaces", normalizedWorkspaceId, "agents", "overview"),
+            workspace: path.join(
+              stateDir,
+              "workspaces",
+              normalizedWorkspaceId,
+              "agents",
+              "overview",
+            ),
             default: true,
           },
         ],
@@ -221,7 +235,7 @@ describe("workspace-agents", () => {
     };
     writeFileSync(configPath, JSON.stringify(seedConfig, null, 2));
 
-    await ensureBustlyWorkspacePresetAgents({
+    const bootstrapped = await ensureBustlyWorkspacePresetAgents({
       workspaceId: fullWorkspaceId,
       workspaceName: "Workspace One",
       presets: [
@@ -232,11 +246,64 @@ describe("workspace-agents", () => {
       env: process.env,
     });
 
+    expect(bootstrapped).toBe(1);
     expect(bootstrapMock).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceId: fullWorkspaceId,
-        workspaceDir: path.join(stateDir, "workspaces", normalizedWorkspaceId, "agents", "marketing"),
+        workspaceDir: path.join(
+          stateDir,
+          "workspaces",
+          normalizedWorkspaceId,
+          "agents",
+          "marketing",
+        ),
+        requireAgentMetadata: true,
       }),
     );
+  });
+
+  it("loads preset agents from bootstrap config when presets are omitted", async () => {
+    loadBootstrapAgentsMock.mockResolvedValueOnce([
+      { slug: "overview", label: "Overview", icon: "Robot", isMain: true },
+      { slug: "finance", label: "Finance", icon: "Wallet", isMain: false },
+    ]);
+
+    const bootstrapped = await ensureBustlyWorkspacePresetAgents({
+      workspaceId: "workspace-1",
+      workspaceName: "Workspace One",
+      configPath,
+      env: process.env,
+    });
+
+    expect(bootstrapped).toBe(1);
+    expect(loadBootstrapAgentsMock).toHaveBeenCalledTimes(1);
+    expect(bootstrapMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: "finance",
+        requireAgentMetadata: true,
+      }),
+    );
+  });
+
+  it("skips bootstrap when the preset agent already exists on disk", async () => {
+    const existingDir = path.join(stateDir, "workspaces", "workspace-1", "agents", "marketing");
+    mkdirSync(existingDir, { recursive: true });
+
+    const bootstrapped = await ensureBustlyWorkspacePresetAgents({
+      workspaceId: "workspace-1",
+      workspaceName: "Workspace One",
+      presets: [{ slug: "marketing", label: "Marketing", icon: "TrendUp", isMain: false }],
+      configPath,
+      env: process.env,
+    });
+
+    expect(bootstrapped).toBe(0);
+    expect(bootstrapMock).not.toHaveBeenCalled();
+    expect(existsSync(path.join(existingDir, ".bustly-agent.json"))).toBe(false);
+
+    const nextConfig = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+    expect(
+      nextConfig.agents?.list?.some((entry) => entry.id === "bustly-workspace-1-marketing"),
+    ).toBe(true);
   });
 });

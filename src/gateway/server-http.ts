@@ -59,6 +59,7 @@ import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
+import { handleBustlyArtifactRequest } from "./server-bustly-artifacts.js";
 import { handleMediaRequest } from "./server-media.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
@@ -489,6 +490,9 @@ export function createGatewayHttpServer(opts: {
         return;
       }
       if (handleMediaRequest(req, res)) {
+        return;
+      }
+      if (handleBustlyArtifactRequest(req, res)) {
         return;
       }
       if (handlePluginRequest) {

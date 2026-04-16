@@ -18,14 +18,20 @@ const {
   return {
     oauthStateRef: { current: null as BustlyOAuthState | null },
     setActiveWorkspaceIdMock: vi.fn<(workspaceId: string) => void>(),
-    bootstrapMock: vi.fn(async () => {}),
-    resolveFirstAccessibleWorkspaceMock: vi.fn(async () => null),
+    bootstrapMock: vi.fn<(params: unknown) => Promise<void>>(async () => {}),
+    resolveFirstAccessibleWorkspaceMock: vi.fn<
+      () => Promise<{ id: string; name: string; status: string } | null>
+    >(async () => null),
   };
 });
 const { ensureModelsJsonMock, ensurePiAuthJsonMock } = vi.hoisted(() => {
   return {
-    ensureModelsJsonMock: vi.fn(async () => ({ agentDir: "", wrote: true })),
-    ensurePiAuthJsonMock: vi.fn(async () => ({ authPath: "", wrote: true })),
+    ensureModelsJsonMock: vi.fn<
+      (config: unknown, agentDir: string) => Promise<{ agentDir: string; wrote: boolean }>
+    >(async () => ({ agentDir: "", wrote: true })),
+    ensurePiAuthJsonMock: vi.fn<
+      (agentDir: string) => Promise<{ authPath: string; wrote: boolean }>
+    >(async () => ({ authPath: "", wrote: true })),
   };
 });
 
@@ -42,7 +48,8 @@ vi.mock("./workspace-bootstrap.js", () => ({
 }));
 
 vi.mock("../agents/models-config.js", () => ({
-  ensureOpenClawModelsJson: (config: unknown, agentDir: string) => ensureModelsJsonMock(config, agentDir),
+  ensureOpenClawModelsJson: (config: unknown, agentDir: string) =>
+    ensureModelsJsonMock(config, agentDir),
 }));
 
 vi.mock("../agents/pi-auth-json.js", () => ({
@@ -175,6 +182,35 @@ describe("workspace-runtime", () => {
     expect(Object.keys(config.models?.providers ?? {})).toEqual(["bustly"]);
     expect(ensureModelsJsonMock).toHaveBeenCalledTimes(1);
     expect(ensurePiAuthJsonMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips bootstrap when the active workspace agent already exists on disk", async () => {
+    oauthStateRef.current = {
+      deviceId: "device-1",
+      callbackPort: 17900,
+      user: {
+        userId: "u-1",
+        userName: "Tester",
+        userEmail: "tester@example.com",
+        userAccessToken: "token-1",
+        workspaceId: "workspace-1",
+        skills: [],
+      },
+      supabase: {
+        url: "https://example.supabase.co",
+        anonKey: "anon-key",
+      },
+    };
+    mkdirSync(
+      path.join(process.env.OPENCLAW_STATE_DIR!, "workspaces", "workspace-1", "agents", "overview"),
+      { recursive: true },
+    );
+
+    await ensureBustlyCloudReady({
+      userAgent: "cloud-test-agent",
+    });
+
+    expect(bootstrapMock).not.toHaveBeenCalled();
   });
 
   it("is idempotent when switching to the current workspace", async () => {

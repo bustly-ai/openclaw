@@ -35,12 +35,28 @@ describe("bustly workspace method scopes", () => {
     });
   });
 
+  it("classifies bustly.path.import as write", () => {
+    expect(isGatewayMethodClassified("bustly.path.import")).toBe(true);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("bustly.path.import")).toEqual([
+      WRITE_SCOPE,
+    ]);
+    expect(authorizeOperatorScopesForMethod("bustly.path.import", [READ_SCOPE])).toEqual({
+      allowed: false,
+      missingScope: WRITE_SCOPE,
+    });
+    expect(authorizeOperatorScopesForMethod("bustly.path.import", [WRITE_SCOPE])).toEqual({
+      allowed: true,
+    });
+  });
+
   it("classifies bustly read methods as read", () => {
     for (const method of [
+      "bustly.agents.get-config",
       "bustly.agents.list",
       "bustly.sessions.list",
       "bustly.supabase.get-config",
       "bustly.links.resolve",
+      "bustly.path.resolve",
       "bustly.runtime.health",
     ]) {
       expect(isGatewayMethodClassified(method)).toBe(true);

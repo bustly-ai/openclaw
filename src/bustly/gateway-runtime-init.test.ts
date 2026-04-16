@@ -5,19 +5,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BustlyOAuthState } from "../config/types.base.js";
 import { ensureGatewayRuntimeInit } from "./gateway-runtime-init.js";
 
-const {
-  oauthStateRef,
-  bootstrapMock,
-  ensureModelsJsonMock,
-  ensurePiAuthJsonMock,
-} = vi.hoisted(() => {
-  return {
-    oauthStateRef: { current: null as BustlyOAuthState | null },
-    bootstrapMock: vi.fn(async () => {}),
-    ensureModelsJsonMock: vi.fn(async () => ({ agentDir: "", wrote: true })),
-    ensurePiAuthJsonMock: vi.fn(async () => ({ authPath: "", wrote: true })),
-  };
-});
+const { oauthStateRef, bootstrapMock, ensureModelsJsonMock, ensurePiAuthJsonMock } = vi.hoisted(
+  () => {
+    return {
+      oauthStateRef: { current: null as BustlyOAuthState | null },
+      bootstrapMock: vi.fn<(params: unknown) => Promise<void>>(async () => {}),
+      ensureModelsJsonMock: vi.fn<
+        (config: unknown, agentDir: string) => Promise<{ agentDir: string; wrote: boolean }>
+      >(async () => ({ agentDir: "", wrote: true })),
+      ensurePiAuthJsonMock: vi.fn<
+        (agentDir: string) => Promise<{ authPath: string; wrote: boolean }>
+      >(async () => ({ authPath: "", wrote: true })),
+    };
+  },
+);
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => oauthStateRef.current),
@@ -29,7 +30,8 @@ vi.mock("./workspace-bootstrap.js", () => ({
 }));
 
 vi.mock("../agents/models-config.js", () => ({
-  ensureOpenClawModelsJson: (config: unknown, agentDir: string) => ensureModelsJsonMock(config, agentDir),
+  ensureOpenClawModelsJson: (config: unknown, agentDir: string) =>
+    ensureModelsJsonMock(config, agentDir),
 }));
 
 vi.mock("../agents/pi-auth-json.js", () => ({
@@ -96,7 +98,9 @@ describe("gateway-runtime-init", () => {
     });
 
     expect(result.workspaceId).toBe("workspace-1");
-    expect(result.workspace).toContain(path.join("workspaces", "workspace-1", "agents", "overview"));
+    expect(result.workspace).toContain(
+      path.join("workspaces", "workspace-1", "agents", "overview"),
+    );
     expect(result.gatewayPort).toBe(18799);
     expect(result.gatewayBind).toBe("loopback");
     expect(result.gatewayToken).toBeTruthy();

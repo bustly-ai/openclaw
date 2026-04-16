@@ -9,6 +9,8 @@ import { agentsHandlers } from "./server-methods/agents.js";
 import { browserHandlers } from "./server-methods/browser.js";
 import { bustlyAgentsHandlers } from "./server-methods/bustly-agents.js";
 import { bustlyLinksHandlers } from "./server-methods/bustly-links.js";
+import { bustlyPathHandlers } from "./server-methods/bustly-path.js";
+import { bustlyPathImportHandlers } from "./server-methods/bustly-path-import.js";
 import { bustlyRuntimeHandlers } from "./server-methods/bustly-runtime.js";
 import { bustlyWorkspaceHandlers } from "./server-methods/bustly-workspace.js";
 import { channelsHandlers } from "./server-methods/channels.js";
@@ -98,6 +100,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...browserHandlers,
   ...bustlyAgentsHandlers,
   ...bustlyLinksHandlers,
+  ...bustlyPathHandlers,
+  ...bustlyPathImportHandlers,
   ...bustlyRuntimeHandlers,
   ...bustlyWorkspaceHandlers,
 };

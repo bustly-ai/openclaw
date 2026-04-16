@@ -1,5 +1,4 @@
 import { getBustlyAccessToken, readBustlyOAuthState } from "../bustly-oauth.js";
-import { loadEnabledBustlyRemoteAgentPresets } from "./agent-presets.js";
 import { ensureBustlyWorkspacePresetAgents } from "./workspace-agents.js";
 import type { BustlyWorkspaceBinding } from "./workspace-runtime.js";
 import {
@@ -84,41 +83,34 @@ export async function applyBustlyRuntimeManifest(
     throw new Error("Failed to apply Bustly runtime manifest.");
   }
 
-  const presetAgents = params.presetAgents ?? [];
-  if (presetAgents.length > 0) {
-    await ensureBustlyWorkspacePresetAgents({
-      workspaceId,
-      workspaceName: params.workspaceName,
-      presets: presetAgents.map((preset) => ({
-        slug: preset.slug,
-        label: preset.label,
-        icon: preset.icon,
-        isMain: preset.isMain,
-      })),
-      allowCreateConfig: params.allowCreateConfig ?? true,
-      configPath: params.configPath,
-      env: params.env,
-    });
-  }
+  const presetAgentsApplied = await ensureBustlyWorkspacePresetAgents({
+    workspaceId,
+    workspaceName: params.workspaceName,
+    ...(params.presetAgents
+      ? {
+          presets: params.presetAgents.map((preset) => ({
+            slug: preset.slug,
+            label: preset.label,
+            icon: preset.icon,
+            isMain: preset.isMain,
+          })),
+        }
+      : {}),
+    allowCreateConfig: params.allowCreateConfig ?? true,
+    configPath: params.configPath,
+    env: params.env,
+  });
 
   return {
     workspaceId,
     agentId: binding.agentId,
     workspaceDir: binding.workspaceDir,
-    presetAgentsApplied: presetAgents.length,
+    presetAgentsApplied,
   };
 }
 
 export async function bootstrapBustlyRuntime(
   params: BustlyRuntimeBootstrapParams = {},
 ): Promise<BustlyRuntimeManifestApplyResult> {
-  const presetAgents =
-    params.presetAgents ??
-    (await loadEnabledBustlyRemoteAgentPresets({
-      env: params.env,
-    }));
-  return await applyBustlyRuntimeManifest({
-    ...params,
-    presetAgents,
-  });
+  return await applyBustlyRuntimeManifest(params);
 }

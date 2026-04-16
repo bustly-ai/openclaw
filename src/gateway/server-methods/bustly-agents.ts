@@ -1,5 +1,7 @@
 import { getBustlyAccessToken, readBustlyOAuthState } from "../../bustly-oauth.js";
+import { loadBustlyRemoteAgentMetadata } from "../../bustly/agent-presets.js";
 import { scheduleBustlySessionTitleGeneration } from "../../bustly/session-title.js";
+import { normalizeBustlyAgentName } from "../../bustly/workspace-agent.js";
 import {
   createBustlyWorkspaceAgent,
   createBustlyWorkspaceAgentSession,
@@ -22,6 +24,31 @@ function resolveWorkspaceIdParam(params: Record<string, unknown>): string {
 }
 
 export const bustlyAgentsHandlers: GatewayRequestHandlers = {
+  "bustly.agents.get-config": async ({ params, respond }) => {
+    try {
+      const rawSlug = typeof params.slug === "string" ? params.slug.trim() : "";
+      if (!rawSlug) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "slug is required"));
+        return;
+      }
+      const slug = normalizeBustlyAgentName(rawSlug);
+      const metadata = await loadBustlyRemoteAgentMetadata(slug);
+      respond(
+        true,
+        {
+          slug,
+          ...metadata,
+        },
+        undefined,
+      );
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
+      );
+    }
+  },
   "bustly.agents.list": ({ params, respond }) => {
     try {
       const workspaceId = resolveWorkspaceIdParam(params);

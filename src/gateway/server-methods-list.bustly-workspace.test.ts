@@ -4,6 +4,7 @@ import { coreGatewayHandlers } from "./server-methods.js";
 
 const BUSTLY_METHODS = [
   "bustly.supabase.get-config",
+  "bustly.agents.get-config",
   "bustly.agents.list",
   "bustly.agents.create",
   "bustly.agents.update",
@@ -11,6 +12,8 @@ const BUSTLY_METHODS = [
   "bustly.sessions.list",
   "bustly.sessions.create",
   "bustly.links.resolve",
+  "bustly.path.resolve",
+  "bustly.path.import",
   "bustly.runtime.health",
   "bustly.runtime.report-issue",
   "bustly.runtime.bootstrap",

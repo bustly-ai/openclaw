@@ -1,31 +1,15 @@
-import { resolveFetch } from "../infra/fetch.js";
 import {
-  DEFAULT_BUSTLY_AGENT_NAME,
-  normalizeBustlyAgentName,
-} from "./workspace-agent.js";
-
-export type BustlyRemoteUseCase = {
-  icon: string;
-  label: string;
-  prompt: string;
-};
+  normalizeBustlyAgentMetadata,
+  type BustlyAgentUseCase,
+  type BustlyAgentMetadata,
+} from "../agents/bustly-agent-metadata.js";
+import { loadRemoteWorkspaceTemplate } from "../agents/workspace-remote-templates.js";
+import { DEFAULT_BUSTLY_AGENT_NAME, normalizeBustlyAgentName } from "./workspace-agent.js";
 
 export type BustlyRemoteAgentPreset = {
   slug: string;
-  label: string;
-  icon: string;
-  order: number;
-  enabled?: boolean;
-  isMain?: boolean;
-  model?: string;
-  description?: string;
-  useCases?: BustlyRemoteUseCase[];
 };
-
-type BustlyRemoteAgentConfig = {
-  version?: number;
-  agents?: unknown;
-};
+export type BustlyRemoteUseCase = BustlyAgentUseCase;
 
 type BustlyAgentPresetLoaderOptions = {
   env?: NodeJS.ProcessEnv;
@@ -34,137 +18,144 @@ type BustlyAgentPresetLoaderOptions = {
 };
 
 let presetsPromise: Promise<BustlyRemoteAgentPreset[]> | null = null;
+const AGENT_CONFIG_PATH = "agents/config.json";
+
+const FALLBACK_AGENT_METADATA_BY_SLUG: Record<string, BustlyAgentMetadata> = {
+  overview: {
+    label: "Overview",
+    icon: "Web3_Avatar.png",
+    skills: ["ads-core-ops", "commerce-core-ops"],
+    useCases: [
+      {
+        label: "Daily Pulse",
+        prompt:
+          "Surface the most important business changes of the day across revenue, orders, customers, and risk signals.",
+      },
+      {
+        label: "Anomaly Detection",
+        prompt:
+          "Detect cross-channel anomalies and rank the issues that need attention first, such as refund spikes, stockout risk, or order backlog.",
+      },
+      {
+        label: "Executive Hub",
+        prompt:
+          "Act as the command center that routes users from a high-level business summary into the right specialized channel for deeper analysis.",
+      },
+    ],
+  },
+  finance: {
+    label: "Finance",
+    icon: "Web3_Avatar_4.png",
+    skills: ["ads-core-ops", "commerce-core-ops"],
+    useCases: [
+      {
+        label: "Revenue Quality",
+        prompt:
+          "Evaluate business performance beyond top-line sales by focusing on net sales, margin quality, and revenue composition.",
+      },
+      {
+        label: "Discount Leakage",
+        prompt:
+          "Quantify how discounts and refunds are eroding revenue and trace the impact back to products, campaigns, or customer groups.",
+      },
+      {
+        label: "Health Signals",
+        prompt:
+          "Turn financial metrics into clear business signals, such as rising discount dependency or concentrated refund pressure.",
+      },
+    ],
+  },
+  customers: {
+    label: "Customers",
+    icon: "Web3_Avatar_3.png",
+    skills: ["commerce-core-ops"],
+    useCases: [
+      {
+        label: "Customer Mix",
+        prompt:
+          "Show whether growth is driven by healthy repeat demand or by one-time acquisition.",
+      },
+      {
+        label: "Retention Opps",
+        prompt:
+          "Identify at-risk customer cohorts and uncover segments that are most worth re-engaging.",
+      },
+      {
+        label: "High-Value Customers",
+        prompt:
+          "Reveal which customer segments contribute the most long-term value, repeat revenue, and profitability.",
+      },
+    ],
+  },
+  "store-ops": {
+    label: "Store Ops",
+    icon: "Web3_Avatar_2.png",
+    skills: ["commerce-core-ops"],
+    useCases: [
+      {
+        label: "Fulfillment Risk",
+        prompt:
+          "Highlight overdue, unfulfilled, or exception orders so operators can act before delays impact customer experience.",
+      },
+      {
+        label: "Inventory Risk",
+        prompt:
+          "Detect low-stock and high-velocity SKUs that are likely to stock out in the next 7-14 days.",
+      },
+      {
+        label: "Product Issues",
+        prompt:
+          "Surface products with abnormal sales drops, high return rates, or unusual discount pressure.",
+      },
+    ],
+  },
+  marketing: {
+    label: "Marketing",
+    icon: "Web3_Avatar_1.png",
+    skills: ["ads-core-ops", "commerce-core-ops"],
+    useCases: [
+      {
+        label: "Campaign Diagnosis",
+        prompt:
+          "Identify which campaigns and acquisition channels are driving efficient growth versus wasting budget.",
+      },
+      {
+        label: "Budget Guidance",
+        prompt:
+          "Recommend where to cut spend, where to scale, and which campaigns need immediate optimization.",
+      },
+      {
+        label: "Funnel Analysis",
+        prompt:
+          "Pinpoint where demand is leaking across the funnel, from traffic to click, conversion, and checkout.",
+      },
+    ],
+  },
+};
 
 const FALLBACK_AGENT_PRESETS: BustlyRemoteAgentPreset[] = [
-  {
-    slug: "overview",
-    label: "Overview",
-    icon: "Robot",
-    order: 0,
-    enabled: true,
-    isMain: true,
-    description: "Automatically spots the most important business changes today.",
-    useCases: [
-      {
-        icon: "ChartPie",
-        label: "Daily Pulse",
-        prompt: "Surface the most important business changes of the day across revenue, orders, customers, and risk signals.",
-      },
-      {
-        icon: "MagnifyingGlass",
-        label: "Anomaly Detection",
-        prompt: "Detect cross-channel anomalies and rank the issues that need attention first, such as refund spikes, stockout risk, or order backlog.",
-      },
-      {
-        icon: "Robot",
-        label: "Executive Hub",
-        prompt: "Act as the command center that routes users from a high-level business summary into the right specialized channel for deeper analysis.",
-      },
-    ],
-  },
-  {
-    slug: "finance",
-    label: "Finance",
-    icon: "Wallet",
-    order: 10,
-    enabled: true,
-    useCases: [
-      {
-        icon: "ChartPie",
-        label: "Revenue Quality",
-        prompt: "Evaluate business performance beyond top-line sales by focusing on net sales, margin quality, and revenue composition.",
-      },
-      {
-        icon: "CreditCard",
-        label: "Discount Leakage",
-        prompt: "Quantify how discounts and refunds are eroding revenue and trace the impact back to products, campaigns, or customer groups.",
-      },
-      {
-        icon: "Wallet",
-        label: "Health Signals",
-        prompt: "Turn financial metrics into clear business signals, such as rising discount dependency or concentrated refund pressure.",
-      },
-    ],
-  },
-  {
-    slug: "customers",
-    label: "Customers",
-    icon: "Users",
-    order: 20,
-    enabled: true,
-    useCases: [
-      {
-        icon: "Users",
-        label: "Customer Mix",
-        prompt: "Show whether growth is driven by healthy repeat demand or by one-time acquisition.",
-      },
-      {
-        icon: "Heart",
-        label: "Retention Opps",
-        prompt: "Identify at-risk customer cohorts and uncover segments that are most worth re-engaging.",
-      },
-      {
-        icon: "ChatCircleText",
-        label: "High-Value Customers",
-        prompt: "Reveal which customer segments contribute the most long-term value, repeat revenue, and profitability.",
-      },
-    ],
-  },
-  {
-    slug: "store-ops",
-    label: "Store Ops",
-    icon: "Storefront",
-    order: 30,
-    enabled: true,
-    useCases: [
-      {
-        icon: "ClockCounterClockwise",
-        label: "Fulfillment Risk",
-        prompt: "Highlight overdue, unfulfilled, or exception orders so operators can act before delays impact customer experience.",
-      },
-      {
-        icon: "Package",
-        label: "Inventory Risk",
-        prompt: "Detect low-stock and high-velocity SKUs that are likely to stock out in the next 7-14 days.",
-      },
-      {
-        icon: "WarningCircle",
-        label: "Product Issues",
-        prompt: "Surface products with abnormal sales drops, high return rates, or unusual discount pressure.",
-      },
-    ],
-  },
-  {
-    slug: "marketing",
-    label: "Marketing",
-    icon: "TrendUp",
-    order: 40,
-    enabled: true,
-    useCases: [
-      {
-        icon: "TrendUp",
-        label: "Campaign Diagnosis",
-        prompt: "Identify which campaigns and acquisition channels are driving efficient growth versus wasting budget.",
-      },
-      {
-        icon: "ChartBar",
-        label: "Budget Guidance",
-        prompt: "Recommend where to cut spend, where to scale, and which campaigns need immediate optimization.",
-      },
-      {
-        icon: "MagnifyingGlass",
-        label: "Funnel Analysis",
-        prompt: "Pinpoint where demand is leaking across the funnel, from traffic to click, conversion, and checkout.",
-      },
-    ],
-  },
+  { slug: "overview" },
+  { slug: "finance" },
+  { slug: "customers" },
+  { slug: "store-ops" },
+  { slug: "marketing" },
 ];
 
 function cloneFallbackPresets(): BustlyRemoteAgentPreset[] {
-  return FALLBACK_AGENT_PRESETS.map((entry) => ({
-    ...entry,
-    useCases: entry.useCases?.map((useCase) => ({ ...useCase })) ?? [],
-  }));
+  return FALLBACK_AGENT_PRESETS.map((entry) => ({ ...entry }));
+}
+
+function cloneFallbackMetadata(agentName: string): BustlyAgentMetadata | undefined {
+  const metadata = FALLBACK_AGENT_METADATA_BY_SLUG[normalizeBustlyAgentName(agentName)];
+  if (!metadata) {
+    return undefined;
+  }
+  return {
+    ...(metadata.label ? { label: metadata.label } : {}),
+    ...(metadata.icon ? { icon: metadata.icon } : {}),
+    ...(metadata.skills ? { skills: [...metadata.skills] } : {}),
+    ...(metadata.useCases ? { useCases: metadata.useCases.map((useCase) => ({ ...useCase })) } : {}),
+  };
 }
 
 function logPresetWarning(
@@ -183,87 +174,43 @@ function logPresetWarning(
   console.warn(`[Bustly Agent Presets] ${message}`, extra);
 }
 
-function resolveAgentConfigUrl(env: NodeJS.ProcessEnv = process.env): string {
-  const baseUrl = env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL?.trim().replace(/\/+$/, "");
-  if (!baseUrl) {
-    throw new Error("Missing BUSTLY_WORKSPACE_TEMPLATE_BASE_URL for Bustly agent config.");
-  }
-  return `${baseUrl}/agents/config.json`;
+async function loadBustlyPromptFile(
+  name: string,
+  options: BustlyAgentPresetLoaderOptions = {},
+): Promise<string | undefined> {
+  return await loadRemoteWorkspaceTemplate(name, {
+    env: options.env,
+    fetchImpl: options.fetchImpl,
+  });
 }
 
-function validatePresets(raw: BustlyRemoteAgentConfig): BustlyRemoteAgentPreset[] {
-  const rawAgents = Array.isArray(raw.agents) ? raw.agents : null;
-  if (!rawAgents || rawAgents.length === 0) {
-    throw new Error("Bustly agent config is missing agents[].");
+function validatePresets(raw: unknown): BustlyRemoteAgentPreset[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error("Bustly agent config must be a non-empty array.");
   }
 
   const presets: BustlyRemoteAgentPreset[] = [];
-  for (const entry of rawAgents) {
-    if (!entry || typeof entry !== "object") {
+  for (const entry of raw) {
+    const rawSlug = typeof entry === "string" ? entry.trim() : "";
+    if (!rawSlug) {
       continue;
     }
-    const candidate = entry as Record<string, unknown>;
-    const slug = normalizeBustlyAgentName(typeof candidate.slug === "string" ? candidate.slug : "");
-    const label = typeof candidate.label === "string" ? candidate.label.trim() : "";
-    const icon = typeof candidate.icon === "string" ? candidate.icon.trim() : "";
-    const order = typeof candidate.order === "number" && Number.isFinite(candidate.order)
-      ? candidate.order
-      : null;
-    if (!slug || !label || !icon || order == null) {
+    const slug = normalizeBustlyAgentName(rawSlug);
+    if (!slug) {
       continue;
     }
-    presets.push({
-      slug,
-      label,
-      icon,
-      order,
-      enabled: candidate.enabled === false ? false : true,
-      isMain: candidate.isMain === true,
-      model: typeof candidate.model === "string" ? candidate.model.trim() || undefined : undefined,
-      description:
-        typeof candidate.description === "string" ? candidate.description.trim() || undefined : undefined,
-      useCases: Array.isArray(candidate.useCases)
-        ? candidate.useCases.flatMap((rawUseCase) => {
-            if (!rawUseCase || typeof rawUseCase !== "object") {
-              return [];
-            }
-            const useCase = rawUseCase as Record<string, unknown>;
-            const useCaseIcon = typeof useCase.icon === "string" ? useCase.icon.trim() : "";
-            const useCaseLabel = typeof useCase.label === "string" ? useCase.label.trim() : "";
-            const prompt = typeof useCase.prompt === "string" ? useCase.prompt.trim() : "";
-            if (!useCaseIcon || !useCaseLabel || !prompt) {
-              return [];
-            }
-            return [{ icon: useCaseIcon, label: useCaseLabel, prompt }];
-          })
-        : [],
-    });
+    presets.push({ slug });
   }
 
   if (presets.length === 0) {
     throw new Error("Bustly agent config has no valid agents.");
   }
   if (!presets.some((entry) => entry.slug === DEFAULT_BUSTLY_AGENT_NAME)) {
-    throw new Error(`Bustly agent config must include a main agent (${DEFAULT_BUSTLY_AGENT_NAME}).`);
+    throw new Error(
+      `Bustly agent config must include a main agent (${DEFAULT_BUSTLY_AGENT_NAME}).`,
+    );
   }
-  return presets.toSorted((left, right) => left.order - right.order);
-}
-
-async function fetchRemotePresetConfig(
-  url: string,
-  options: BustlyAgentPresetLoaderOptions,
-): Promise<BustlyRemoteAgentConfig> {
-  const fetcher = resolveFetch(options.fetchImpl);
-  if (!fetcher) {
-    throw new Error("No fetch implementation available for Bustly agent config.");
-  }
-  const response = await fetcher(url, {
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch Bustly agent config: ${response.status} ${response.statusText}`);
-  }
-  return await response.json() as BustlyRemoteAgentConfig;
+  return presets;
 }
 
 export async function loadBustlyRemoteAgentPresets(
@@ -272,8 +219,11 @@ export async function loadBustlyRemoteAgentPresets(
   if (!presetsPromise) {
     presetsPromise = (async () => {
       try {
-        const env = options.env ?? process.env;
-        const parsed = await fetchRemotePresetConfig(resolveAgentConfigUrl(env), options);
+        const raw = await loadBustlyPromptFile(AGENT_CONFIG_PATH, options);
+        if (!raw?.trim()) {
+          throw new Error(`Missing Bustly agent config at ${AGENT_CONFIG_PATH}.`);
+        }
+        const parsed = JSON.parse(raw);
         return validatePresets(parsed);
       } catch (error) {
         logPresetWarning(options, "remote config unavailable; using bundled fallback presets", {
@@ -289,21 +239,56 @@ export async function loadBustlyRemoteAgentPresets(
 export async function loadEnabledBustlyRemoteAgentPresets(
   options: BustlyAgentPresetLoaderOptions = {},
 ): Promise<BustlyRemoteAgentPreset[]> {
-  const presets = await loadBustlyRemoteAgentPresets(options);
-  return presets.filter((entry) => entry.enabled !== false);
+  return await loadBustlyRemoteAgentPresets(options);
 }
 
 export async function loadBustlyMainAgentPreset(
   options: BustlyAgentPresetLoaderOptions = {},
 ): Promise<BustlyRemoteAgentPreset> {
   const presets = await loadEnabledBustlyRemoteAgentPresets(options);
-  return (
-    presets.find((entry) => entry.isMain) ??
-    presets.find((entry) => entry.slug === DEFAULT_BUSTLY_AGENT_NAME) ??
-    presets[0]
-  );
+  return presets.find((entry) => entry.slug === DEFAULT_BUSTLY_AGENT_NAME) ?? presets[0];
 }
 
 export function resetBustlyRemoteAgentPresetsCache(): void {
   presetsPromise = null;
+}
+
+export async function loadBustlyRemoteAgentMetadata(
+  agentName: string,
+  options: BustlyAgentPresetLoaderOptions = {},
+): Promise<BustlyAgentMetadata> {
+  const normalizedAgentName = normalizeBustlyAgentName(agentName);
+  const metadataPath = `agents/${normalizedAgentName}/.bustly-agent.json`;
+  const raw = await loadBustlyPromptFile(metadataPath, options);
+  if (!raw?.trim()) {
+    const fallbackMetadata = cloneFallbackMetadata(normalizedAgentName);
+    if (fallbackMetadata) {
+      return fallbackMetadata;
+    }
+    throw new Error(`Missing Bustly agent metadata at ${metadataPath}.`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Invalid Bustly agent metadata at ${metadataPath}.`, {
+      cause: error,
+    });
+  }
+
+  const metadata = normalizeBustlyAgentMetadata(parsed);
+  if (!metadata.label) {
+    throw new Error(`Bustly agent metadata at ${metadataPath} must include label.`);
+  }
+  if (!metadata.icon) {
+    throw new Error(`Bustly agent metadata at ${metadataPath} must include icon.`);
+  }
+  if (metadata.skills === undefined) {
+    throw new Error(`Bustly agent metadata at ${metadataPath} must include skills.`);
+  }
+  if (metadata.useCases === undefined) {
+    throw new Error(`Bustly agent metadata at ${metadataPath} must include useCases.`);
+  }
+  return metadata;
 }

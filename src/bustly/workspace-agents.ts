@@ -28,7 +28,10 @@ import {
   normalizeBustlyAgentName,
   normalizeBustlyWorkspaceId,
 } from "./workspace-agent.js";
-import { initializeBustlyWorkspaceBootstrap } from "./workspace-bootstrap.js";
+import {
+  initializeBustlyWorkspaceBootstrap,
+  loadEnabledBustlyWorkspaceBootstrapAgents,
+} from "./workspace-bootstrap.js";
 import { resolveBustlyWorkspaceAgentWorkspaceDir } from "./workspace-runtime.js";
 
 type OpenClawAgentListEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
@@ -431,6 +434,9 @@ export async function createBustlyWorkspaceAgent(params: {
   description?: string;
   icon?: string;
   skills?: string[] | null;
+  bootstrapMetadata?: BustlyAgentMetadata;
+  requireBootstrapMetadata?: boolean;
+  skipBootstrap?: boolean;
   configPath?: string;
   allowCreateConfig?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -448,7 +454,8 @@ export async function createBustlyWorkspaceAgent(params: {
   }
   const agentName = normalizeBustlyAgentName(params.agentName);
   const displayName = params.displayName?.trim() || agentName;
-  const icon = params.icon?.trim() || "SquaresFour";
+  const explicitIcon = params.icon?.trim() || undefined;
+  const icon = explicitIcon ?? (!params.skipBootstrap ? "SquaresFour" : undefined);
   const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId, agentName, params.env);
   const agentId = buildBustlyWorkspaceAgentId(workspaceId, agentName);
   const config = readConfig(configPath);
@@ -481,23 +488,31 @@ export async function createBustlyWorkspaceAgent(params: {
     writeConfig(configPath, nextConfig);
   }
 
-  await initializeBustlyWorkspaceBootstrap({
-    workspaceDir,
-    workspaceId,
-    workspaceName: params.workspaceName,
-    agentName,
-  });
-  syncBustlyAgentIdentityFields({
-    workspaceDir,
-    name: displayName,
-    description: params.description,
-  });
-  setBustlyAgentMetadata({
-    workspaceDir,
-    icon,
-    createdAt: Date.now(),
-    ...(params.skills !== undefined ? { skills: params.skills } : {}),
-  });
+  if (!params.skipBootstrap) {
+    await initializeBustlyWorkspaceBootstrap({
+      workspaceDir,
+      workspaceId,
+      workspaceName: params.workspaceName,
+      agentName,
+      metadata: params.bootstrapMetadata,
+      requireAgentMetadata: params.requireBootstrapMetadata,
+    });
+  }
+  if (!params.skipBootstrap) {
+    syncBustlyAgentIdentityFields({
+      workspaceDir,
+      name: displayName,
+      description: params.description,
+    });
+  }
+  if (!params.skipBootstrap || icon || params.skills !== undefined) {
+    setBustlyAgentMetadata({
+      workspaceDir,
+      ...(icon ? { icon } : {}),
+      ...(!params.skipBootstrap ? { createdAt: Date.now() } : {}),
+      ...(params.skills !== undefined ? { skills: params.skills } : {}),
+    });
+  }
   return { agentId, workspaceDir };
 }
 
@@ -652,29 +667,51 @@ export async function deleteBustlyWorkspaceAgent(params: {
 export async function ensureBustlyWorkspacePresetAgents(params: {
   workspaceId: string;
   workspaceName?: string;
-  presets: Array<{ slug: string; label: string; icon?: string; isMain?: boolean }>;
+  presets?: Array<{
+    slug: string;
+    label: string;
+    icon?: string;
+    isMain?: boolean;
+    bootstrapMetadata?: BustlyAgentMetadata;
+  }>;
   configPath?: string;
   allowCreateConfig?: boolean;
   env?: NodeJS.ProcessEnv;
-}): Promise<void> {
+}): Promise<number> {
   const normalizedWorkspaceId = normalizeBustlyWorkspaceId(params.workspaceId);
   if (!normalizedWorkspaceId) {
-    return;
+    return 0;
   }
   const configPath = params.configPath ?? resolveConfigPathForEnv(params.env ?? process.env);
   if (!existsSync(configPath)) {
     if (!params.allowCreateConfig) {
-      return;
+      return 0;
     }
     ensureConfigExists(configPath);
   }
   const cfg = readConfig(configPath);
-  const workspaceAgentIds = new Set(listBustlyWorkspaceAgentIds(cfg, normalizedWorkspaceId));
-  for (const preset of params.presets) {
+  const existingWorkspaceAgentIds = new Set(
+    listBustlyWorkspaceAgentIds(cfg, normalizedWorkspaceId),
+  );
+  const entryById = new Map(
+    listAgentEntries(cfg)
+      .filter((entry) => existingWorkspaceAgentIds.has(entry.id))
+      .map((entry) => [entry.id, entry] as const),
+  );
+  const workspaceAgentIds = new Set(existingWorkspaceAgentIds);
+  const presets =
+    params.presets ?? (await loadEnabledBustlyWorkspaceBootstrapAgents({ env: params.env }));
+  let bootstrappedCount = 0;
+  for (const preset of presets) {
     if (preset.slug === DEFAULT_BUSTLY_AGENT_NAME || preset.isMain) {
       continue;
     }
     const agentId = buildBustlyWorkspaceAgentId(normalizedWorkspaceId, preset.slug);
+    const existingEntry = entryById.get(agentId);
+    const workspaceDir =
+      existingEntry?.workspace?.trim() ||
+      resolveBustlyWorkspaceAgentWorkspaceDir(normalizedWorkspaceId, preset.slug, params.env);
+    const workspaceExists = existsSync(workspaceDir);
     if (!workspaceAgentIds.has(agentId)) {
       await createBustlyWorkspaceAgent({
         // Keep the full workspace UUID for bootstrap/Supabase lookups.
@@ -682,22 +719,31 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
         workspaceName: params.workspaceName,
         agentName: preset.slug,
         displayName: preset.label,
-        icon: preset.icon,
+        ...(workspaceExists ? {} : { icon: preset.icon }),
+        ...(preset.bootstrapMetadata ? { bootstrapMetadata: preset.bootstrapMetadata } : {}),
+        requireBootstrapMetadata: !workspaceExists,
+        skipBootstrap: workspaceExists,
         configPath,
         allowCreateConfig: params.allowCreateConfig,
         env: params.env,
       });
       workspaceAgentIds.add(agentId);
+      if (!workspaceExists) {
+        bootstrappedCount += 1;
+      }
       continue;
     }
-    const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(
-      normalizedWorkspaceId,
-      preset.slug,
-      params.env,
-    );
-    setBustlyAgentMetadata({
-      workspaceDir,
-      icon: preset.icon,
-    });
+    if (!workspaceExists) {
+      await initializeBustlyWorkspaceBootstrap({
+        workspaceDir,
+        workspaceId: params.workspaceId,
+        workspaceName: params.workspaceName,
+        agentName: preset.slug,
+        ...(preset.bootstrapMetadata ? { metadata: preset.bootstrapMetadata } : {}),
+        requireAgentMetadata: true,
+      });
+      bootstrappedCount += 1;
+    }
   }
+  return bootstrappedCount;
 }

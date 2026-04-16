@@ -2,10 +2,19 @@ import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import * as path from "node:path";
+import {
+  saveBustlyAgentMetadata,
+  type BustlyAgentUseCase,
+  type BustlyAgentMetadata,
+} from "../agents/bustly-agent-metadata.js";
 import { loadWorkspaceTemplate } from "../agents/workspace.js";
 import { getBustlyAccessToken, readBustlyOAuthState } from "../bustly-oauth.js";
 import type { BustlyOAuthState } from "../config/types.base.js";
-import { normalizeBustlyAgentName } from "./workspace-agent.js";
+import {
+  loadBustlyRemoteAgentMetadata,
+  loadEnabledBustlyRemoteAgentPresets,
+} from "./agent-presets.js";
+import { DEFAULT_BUSTLY_AGENT_NAME, normalizeBustlyAgentName } from "./workspace-agent.js";
 
 const MANAGED_MARKER = "<!-- Managed by Bustly bootstrap. Edit with care. -->";
 const CONTEXT_VERSION = 1;
@@ -1062,11 +1071,42 @@ async function writeManagedFile(filePath: string, content: string): Promise<void
   await fs.writeFile(filePath, content, "utf-8");
 }
 
+export type BustlyWorkspaceBootstrapAgent = {
+  slug: string;
+  label: string;
+  icon?: string;
+  isMain: boolean;
+  useCases?: BustlyAgentUseCase[];
+  bootstrapMetadata: BustlyAgentMetadata;
+};
+
+export async function loadEnabledBustlyWorkspaceBootstrapAgents(options?: {
+  env?: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
+}): Promise<BustlyWorkspaceBootstrapAgent[]> {
+  const presets = await loadEnabledBustlyRemoteAgentPresets(options);
+  return await Promise.all(
+    presets.map(async (preset) => {
+      const metadata = await loadBustlyRemoteAgentMetadata(preset.slug, options);
+      return {
+        slug: preset.slug,
+        label: metadata.label ?? preset.slug,
+        icon: metadata.icon,
+        isMain: preset.slug === DEFAULT_BUSTLY_AGENT_NAME,
+        useCases: metadata.useCases?.map((useCase) => ({ ...useCase })) ?? [],
+        bootstrapMetadata: metadata,
+      };
+    }),
+  );
+}
+
 export async function initializeBustlyWorkspaceBootstrap(params: {
   workspaceDir: string;
   workspaceId: string;
   workspaceName?: string;
   agentName?: string;
+  metadata?: BustlyAgentMetadata;
+  requireAgentMetadata?: boolean;
   force?: boolean;
 }): Promise<void> {
   const context = await buildBustlyBootstrapContext({
@@ -1075,16 +1115,28 @@ export async function initializeBustlyWorkspaceBootstrap(params: {
   });
   const values = buildTemplateValues(context);
   const workspaceDir = params.workspaceDir;
+  const normalizedAgentName = normalizeBustlyAgentName(params.agentName);
 
   await fs.mkdir(workspaceDir, { recursive: true });
 
-  const [agents, soul, identity, user, tools, heartbeat] = await Promise.all([
-    loadRenderedTemplate("AGENTS.md", values, { agentName: params.agentName }),
-    loadRenderedTemplate("SOUL.md", values, { agentName: params.agentName }),
-    loadRenderedTemplate("IDENTITY.md", values, { agentName: params.agentName }),
-    loadRenderedTemplate("USER.md", values, { agentName: params.agentName }),
-    loadRenderedTemplate("TOOLS.md", values, { agentName: params.agentName }),
-    loadRenderedTemplate("HEARTBEAT.md", values, { agentName: params.agentName }),
+  const metadataPromise =
+    params.metadata !== undefined
+      ? Promise.resolve(params.metadata)
+      : loadBustlyRemoteAgentMetadata(normalizedAgentName).catch((error) => {
+          if (params.requireAgentMetadata) {
+            throw error;
+          }
+          return undefined;
+        });
+
+  const [agents, soul, identity, user, tools, heartbeat, metadata] = await Promise.all([
+    loadRenderedTemplate("AGENTS.md", values, { agentName: normalizedAgentName }),
+    loadRenderedTemplate("SOUL.md", values, { agentName: normalizedAgentName }),
+    loadRenderedTemplate("IDENTITY.md", values, { agentName: normalizedAgentName }),
+    loadRenderedTemplate("USER.md", values, { agentName: normalizedAgentName }),
+    loadRenderedTemplate("TOOLS.md", values, { agentName: normalizedAgentName }),
+    loadRenderedTemplate("HEARTBEAT.md", values, { agentName: normalizedAgentName }),
+    metadataPromise,
   ]);
 
   await Promise.all([
@@ -1096,4 +1148,8 @@ export async function initializeBustlyWorkspaceBootstrap(params: {
     writeManagedFile(path.join(workspaceDir, "HEARTBEAT.md"), heartbeat),
     fs.rm(path.join(workspaceDir, "BOOTSTRAP.md"), { force: true }),
   ]);
+
+  if (metadata) {
+    saveBustlyAgentMetadata(workspaceDir, metadata);
+  }
 }

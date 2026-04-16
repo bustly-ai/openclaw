@@ -138,6 +138,7 @@ export async function ensureBustlyWorkspaceAgentConfig(params: {
   const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId, agentName, env);
   const agentId = buildBustlyWorkspaceAgentId(workspaceId, agentName);
   const config = readConfigFromPath(configPath);
+  const workspaceExists = existsSync(workspaceDir);
 
   const configWithoutMain = listAgentEntries(config).some((entry) => entry.id === "main")
     ? {
@@ -186,12 +187,15 @@ export async function ensureBustlyWorkspaceAgentConfig(params: {
       env,
     },
   );
-  await initializeBustlyWorkspaceBootstrap({
-    workspaceDir,
-    workspaceId,
-    workspaceName: params.workspaceName,
-    agentName,
-  });
+  if (!workspaceExists) {
+    await initializeBustlyWorkspaceBootstrap({
+      workspaceDir,
+      workspaceId,
+      workspaceName: params.workspaceName,
+      agentName,
+      requireAgentMetadata: agentName === DEFAULT_BUSTLY_AGENT_NAME,
+    });
+  }
 
   if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
     writeConfigToPath(configPath, nextConfig);

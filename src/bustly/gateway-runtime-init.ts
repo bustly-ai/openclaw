@@ -1,14 +1,14 @@
 import { randomBytes } from "node:crypto";
-import { createConfigIO, type OpenClawConfig } from "../config/config.js";
-import { DEFAULT_GATEWAY_PORT, resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { ensurePiAuthJsonFromAuthProfiles } from "../agents/pi-auth-json.js";
+import { createConfigIO, type GatewayBindMode, type OpenClawConfig } from "../config/config.js";
+import { DEFAULT_GATEWAY_PORT, resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { synchronizeBustlyWorkspaceContext } from "./workspace-runtime.js";
 
 export type GatewayRuntimeNodeManager = "npm" | "pnpm" | "bun";
-export type GatewayRuntimeBind = "loopback" | "lan" | "auto";
+export type GatewayRuntimeBind = GatewayBindMode;
 
 export interface GatewayRuntimeInitOptions {
   workspaceId: string;
@@ -30,7 +30,7 @@ export interface GatewayRuntimeInitResult {
   configPath: string;
   gatewayPort: number;
   gatewayToken?: string;
-  gatewayBind: string;
+  gatewayBind: GatewayBindMode;
   workspace: string;
   workspaceId: string;
   agentId: string;
@@ -63,9 +63,18 @@ function normalizeGatewayPort(value: unknown, fallback: number): number {
   return fallback;
 }
 
-function resolveGatewayBind(value: unknown, fallback: string): string {
+function resolveGatewayBind(value: unknown, fallback: GatewayBindMode): GatewayBindMode {
   const raw = typeof value === "string" ? value.trim() : "";
-  return raw || fallback;
+  switch (raw) {
+    case "auto":
+    case "lan":
+    case "loopback":
+    case "custom":
+    case "tailnet":
+      return raw;
+    default:
+      return fallback;
+  }
 }
 
 function resolveGatewayToken(value: unknown): string {
@@ -84,7 +93,7 @@ function applyGatewayRuntimeBaseConfig(
 ): {
   config: OpenClawConfig;
   gatewayPort: number;
-  gatewayBind: string;
+  gatewayBind: GatewayBindMode;
   gatewayToken: string;
 } {
   const gatewayPort = normalizeGatewayPort(
