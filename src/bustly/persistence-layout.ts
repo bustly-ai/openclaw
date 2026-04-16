@@ -6,6 +6,7 @@ export type PersistentAssetSpec = {
   assetKey: string;
   path: string;
   storage: "efs" | "object-storage";
+  kind?: "directory" | "file";
 };
 
 function parseJsonArray<T>(raw: string | undefined): T[] {
@@ -108,18 +109,29 @@ export async function applyPersistenceLayout(params: {
   );
   const mappedRoots: string[] = [];
   for (const asset of persistentAssets) {
+    const assetKind = asset.kind ?? "directory";
     const mappedParent = mappedRoots.find((root) => {
       const relative = path.relative(root, asset.path);
       return relative && !relative.startsWith("..") && !path.isAbsolute(relative);
     });
     if (mappedParent) {
-      await fs.mkdir(asset.path, { recursive: true });
+      if (assetKind === "directory") {
+        await fs.mkdir(asset.path, { recursive: true });
+      } else {
+        await ensureParent(asset.path);
+      }
       continue;
     }
     const targetPath = path.join(efsMountRoot, "persistent", asset.assetKey);
-    await fs.mkdir(targetPath, { recursive: true });
+    if (assetKind === "directory") {
+      await fs.mkdir(targetPath, { recursive: true });
+    } else {
+      await ensureParent(targetPath);
+    }
     await ensureSymlink(asset.path, targetPath);
-    mappedRoots.push(asset.path);
+    if (assetKind === "directory") {
+      mappedRoots.push(asset.path);
+    }
   }
 
   for (const ephemeralPath of params.ephemeralPaths ?? []) {

@@ -54,6 +54,46 @@ describe("applyPersistenceLayout", () => {
     await expect(fs.stat(cacheDir)).resolves.toBeTruthy();
   });
 
+  it("maps declared file assets as files rather than directories", async () => {
+    const root = await makeTempRoot();
+    const efsMountRoot = path.join(root, "mnt", "bustly");
+    const stateDir = path.join(root, ".bustly");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const oauthPath = path.join(stateDir, "bustlyOauth.json");
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, '{"gateway":true}');
+    await fs.writeFile(oauthPath, '{"oauth":true}');
+
+    await applyPersistenceLayout({
+      efsMountRoot,
+      persistentAssets: [
+        {
+          assetKey: "gateway-config",
+          path: configPath,
+          storage: "efs",
+          kind: "file",
+        },
+        {
+          assetKey: "oauth-state",
+          path: oauthPath,
+          storage: "efs",
+          kind: "file",
+        },
+      ],
+      ephemeralPaths: [],
+    });
+
+    expect((await fs.lstat(configPath)).isSymbolicLink()).toBe(true);
+    expect((await fs.lstat(oauthPath)).isSymbolicLink()).toBe(true);
+    expect(await fs.readFile(path.join(efsMountRoot, "persistent", "gateway-config"), "utf8")).toBe(
+      '{"gateway":true}',
+    );
+    expect(await fs.readFile(path.join(efsMountRoot, "persistent", "oauth-state"), "utf8")).toBe(
+      '{"oauth":true}',
+    );
+  });
+
   it("ignores non-EFS assets and relative paths", async () => {
     const root = await makeTempRoot();
     const efsMountRoot = path.join(root, "mnt", "bustly");
