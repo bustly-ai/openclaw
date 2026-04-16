@@ -517,6 +517,10 @@ img.chat-avatar {
 
 .chat-flow-processed-body {
   margin-top: 6px;
+  max-height: min(420px, 48vh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 6px;
 }
 
 .chat-flow-tool-detail {
