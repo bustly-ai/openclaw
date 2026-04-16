@@ -14,7 +14,6 @@ import {
   BUSTLY_DEFAULT_MODEL_REF,
   syncBustlyConfigFile,
 } from "./runtime-config.js";
-import { resolveFirstAccessibleBustlyWorkspace } from "./supabase.js";
 import {
   buildBustlyWorkspaceAgentId,
   DEFAULT_BUSTLY_AGENT_NAME,
@@ -257,40 +256,17 @@ export async function setActiveBustlyWorkspace(params: {
     throw new Error("Missing workspaceId");
   }
   const currentWorkspaceId = resolveBustlyWorkspaceIdFromOAuthState();
-  let binding: (BustlyWorkspaceBinding & { workspaceId: string }) | null;
-  try {
-    binding = await synchronizeBustlyWorkspaceContext({
-      workspaceId: nextWorkspaceId,
-      workspaceName: params.workspaceName,
-      agentName: params.agentName,
-      selectedModelInput: params.selectedModelInput,
-      configPath: params.configPath,
-      allowCreateConfig: params.allowCreateConfig,
-      userAgent: params.userAgent,
-      baseUrl: params.baseUrl,
-      env: params.env,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!/not found for bootstrap/i.test(message)) {
-      throw error;
-    }
-    const fallbackWorkspace = await resolveFirstAccessibleBustlyWorkspace();
-    if (!fallbackWorkspace || fallbackWorkspace.id === nextWorkspaceId) {
-      throw error;
-    }
-    binding = await synchronizeBustlyWorkspaceContext({
-      workspaceId: fallbackWorkspace.id,
-      workspaceName: fallbackWorkspace.name,
-      agentName: params.agentName,
-      selectedModelInput: params.selectedModelInput,
-      configPath: params.configPath,
-      allowCreateConfig: params.allowCreateConfig,
-      userAgent: params.userAgent,
-      baseUrl: params.baseUrl,
-      env: params.env,
-    });
-  }
+  const binding = await synchronizeBustlyWorkspaceContext({
+    workspaceId: nextWorkspaceId,
+    workspaceName: params.workspaceName,
+    agentName: params.agentName,
+    selectedModelInput: params.selectedModelInput,
+    configPath: params.configPath,
+    allowCreateConfig: params.allowCreateConfig,
+    userAgent: params.userAgent,
+    baseUrl: params.baseUrl,
+    env: params.env,
+  });
   const resolvedWorkspaceId = binding?.workspaceId?.trim() ?? "";
   if (binding && resolvedWorkspaceId && currentWorkspaceId !== resolvedWorkspaceId) {
     setActiveWorkspaceId(resolvedWorkspaceId);
