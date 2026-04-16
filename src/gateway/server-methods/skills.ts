@@ -7,6 +7,8 @@ import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import {
   installBustlyGlobalSkill,
   listBustlyGlobalSkillCatalog,
+  uninstallBustlyGlobalSkill,
+  updateBustlyGlobalSkill,
 } from "../../bustly/skill-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
@@ -90,6 +92,40 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     try {
       await installBustlyGlobalSkill(skillKey);
+      respond(true, { ok: true, skillKey }, undefined);
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : String(error)),
+      );
+    }
+  },
+  "skills.catalog.update": async ({ params, respond }) => {
+    const skillKey = typeof params.skillKey === "string" ? params.skillKey.trim() : "";
+    if (!skillKey) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "skillKey is required"));
+      return;
+    }
+    try {
+      await updateBustlyGlobalSkill(skillKey);
+      respond(true, { ok: true, skillKey }, undefined);
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : String(error)),
+      );
+    }
+  },
+  "skills.catalog.uninstall": async ({ params, respond }) => {
+    const skillKey = typeof params.skillKey === "string" ? params.skillKey.trim() : "";
+    if (!skillKey) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "skillKey is required"));
+      return;
+    }
+    try {
+      await uninstallBustlyGlobalSkill(skillKey);
       respond(true, { ok: true, skillKey }, undefined);
     } catch (error) {
       respond(

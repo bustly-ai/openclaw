@@ -298,6 +298,10 @@ export async function ensureBustlyCloudReady(params?: {
       "No Bustly workspace found in ~/.bustly/bustlyOauth.json (user.workspaceId). Please sign in first.",
     );
   }
+  // Keep the default-installed skills snapshot in sync before runtime startup so
+  // bundled skill loading can enforce the catalog policy deterministically.
+  const { refreshBustlyDefaultInstalledSkillsSnapshot } = await import("./skill-catalog.js");
+  await refreshBustlyDefaultInstalledSkillsSnapshot();
   // Use a lazy import to avoid a static cycle: gateway-runtime-init depends on
   // workspace-runtime for workspace binding and bootstrap helpers.
   const { ensureGatewayRuntimeInit } = await import("./gateway-runtime-init.js");

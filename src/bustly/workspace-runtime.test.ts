@@ -31,6 +31,9 @@ const { ensureModelsJsonMock, ensurePiAuthJsonMock } = vi.hoisted(() => {
     ensurePiAuthJsonMock: vi.fn(async () => ({ authPath: "", wrote: true })),
   };
 });
+const { refreshDefaultInstalledSkillsSnapshotMock } = vi.hoisted(() => ({
+  refreshDefaultInstalledSkillsSnapshotMock: vi.fn(async () => {}),
+}));
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => oauthStateRef.current),
@@ -44,6 +47,10 @@ vi.mock("../bustly-oauth.js", () => ({
 
 vi.mock("./workspace-bootstrap.js", () => ({
   initializeBustlyWorkspaceBootstrap: (params: unknown) => bootstrapMock(params),
+}));
+
+vi.mock("./skill-catalog.js", () => ({
+  refreshBustlyDefaultInstalledSkillsSnapshot: () => refreshDefaultInstalledSkillsSnapshotMock(),
 }));
 
 vi.mock("../agents/models-config.js", () => ({
@@ -79,6 +86,8 @@ describe("workspace-runtime", () => {
     ensureModelsJsonMock.mockResolvedValue({ agentDir: "", wrote: true });
     ensurePiAuthJsonMock.mockReset();
     ensurePiAuthJsonMock.mockResolvedValue({ authPath: "", wrote: true });
+    refreshDefaultInstalledSkillsSnapshotMock.mockReset();
+    refreshDefaultInstalledSkillsSnapshotMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -198,6 +207,7 @@ describe("workspace-runtime", () => {
     expect(binding.workspaceDir).toContain(
       path.join("workspaces", "workspace-1", "agents", "overview"),
     );
+    expect(refreshDefaultInstalledSkillsSnapshotMock).toHaveBeenCalledTimes(1);
     expect(bootstrapMock).toHaveBeenCalledTimes(1);
     const configPath = process.env.OPENCLAW_CONFIG_PATH!;
     const config = JSON.parse(readFileSync(configPath, "utf-8")) as {
