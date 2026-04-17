@@ -118,6 +118,7 @@ describe("gateway-runtime-init", () => {
           workspace?: string;
           model?: { primary?: string } | string;
         };
+        list?: Array<{ id?: string; name?: string }>;
       };
       auth?: {
         profiles?: Record<string, unknown>;
@@ -140,10 +141,16 @@ describe("gateway-runtime-init", () => {
     expect(config.skills?.install?.nodeManager).toBe("pnpm");
     expect(config.session?.dmScope).toBe("per-account-channel-peer");
     expect(config.agents?.defaults?.workspace).toBe(result.workspace);
+    expect(
+      (config.agents?.list ?? []).some((entry) => entry.id === "bustly-workspace-1-marketing"),
+    ).toBe(true);
+    expect(
+      (config.agents?.list ?? []).some((entry) => entry.id === "bustly-workspace-1-store-ops"),
+    ).toBe(true);
     expect(config.auth?.profiles).toBeTruthy();
     expect(Object.keys(config.models?.providers ?? {})).toEqual(["bustly"]);
 
-    expect(bootstrapMock).toHaveBeenCalledTimes(1);
+    expect(bootstrapMock.mock.calls.length).toBeGreaterThanOrEqual(1);
     expect(ensureModelsJsonMock).toHaveBeenCalledTimes(1);
     expect(ensurePiAuthJsonMock).toHaveBeenCalledTimes(1);
     expect(ensureModelsJsonMock.mock.calls[0]?.[1]).toBe(

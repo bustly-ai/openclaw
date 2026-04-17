@@ -429,6 +429,7 @@ export async function createBustlyWorkspaceAgent(params: {
   agentName: string;
   displayName?: string;
   description?: string;
+  preserveTemplateIdentityName?: boolean;
   icon?: string;
   skills?: string[] | null;
   configPath?: string;
@@ -487,11 +488,15 @@ export async function createBustlyWorkspaceAgent(params: {
     workspaceName: params.workspaceName,
     agentName,
   });
-  syncBustlyAgentIdentityFields({
-    workspaceDir,
-    name: displayName,
-    description: params.description,
-  });
+  const shouldSyncIdentityName = !params.preserveTemplateIdentityName;
+  const shouldSyncIdentityDescription = Boolean(params.description?.trim());
+  if (shouldSyncIdentityName || shouldSyncIdentityDescription) {
+    syncBustlyAgentIdentityFields({
+      workspaceDir,
+      ...(shouldSyncIdentityName ? { name: displayName } : {}),
+      ...(shouldSyncIdentityDescription ? { description: params.description } : {}),
+    });
+  }
   setBustlyAgentMetadata({
     workspaceDir,
     icon,
@@ -682,6 +687,7 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
         workspaceName: params.workspaceName,
         agentName: preset.slug,
         displayName: preset.label,
+        preserveTemplateIdentityName: true,
         icon: preset.icon,
         configPath,
         allowCreateConfig: params.allowCreateConfig,
@@ -695,6 +701,20 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
       preset.slug,
       params.env,
     );
+    try {
+      await initializeBustlyWorkspaceBootstrap({
+        workspaceDir,
+        workspaceId: params.workspaceId,
+        workspaceName: params.workspaceName,
+        agentName: preset.slug,
+      });
+    } catch (error) {
+      console.warn("[Bustly Workspace Agents] failed to refresh preset bootstrap template", {
+        workspaceId: params.workspaceId,
+        agentName: preset.slug,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     setBustlyAgentMetadata({
       workspaceDir,
       icon: preset.icon,
