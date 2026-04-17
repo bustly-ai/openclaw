@@ -104,6 +104,24 @@ describe("normalizeCronJobCreate", () => {
     expect("sessionKey" in cleared).toBe(false);
   });
 
+  it("preserves reuseSession booleans and coerces common string values", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "sticky session",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      reuseSession: " true ",
+      payload: { kind: "agentTurn", message: "hi" },
+    }) as unknown as Record<string, unknown>;
+    expect(normalized.reuseSession).toBe(true);
+
+    const patched = normalizeCronJobPatch({
+      reuseSession: false,
+    }) as unknown as Record<string, unknown>;
+    expect(patched.reuseSession).toBe(false);
+  });
+
   it("canonicalizes payload.channel casing", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy provider",

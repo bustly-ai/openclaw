@@ -73,12 +73,27 @@ type RunCronTurnOptions = {
   cfgOverrides?: Parameters<typeof makeCfg>[2];
   deps?: CliDeps;
   jobPayload?: CronJob["payload"];
+  jobOverrides?: Partial<CronJob>;
   message?: string;
   mockTexts?: string[] | null;
   sessionKey?: string;
   storeEntries?: Record<string, Record<string, unknown>>;
   storePath?: string;
 };
+
+async function withFastTestEnvDisabled<T>(fn: () => Promise<T>) {
+  const previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
+  delete process.env.OPENCLAW_TEST_FAST;
+  try {
+    return await fn();
+  } finally {
+    if (previousFastTestEnv === undefined) {
+      delete process.env.OPENCLAW_TEST_FAST;
+    } else {
+      process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+    }
+  }
+}
 
 async function runCronTurn(home: string, options: RunCronTurnOptions = {}) {
   const storePath =
@@ -100,10 +115,15 @@ async function runCronTurn(home: string, options: RunCronTurnOptions = {}) {
   }
 
   const jobPayload = options.jobPayload ?? DEFAULT_AGENT_TURN_PAYLOAD;
+  const job = {
+    ...makeJob(jobPayload),
+    ...options.jobOverrides,
+    payload: jobPayload,
+  };
   const res = await runCronIsolatedAgentTurn({
     cfg: makeCfg(home, storePath, options.cfgOverrides),
     deps,
-    job: makeJob(jobPayload),
+    job,
     message:
       options.message ?? (jobPayload.kind === "agentTurn" ? jobPayload.message : DEFAULT_MESSAGE),
     sessionKey: options.sessionKey ?? DEFAULT_SESSION_KEY,
@@ -509,6 +529,42 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(first.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
       expect(second.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
       expect(second.sessionKey).not.toBe(first.sessionKey);
+    });
+  });
+
+  it("reuses the bound session when reuseSession is enabled", async () => {
+    await withFastTestEnvDisabled(async () => {
+      await withTempHome(async (home) => {
+        const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+        const deps = makeDeps();
+
+        const first = (
+          await runCronTurn(home, {
+            deps,
+            jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
+            jobOverrides: { reuseSession: true },
+            message: "ping",
+            mockTexts: ["ok"],
+            storePath,
+          })
+        ).res;
+
+        const second = (
+          await runCronTurn(home, {
+            deps,
+            jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
+            jobOverrides: { reuseSession: true },
+            message: "ping",
+            mockTexts: ["ok"],
+            storePath,
+          })
+        ).res;
+
+        expect(first.sessionId).toBeDefined();
+        expect(second.sessionId).toBe(first.sessionId);
+        expect(first.sessionKey).toBe(second.sessionKey);
+        expect(second.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+      });
     });
   });
 

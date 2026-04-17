@@ -118,6 +118,23 @@ export function isBustlyAgentConversationSessionKey(
   return /^agent:[^:]+:conversation:[^:]+$/i.test(normalizedSessionKey);
 }
 
+export function isBustlyAgentScheduledSessionKey(sessionKey: string, agentId?: string): boolean {
+  const normalizedSessionKey = (sessionKey ?? "").trim().toLowerCase();
+  if (!normalizedSessionKey.startsWith("agent:")) {
+    return false;
+  }
+  if (normalizedSessionKey.includes(":run:")) {
+    return false;
+  }
+  if (agentId) {
+    const normalizedAgentId = normalizeToken(agentId) || "main";
+    return /^agent:[^:]+:cron:[^:]+$/i.test(normalizedSessionKey)
+      ? normalizedSessionKey.startsWith(`agent:${normalizedAgentId}:cron:`)
+      : false;
+  }
+  return /^agent:[^:]+:cron:[^:]+$/i.test(normalizedSessionKey);
+}
+
 export function isAgentChannelSessionKey(sessionKey: string, agentId: string): boolean {
   const normalizedAgentId = normalizeToken(agentId) || "main";
   return sessionKey.startsWith(`agent:${normalizedAgentId}:main:channel:`);

@@ -173,7 +173,61 @@ describe("workspace-agents", () => {
     });
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.sessionKey).toBe(created.sessionKey);
+    expect(sessions[0]?.kind).toBe("conversation");
     expect(sessions[0]?.name).toBe("Daily pulse");
+  });
+
+  it("lists scheduled sessions and hides cron run aliases", () => {
+    const sessionsDir = path.join(stateDir, "agents", "bustly-workspace-1-overview", "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify(
+        {
+          "agent:bustly-workspace-1-overview:cron:drink-water": {
+            sessionId: "cron-session",
+            updatedAt: 300,
+            label: "提醒喝水",
+          },
+          "agent:bustly-workspace-1-overview:cron:drink-water:run:cron-session": {
+            sessionId: "cron-session",
+            updatedAt: 300,
+            label: "提醒喝水",
+          },
+          "agent:bustly-workspace-1-overview:conversation:daily-pulse": {
+            sessionId: "conversation-session",
+            updatedAt: 200,
+            label: "Daily pulse",
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const sessions = listBustlyWorkspaceAgentSessions({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+    });
+
+    expect(sessions).toEqual([
+      {
+        agentId: "bustly-workspace-1-overview",
+        sessionKey: "agent:bustly-workspace-1-overview:cron:drink-water",
+        kind: "scheduled",
+        name: "提醒喝水",
+        icon: undefined,
+        updatedAt: 300,
+      },
+      {
+        agentId: "bustly-workspace-1-overview",
+        sessionKey: "agent:bustly-workspace-1-overview:conversation:daily-pulse",
+        kind: "conversation",
+        name: "Daily pulse",
+        icon: undefined,
+        updatedAt: 200,
+      },
+    ]);
   });
 
   it("deletes a non-main workspace agent and removes directories", async () => {
@@ -260,6 +314,14 @@ describe("workspace-agents", () => {
         requireAgentMetadata: true,
       }),
     );
+    const nextConfig = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+    const marketingEntry = nextConfig.agents?.list?.find(
+      (entry) => entry.id === `bustly-${normalizedWorkspaceId}-marketing`,
+    );
+    expect(marketingEntry?.heartbeat).toMatchObject({
+      every: "30m",
+      target: "none",
+    });
   });
 
   it("loads preset agents from bootstrap config when presets are omitted", async () => {
@@ -283,6 +345,14 @@ describe("workspace-agents", () => {
         requireAgentMetadata: true,
       }),
     );
+    const nextConfig = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+    const financeEntry = nextConfig.agents?.list?.find(
+      (entry) => entry.id === "bustly-workspace-1-finance",
+    );
+    expect(financeEntry?.heartbeat).toMatchObject({
+      every: "30m",
+      target: "none",
+    });
   });
 
   it("skips bootstrap when the preset agent already exists on disk", async () => {

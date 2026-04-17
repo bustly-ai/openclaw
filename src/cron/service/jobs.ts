@@ -377,6 +377,10 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     id,
     agentId: normalizeOptionalAgentId(input.agentId),
     sessionKey: normalizeOptionalSessionKey((input as { sessionKey?: unknown }).sessionKey),
+    reuseSession:
+      typeof (input as { reuseSession?: unknown }).reuseSession === "boolean"
+        ? (input as { reuseSession?: boolean }).reuseSession
+        : undefined,
     name: normalizeRequiredName(input.name),
     description: normalizeOptionalText(input.description),
     enabled,
@@ -463,6 +467,12 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   }
   if ("sessionKey" in patch) {
     job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);
+  }
+  if ("reuseSession" in patch) {
+    job.reuseSession =
+      typeof (patch as { reuseSession?: unknown }).reuseSession === "boolean"
+        ? (patch as { reuseSession?: boolean }).reuseSession
+        : undefined;
   }
   assertSupportedJobSpec(job);
   assertDeliverySupport(job);

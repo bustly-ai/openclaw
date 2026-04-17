@@ -327,7 +327,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     ]);
   });
 
-  it("forces a fresh session for isolated cron runs", async () => {
+  it("forces a fresh session for isolated cron runs by default", async () => {
     const result = await runCronIsolatedAgentTurn(makeParams());
 
     expect(result.status).toBe("ok");
@@ -335,6 +335,52 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
       forceNew: true,
     });
+  });
+
+  it("reuses the isolated session when reuseSession is enabled", async () => {
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({
+        job: {
+          ...makeJob({ kind: "agentTurn", message: "test" }),
+          reuseSession: true,
+        },
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      forceNew: false,
+    });
+  });
+
+  it("labels new scheduled sessions with the job name", async () => {
+    const sessionEntry = {
+      sessionId: "test-session-id",
+      updatedAt: 0,
+      systemSent: false,
+      skillsSnapshot: undefined,
+    };
+    resolveCronSessionMock.mockReturnValue({
+      storePath: "/tmp/store.json",
+      store: {},
+      sessionEntry,
+      systemSent: false,
+      isNewSession: true,
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({
+        job: {
+          ...makeJob({ kind: "agentTurn", message: "test" }),
+          name: "提醒喝水",
+          reuseSession: true,
+        },
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(sessionEntry.label).toBe("提醒喝水");
   });
 
   it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {

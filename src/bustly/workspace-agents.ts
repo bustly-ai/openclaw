@@ -25,6 +25,7 @@ import {
   buildBustlyWorkspaceAgentPrefix,
   DEFAULT_BUSTLY_AGENT_NAME,
   isBustlyAgentConversationSessionKey,
+  isBustlyAgentScheduledSessionKey,
   normalizeBustlyAgentName,
   normalizeBustlyWorkspaceId,
 } from "./workspace-agent.js";
@@ -32,9 +33,14 @@ import {
   initializeBustlyWorkspaceBootstrap,
   loadEnabledBustlyWorkspaceBootstrapAgents,
 } from "./workspace-bootstrap.js";
+import { DEFAULT_BUSTLY_HEARTBEAT_EVERY } from "./heartbeats.js";
 import { resolveBustlyWorkspaceAgentWorkspaceDir } from "./workspace-runtime.js";
 
 type OpenClawAgentListEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+const DEFAULT_PRESET_HEARTBEAT: NonNullable<OpenClawAgentListEntry["heartbeat"]> = {
+  every: DEFAULT_BUSTLY_HEARTBEAT_EVERY,
+  target: "none",
+};
 
 export type BustlyWorkspaceAgentSummary = {
   agentId: string;
@@ -52,6 +58,7 @@ export type BustlyWorkspaceAgentSummary = {
 export type BustlyWorkspaceAgentSessionSummary = {
   agentId: string;
   sessionKey: string;
+  kind: "conversation" | "scheduled";
   name: string;
   icon?: string;
   updatedAt: number | null;
@@ -284,15 +291,18 @@ function listBustlyWorkspaceAgentIds(cfg: OpenClawConfig, workspaceId: string): 
     .map((entry) => entry.id);
 }
 
-function listBustlyAgentConversationSessions(
-  agentId: string,
-): BustlyWorkspaceAgentSessionSummary[] {
+function listBustlyAgentVisibleSessions(agentId: string): BustlyWorkspaceAgentSessionSummary[] {
   const store = loadSessionStore(resolveDefaultSessionStorePath(agentId));
   return Object.entries(store)
-    .filter(([sessionKey]) => isBustlyAgentConversationSessionKey(sessionKey, agentId))
+    .filter(
+      ([sessionKey]) =>
+        isBustlyAgentConversationSessionKey(sessionKey, agentId) ||
+        isBustlyAgentScheduledSessionKey(sessionKey, agentId),
+    )
     .map(([sessionKey, entry]) => ({
       agentId,
       sessionKey,
+      kind: isBustlyAgentScheduledSessionKey(sessionKey, agentId) ? "scheduled" : "conversation",
       name: entry.label?.trim() || "New conversation",
       icon: entry.icon?.trim() || undefined,
       updatedAt: entry.updatedAt ?? null,
@@ -368,7 +378,7 @@ export function listBustlyWorkspaceAgents(params: {
         entry.workspace?.trim() ||
         resolveBustlyWorkspaceAgentWorkspaceDir(normalizedWorkspaceId, agentName, params.env);
       const metadata = loadBustlyAgentMetadata(workspaceDir);
-      const sessions = listBustlyAgentConversationSessions(agentId);
+      const sessions = listBustlyAgentVisibleSessions(agentId);
       const displayName = entry.name?.trim() || agentName;
       const identityMarkdown = loadBustlyAgentIdentityContent(workspaceDir);
       const description = loadBustlyAgentDescription(workspaceDir);
@@ -423,7 +433,7 @@ export function listBustlyWorkspaceAgentSessions(params: {
   if (!agentId.startsWith(prefix) && agentId !== legacyMainAgentId) {
     return [];
   }
-  return listBustlyAgentConversationSessions(agentId);
+  return listBustlyAgentVisibleSessions(agentId);
 }
 
 export async function createBustlyWorkspaceAgent(params: {
@@ -433,6 +443,7 @@ export async function createBustlyWorkspaceAgent(params: {
   displayName?: string;
   description?: string;
   icon?: string;
+  heartbeat?: OpenClawAgentListEntry["heartbeat"];
   skills?: string[] | null;
   bootstrapMetadata?: BustlyAgentMetadata;
   requireBootstrapMetadata?: boolean;
@@ -472,6 +483,18 @@ export async function createBustlyWorkspaceAgent(params: {
     name: displayName,
     workspace: workspaceDir,
   });
+  const nextList = stripPerAgentSkipBootstrap(updated.agents?.list)?.map((entry) => {
+    if (normalizeAgentId(entry.id) !== normalizeAgentId(agentId)) {
+      return entry;
+    }
+    if (params.heartbeat === undefined) {
+      return entry;
+    }
+    return {
+      ...entry,
+      heartbeat: { ...params.heartbeat },
+    };
+  });
   const nextConfig: OpenClawConfig = {
     ...updated,
     agents: {
@@ -480,7 +503,7 @@ export async function createBustlyWorkspaceAgent(params: {
         ...updated.agents?.defaults,
         skipBootstrap: true,
       },
-      list: stripPerAgentSkipBootstrap(updated.agents?.list),
+      list: nextList,
     },
   };
 
@@ -549,6 +572,7 @@ export async function createBustlyWorkspaceAgentSession(params: {
   return {
     agentId,
     sessionKey,
+    kind: "conversation",
     sessionId,
     name: label,
     updatedAt,
@@ -720,6 +744,7 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
         agentName: preset.slug,
         displayName: preset.label,
         ...(workspaceExists ? {} : { icon: preset.icon }),
+        heartbeat: DEFAULT_PRESET_HEARTBEAT,
         ...(preset.bootstrapMetadata ? { bootstrapMetadata: preset.bootstrapMetadata } : {}),
         requireBootstrapMetadata: !workspaceExists,
         skipBootstrap: workspaceExists,
