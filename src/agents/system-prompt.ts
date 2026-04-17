@@ -64,36 +64,6 @@ function buildMemorySection(params: {
   return lines;
 }
 
-function buildSelfEvolutionSection(params: {
-  isMinimal: boolean;
-  availableTools: Set<string>;
-}) {
-  if (params.isMinimal) {
-    return [];
-  }
-  const hasSessionSearch = params.availableTools.has("session_search");
-  const hasSkillManage = params.availableTools.has("skill_manage");
-  if (!hasSessionSearch && !hasSkillManage) {
-    return [];
-  }
-  const lines = ["## Self Evolution"];
-  if (hasSessionSearch) {
-    lines.push(
-      "Use `session_search` to look for similar prior sessions when a task may repeat across conversations or when you need precedent before forming a new workflow.",
-    );
-  }
-  if (hasSkillManage) {
-    lines.push(
-      "Use `skill_manage` to codify stable step-by-step procedures into workspace skills under skills/<name>/ when a workflow becomes reusable.",
-    );
-  }
-  lines.push(
-    "Prefer MEMORY.md for durable facts/preferences/decisions; prefer skills for reusable procedures and operating playbooks.",
-  );
-  lines.push("");
-  return lines;
-}
-
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
   if (!ownerLine || isMinimal) {
     return [];
@@ -212,32 +182,6 @@ function buildInteractionSection() {
     "Do not use Markdown image syntax for local video/audio files. Render local video/audio paths as Markdown links with the absolute path target, for example `[clip.mp4](/absolute/path/to/clip.mp4)`.",
     "When your reply includes a local file path or directory path that the user may open, always render it as a Markdown link with the absolute path as the target, for example `[report.pdf](/absolute/path/to/report.pdf)` or `[open folder](/absolute/path/to/folder/)`. Do not leave openable local paths as plain text or only in code spans.",
     "After generating or modifying any file for the user, return the directory path containing that file in your reply so the user can inspect it.",
-    "",
-  ];
-}
-
-function buildChannelConnectionSection(params: {
-  isMinimal: boolean;
-  availableTools: Set<string>;
-  execToolName: string;
-  processToolName: string;
-}) {
-  if (params.isMinimal) {
-    return [];
-  }
-  if (!params.availableTools.has("exec")) {
-    return [];
-  }
-  return [
-    "## Channel Connection Workflow",
-    "When the user asks to connect/link/login a chat channel (especially WeChat/Weixin): follow this strict order and do not improvise.",
-    "0) Do not call `memory_search`, `memory_get`, `web_search`, or `web_fetch` before local channel/plugin checks complete.",
-    `1) Run \`${params.execToolName}\` to inspect local availability first (for example: \`openclaw plugins list --json\`, \`openclaw channels list\`).`,
-    "2) If plugin `openclaw-weixin` is installed/enabled locally, use the official command `openclaw channels login --channel openclaw-weixin`.",
-    "3) If an exec result says `Command still running`, continue by polling the same process until completion; do not switch to docs/web fallback early.",
-    "4) Only consult docs/web when local commands definitively show plugin missing or unsupported.",
-    "5) Never recommend third-party WeChat plugins when `openclaw-weixin` is present locally.",
-    "6) If the official plugin is missing, report that fact first and ask whether the user wants official install steps; do not silently pivot to community plugins.",
     "",
   ];
 }
@@ -473,10 +417,6 @@ export function buildAgentSystemPrompt(params: {
     availableTools,
     citationsMode: params.memoryCitationsMode,
   });
-  const selfEvolutionSection = buildSelfEvolutionSection({
-    isMinimal,
-    availableTools,
-  });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     isMinimal,
@@ -530,15 +470,8 @@ export function buildAgentSystemPrompt(params: {
     "",
     ...safetySection,
     ...buildInteractionSection(),
-    ...buildChannelConnectionSection({
-      isMinimal,
-      availableTools,
-      execToolName,
-      processToolName,
-    }),
     ...skillsSection,
     ...memorySection,
-    ...selfEvolutionSection,
     "",
     // Skip model aliases for subagent/none modes
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
@@ -679,41 +612,9 @@ export function buildAgentSystemPrompt(params: {
     }
   }
 
-  // Skip silent replies for subagent/none modes
-  if (!isMinimal) {
-    lines.push(
-      "## Silent Replies",
-      `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN}`,
-      "",
-      "⚠️ Rules:",
-      "- It must be your ENTIRE message — nothing else",
-      `- Never append it to an actual response (never include "${SILENT_REPLY_TOKEN}" in real replies)`,
-      "- Never wrap it in markdown or code blocks",
-      "",
-      `❌ Wrong: "Here's help... ${SILENT_REPLY_TOKEN}"`,
-      `❌ Wrong: "${SILENT_REPLY_TOKEN}"`,
-      `✅ Right: ${SILENT_REPLY_TOKEN}`,
-      "",
-    );
-  }
-
-  // Skip heartbeats for subagent/none modes
-  if (!isMinimal) {
-    lines.push(
-      "## Heartbeats",
-      heartbeatPromptLine,
-      "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
-      "HEARTBEAT_OK",
-      'OpenClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
-      'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
-      "",
-    );
-  }
-
   lines.push(
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
-    `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 
   return lines.filter(Boolean).join("\n");
@@ -752,7 +653,6 @@ export function buildRuntimeLine(
     runtimeChannel
       ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
       : "",
-    `thinking=${defaultThinkLevel ?? "off"}`,
   ]
     .filter(Boolean)
     .join(" | ")}`;

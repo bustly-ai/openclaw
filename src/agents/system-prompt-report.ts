@@ -138,7 +138,7 @@ export function buildSystemPromptReport(params: {
   const projectContext = extractBetween(
     systemPrompt,
     "\n# Project Context\n",
-    "\n## Silent Replies\n",
+    "\n## Heartbeats\n",
   );
   const projectContextChars = projectContext.text.length;
   const toolListText = extractToolListText(systemPrompt);

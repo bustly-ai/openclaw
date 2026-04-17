@@ -116,7 +116,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Reply Tags");
     expect(prompt).not.toContain("## Messaging");
     expect(prompt).not.toContain("## Voice (TTS)");
-    expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Safety");
     expect(prompt).toContain("## Interaction");
@@ -202,47 +201,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "After generating or modifying any file for the user, return the directory path containing that file in your reply so the user can inspect it.",
     );
-  });
-
-  it("includes strict channel connection workflow when command tools are available", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["exec", "process", "memory_search", "web_fetch"],
-    });
-
-    expect(prompt).toContain("## Channel Connection Workflow");
-    expect(prompt).toContain(
-      "When the user asks to connect/link/login a chat channel (especially WeChat/Weixin): follow this strict order and do not improvise.",
-    );
-    expect(prompt).toContain(
-      "0) Do not call `memory_search`, `memory_get`, `web_search`, or `web_fetch` before local channel/plugin checks complete.",
-    );
-    expect(prompt).toContain(
-      "2) If plugin `openclaw-weixin` is installed/enabled locally, use the official command `openclaw channels login --channel openclaw-weixin`.",
-    );
-  });
-
-  it("includes self-evolution guidance when session_search or skill_manage are available", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["memory_search", "session_search", "skill_manage"],
-    });
-
-    expect(prompt).toContain("## Self Evolution");
-    expect(prompt).toContain("Use `session_search` to look for similar prior sessions");
-    expect(prompt).toContain("Use `skill_manage` to codify stable step-by-step procedures");
-    expect(prompt).toContain(
-      "Prefer MEMORY.md for durable facts/preferences/decisions; prefer skills for reusable procedures and operating playbooks.",
-    );
-  });
-
-  it("omits channel connection workflow when exec tool is unavailable", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["memory_search", "web_fetch"],
-    });
-
-    expect(prompt).not.toContain("## Channel Connection Workflow");
   });
 
   it("includes voice hint when provided", () => {
