@@ -39,4 +39,16 @@ describe("registerOpsCli", () => {
       runtime,
     );
   });
+
+  it("supports legacy top-level alias commands", async () => {
+    const program = new Command();
+    registerOpsCli(program);
+
+    await program.parseAsync(["commerce", "providers", "--json"], { from: "user" });
+
+    expect(opsCommandMock).toHaveBeenCalledWith(
+      { skill: "commerce", args: ["providers", "--json"] },
+      runtime,
+    );
+  });
 });

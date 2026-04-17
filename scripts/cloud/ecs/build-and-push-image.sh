@@ -93,8 +93,23 @@ done
 
 require_cmd aws
 require_cmd docker
+require_cmd git
 
 export AWS_PROFILE="$AWS_PROFILE_NAME"
+
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git submodule update --init --recursive bustly-skills >/dev/null
+fi
+
+if [[ ! -f "bustly-skills/skills/.bustly-default-enabled.json" ]]; then
+  echo "missing bustly-skills/skills/.bustly-default-enabled.json; run 'git submodule update --init --recursive bustly-skills'" >&2
+  exit 1
+fi
+
+if [[ ! -f "bustly-skills/scripts/bustly-ops.js" ]]; then
+  echo "missing bustly-skills/scripts/bustly-ops.js; bustly runtime wrapper cannot be packaged" >&2
+  exit 1
+fi
 
 if [[ -z "$AWS_REGION" || -z "$ECR_URL" ]]; then
   require_cmd terraform

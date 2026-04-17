@@ -23,6 +23,7 @@ Usage:
     [--bustly-api-base-url <url>] \
     [--bustly-web-base-url <url>] \
     [--bustly-client-id <id>] \
+    [--bustly-workspace-template-base-url <url>] \
     [--bustly-profile prod|test|custom] \
     [--disable-local-oauth-fallback 1] \
     [--bustly-supabase-url <url>] \
@@ -96,11 +97,14 @@ BUSTLY_ACCOUNT_WEB_BASE_URL=""
 BUSTLY_API_BASE_URL=""
 BUSTLY_WEB_BASE_URL=""
 BUSTLY_CLIENT_ID=""
+BUSTLY_WORKSPACE_TEMPLATE_BASE_URL="${BUSTLY_WORKSPACE_TEMPLATE_BASE_URL:-}"
 BUSTLY_ACCOUNT_API_BASE_URL_DEFAULT="https://gw.bustly.ai/api/v1"
 BUSTLY_ACCOUNT_WEB_BASE_URL_DEFAULT="https://www.bustly.ai"
 BUSTLY_API_BASE_URL_DEFAULT="https://gw.bustly.ai/api/v1"
 BUSTLY_WEB_BASE_URL_DEFAULT="https://www.bustly.ai"
 BUSTLY_CLIENT_ID_DEFAULT="openclaw-desktop"
+BUSTLY_WORKSPACE_TEMPLATE_BASE_URL_DEFAULT="https://raw.githubusercontent.com/salerio-ai/bustly-prompts/main/openclaw-prompts"
+BUSTLY_DEFAULT_ENABLED_SKILLS_JSON="${BUSTLY_DEFAULT_ENABLED_SKILLS_JSON:-}"
 BUSTLY_SUPABASE_URL="${BUSTLY_SUPABASE_URL:-}"
 BUSTLY_SUPABASE_ANON_KEY="${BUSTLY_SUPABASE_ANON_KEY:-}"
 BUSTLY_USER_ID="${BUSTLY_USER_ID:-}"
@@ -114,6 +118,7 @@ BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN="${BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN:-}"
 BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT="${BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT:-}"
 BUSTLY_SESSION_ID="${BUSTLY_SESSION_ID:-}"
 BUSTLY_LOGIN_TRACE_ID=""
+BUSTLY_GATEWAY_TOKEN_MODE="${BUSTLY_GATEWAY_TOKEN_MODE:-static}"
 ROUTING_MODE="path"
 RUNTIME_DOMAIN_SUFFIX="${RUNTIME_DOMAIN_SUFFIX:-}"
 
@@ -197,6 +202,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --bustly-client-id)
       BUSTLY_CLIENT_ID="${2:-}"
+      shift 2
+      ;;
+    --bustly-workspace-template-base-url)
+      BUSTLY_WORKSPACE_TEMPLATE_BASE_URL="${2:-}"
       shift 2
       ;;
     --bustly-profile)
@@ -299,6 +308,7 @@ if [[ "$BUSTLY_PROFILE" == "test" ]]; then
   BUSTLY_ACCOUNT_WEB_BASE_URL_DEFAULT="https://test-bustly-account.bustly.ai"
   BUSTLY_API_BASE_URL_DEFAULT="https://test-bustly-account.bustly.ai"
   BUSTLY_WEB_BASE_URL_DEFAULT="https://test-www.bustly.shop"
+  BUSTLY_WORKSPACE_TEMPLATE_BASE_URL_DEFAULT="https://raw.githubusercontent.com/bustly-ai/bustly-prompts/testing/openclaw-prompts"
 fi
 
 require_cmd aws
@@ -493,10 +503,49 @@ if [[ -z "$BUSTLY_API_BASE_URL" ]]; then
   BUSTLY_API_BASE_URL="$BUSTLY_ACCOUNT_API_BASE_URL"
 fi
 if [[ -z "$BUSTLY_WEB_BASE_URL" ]]; then
-  BUSTLY_WEB_BASE_URL="$BUSTLY_ACCOUNT_WEB_BASE_URL"
+  BUSTLY_WEB_BASE_URL="$BUSTLY_WEB_BASE_URL_DEFAULT"
 fi
 if [[ -z "$BUSTLY_CLIENT_ID" ]]; then
   BUSTLY_CLIENT_ID="$BUSTLY_CLIENT_ID_DEFAULT"
+fi
+if [[ -z "$BUSTLY_WORKSPACE_TEMPLATE_BASE_URL" ]]; then
+  BUSTLY_WORKSPACE_TEMPLATE_BASE_URL="$BUSTLY_WORKSPACE_TEMPLATE_BASE_URL_DEFAULT"
+fi
+
+if [[ -z "$BUSTLY_DEFAULT_ENABLED_SKILLS_JSON" ]]; then
+  DEFAULT_ENABLED_SKILLS_PATH="${OPENCLAW_DEFAULT_ENABLED_SKILLS_PATH:-${PWD}/bustly-skills/skills/.bustly-default-enabled.json}"
+  if [[ -f "$DEFAULT_ENABLED_SKILLS_PATH" ]]; then
+    BUSTLY_DEFAULT_ENABLED_SKILLS_JSON="$(
+      python3 - "$DEFAULT_ENABLED_SKILLS_PATH" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+except Exception:
+    print("")
+    raise SystemExit(0)
+
+if not isinstance(payload, dict):
+    print("")
+    raise SystemExit(0)
+
+default_enabled = payload.get("defaultEnabled")
+if not isinstance(default_enabled, list):
+    print("")
+    raise SystemExit(0)
+
+normalized = [entry.strip() for entry in default_enabled if isinstance(entry, str) and entry.strip()]
+if not normalized:
+    print("")
+    raise SystemExit(0)
+
+print(json.dumps(normalized, ensure_ascii=False, separators=(",", ":")))
+PY
+    )"
+  fi
 fi
 
 NAME_SUFFIX="$(slug_hash "$WORKSPACE_ID")"
@@ -577,6 +626,32 @@ TASK_DEF_FILE="$(mktemp)"
 SERVICE_FILE="$(mktemp)"
 trap 'rm -f "$TASK_DEF_FILE" "$SERVICE_FILE"' EXIT
 
+# Ensure the task environment JSON below sees the resolved shell variables.
+export GATEWAY_TOKEN
+export SKIP_CHANNELS
+export SKIP_CRON
+export WORKSPACE_ID
+export BUSTLY_OAUTH_STATE_B64
+export BUSTLY_USER_ACCESS_TOKEN
+export BUSTLY_REFRESH_TOKEN
+export BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN
+export BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT
+export BUSTLY_SESSION_ID
+export BUSTLY_USER_ID
+export BUSTLY_USER_NAME
+export BUSTLY_USER_EMAIL
+export BUSTLY_SUPABASE_URL
+export BUSTLY_SUPABASE_ANON_KEY
+export BUSTLY_LOGIN_TRACE_ID
+export BUSTLY_ACCOUNT_API_BASE_URL
+export BUSTLY_ACCOUNT_WEB_BASE_URL
+export BUSTLY_API_BASE_URL
+export BUSTLY_WEB_BASE_URL
+export BUSTLY_CLIENT_ID
+export BUSTLY_WORKSPACE_TEMPLATE_BASE_URL
+export BUSTLY_GATEWAY_TOKEN_MODE
+export BUSTLY_DEFAULT_ENABLED_SKILLS_JSON
+
 ENVIRONMENT_JSON="$(
   python3 - <<'PY'
 import json
@@ -612,6 +687,15 @@ env = [
     {"name": "BUSTLY_API_BASE_URL", "value": os.environ.get("BUSTLY_API_BASE_URL", "")},
     {"name": "BUSTLY_WEB_BASE_URL", "value": os.environ.get("BUSTLY_WEB_BASE_URL", "")},
     {"name": "BUSTLY_CLIENT_ID", "value": os.environ.get("BUSTLY_CLIENT_ID", "")},
+    {
+        "name": "BUSTLY_WORKSPACE_TEMPLATE_BASE_URL",
+        "value": os.environ.get("BUSTLY_WORKSPACE_TEMPLATE_BASE_URL", ""),
+    },
+    {"name": "BUSTLY_GATEWAY_TOKEN_MODE", "value": os.environ.get("BUSTLY_GATEWAY_TOKEN_MODE", "static")},
+    {
+        "name": "BUSTLY_DEFAULT_ENABLED_SKILLS_JSON",
+        "value": os.environ.get("BUSTLY_DEFAULT_ENABLED_SKILLS_JSON", ""),
+    },
 ]
 
 print(json.dumps(env))
@@ -633,7 +717,7 @@ cat >"$TASK_DEF_FILE" <<JSON
       "name": "openclaw",
       "image": "${IMAGE}",
       "essential": true,
-      "command": ["bash", "scripts/cloud/ecs/runtime-entrypoint.sh", "node", "dist/index.js", "gateway", "run", "--cloud", "--allow-unconfigured", "--bind", "lan", "--port", "${CONTAINER_PORT}", "--verbose"],
+      "command": ["bash", "scripts/cloud/ecs/runtime-entrypoint.sh", "node", "dist/index.js", "gateway", "run", "--cloud", "--allow-unconfigured", "--bind", "lan", "--port", "${CONTAINER_PORT}", "--token", "${GATEWAY_TOKEN}", "--verbose"],
       "portMappings": [
         {
           "containerPort": ${CONTAINER_PORT},
@@ -822,3 +906,4 @@ fi
 echo "  http_base_url: ${HTTP_BASE_URL}"
 echo "  ws_url: ${WS_URL}"
 echo "  gateway_token: ${GATEWAY_TOKEN}"
+echo "  bustly_workspace_template_base_url: ${BUSTLY_WORKSPACE_TEMPLATE_BASE_URL}"

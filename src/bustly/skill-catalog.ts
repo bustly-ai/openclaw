@@ -116,7 +116,36 @@ const BUSTLY_LAYER_CATEGORY_LABELS: Record<string, string> = {
 const BUSTLY_SKILL_MANIFEST_FILENAME = ".bustly-skill.json";
 const BUSTLY_DEFAULT_INSTALLED_SNAPSHOT_FILENAME = ".bustly-default-installed.json";
 const BUSTLY_DEFAULT_ENABLED_FILENAME = ".bustly-default-enabled.json";
+const BUSTLY_DEFAULT_ENABLED_SKILLS_JSON_ENV = "BUSTLY_DEFAULT_ENABLED_SKILLS_JSON";
+const BUSTLY_DEFAULT_ENABLED_SKILLS_ENV = "BUSTLY_DEFAULT_ENABLED_SKILLS";
 const BUSTLY_SKILL_DOWNLOAD_TIMEOUT_MS = 60_000;
+const BUSTLY_CATALOG_ROWS_CACHE_TTL_MS = 15_000;
+
+let cachedCatalogRows: BustlyCatalogResolvedRow[] | null = null;
+let cachedCatalogRowsAtMs = 0;
+let defaultMaterializationPromise: Promise<void> | null = null;
+
+function readCatalogRowsCache(): BustlyCatalogResolvedRow[] | null {
+  if (!cachedCatalogRows) {
+    return null;
+  }
+  if (Date.now() - cachedCatalogRowsAtMs > BUSTLY_CATALOG_ROWS_CACHE_TTL_MS) {
+    cachedCatalogRows = null;
+    cachedCatalogRowsAtMs = 0;
+    return null;
+  }
+  return cachedCatalogRows;
+}
+
+function writeCatalogRowsCache(rows: BustlyCatalogResolvedRow[]): void {
+  cachedCatalogRows = rows;
+  cachedCatalogRowsAtMs = Date.now();
+}
+
+function invalidateCatalogRowsCache(): void {
+  cachedCatalogRows = null;
+  cachedCatalogRowsAtMs = 0;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -186,34 +215,66 @@ function resolveBustlyDefaultInstalledSnapshotPath(): string {
   return join(resolveBustlyManagedSkillsDir(), BUSTLY_DEFAULT_INSTALLED_SNAPSHOT_FILENAME);
 }
 
+function appendDefaultEnabledTokens(target: Set<string>, entries: unknown): void {
+  if (!Array.isArray(entries)) {
+    return;
+  }
+  for (const entry of entries) {
+    const raw = typeof entry === "string" ? entry.trim() : "";
+    if (!raw) {
+      continue;
+    }
+    const token = normalizeBustlySkillLookupToken(raw);
+    if (token) {
+      target.add(token);
+    }
+  }
+}
+
+function readDefaultEnabledSkillTokensFromEnv(): Set<string> {
+  const tokens = new Set<string>();
+
+  const rawJson = process.env[BUSTLY_DEFAULT_ENABLED_SKILLS_JSON_ENV]?.trim();
+  if (rawJson) {
+    try {
+      const parsed = JSON.parse(rawJson) as unknown;
+      if (Array.isArray(parsed)) {
+        appendDefaultEnabledTokens(tokens, parsed);
+      } else if (isRecord(parsed)) {
+        appendDefaultEnabledTokens(tokens, parsed.defaultEnabled);
+      }
+    } catch {
+      // Ignore invalid env JSON and keep file-based fallback.
+    }
+  }
+
+  const rawCsv = process.env[BUSTLY_DEFAULT_ENABLED_SKILLS_ENV]?.trim();
+  if (rawCsv) {
+    appendDefaultEnabledTokens(tokens, rawCsv.split(","));
+  }
+
+  return tokens;
+}
+
 function readBundledDefaultEnabledSkillTokens(): Set<string> {
+  const tokens = readDefaultEnabledSkillTokensFromEnv();
   const bundledSkillsDir = resolveBundledSkillsDir();
   if (!bundledSkillsDir) {
-    return new Set();
+    return tokens;
   }
   const defaultEnabledPath = join(bundledSkillsDir, BUSTLY_DEFAULT_ENABLED_FILENAME);
   if (!existsSync(defaultEnabledPath)) {
-    return new Set();
+    return tokens;
   }
   try {
     const parsed = JSON.parse(readFileSync(defaultEnabledPath, "utf-8")) as unknown;
     if (!isRecord(parsed) || !Array.isArray(parsed.defaultEnabled)) {
-      return new Set();
+      return tokens;
     }
-    const tokens = new Set<string>();
-    for (const entry of parsed.defaultEnabled) {
-      const value = typeof entry === "string" ? entry.trim() : "";
-      if (!value) {
-        continue;
-      }
-      const token = normalizeBustlySkillLookupToken(value);
-      if (token) {
-        tokens.add(token);
-      }
-    }
+    appendDefaultEnabledTokens(tokens, parsed.defaultEnabled);
     return tokens;
   } catch {
-    return new Set();
+    return tokens;
   }
 }
 
@@ -473,6 +534,19 @@ async function ensureDefaultInstalledSkillsMaterialized(
   }
 }
 
+function scheduleDefaultInstalledSkillsMaterialization(rows: BustlyCatalogResolvedRow[]): void {
+  if (defaultMaterializationPromise) {
+    return;
+  }
+  defaultMaterializationPromise = ensureDefaultInstalledSkillsMaterialized(rows)
+    .catch(() => {
+      // Best-effort background task: listing should stay available.
+    })
+    .finally(() => {
+      defaultMaterializationPromise = null;
+    });
+}
+
 function resolvePublishedSkillArtifact(row: BustlyGlobalSkillCatalogRow): BustlySkillArtifact | undefined {
   const zipUrl = pickFirstString(row, [
     ["published_zip_url"],
@@ -584,14 +658,34 @@ function resolveCatalogRow(
 }
 
 async function fetchBustlyGlobalSkillCatalogRows(
-  options?: { slug?: string },
+  options?: { slug?: string; forceRefresh?: boolean },
 ): Promise<BustlyCatalogResolvedRow[]> {
+  const normalizedSlug = options?.slug?.trim();
+  const shouldForceRefresh = options?.forceRefresh === true;
+
+  if (!shouldForceRefresh) {
+    const cached = readCatalogRowsCache();
+    if (cached) {
+      if (!normalizedSlug) {
+        return cached;
+      }
+      const normalizedSlugToken = normalizeBustlySkillLookupToken(normalizedSlug);
+      if (normalizedSlugToken) {
+        const matched = cached.filter((entry) =>
+          normalizeBustlySkillLookupToken(entry.slug) === normalizedSlugToken,
+        );
+        if (matched.length > 0) {
+          return matched;
+        }
+      }
+    }
+  }
+
   const query = new URLSearchParams({
     select: "*",
     status: "eq.enabled",
     order: "name.asc",
   });
-  const normalizedSlug = options?.slug?.trim();
   if (normalizedSlug) {
     query.set("slug", `eq.${normalizedSlug}`);
     query.set("limit", "1");
@@ -610,9 +704,31 @@ async function fetchBustlyGlobalSkillCatalogRows(
     ? payload.filter((entry): entry is BustlyGlobalSkillCatalogRow => isRecord(entry))
     : [];
   const defaultInstalledSkillTokens = readBundledDefaultEnabledSkillTokens();
-  return rows
+  const resolvedRows = rows
     .map((row, index) => resolveCatalogRow(row, index, defaultInstalledSkillTokens))
     .filter((row) => isCatalogRowPublishedInstallable(row));
+
+  if (!normalizedSlug) {
+    writeCatalogRowsCache(resolvedRows);
+    return resolvedRows;
+  }
+
+  const existingCache = readCatalogRowsCache();
+  if (existingCache && resolvedRows.length > 0) {
+    const normalizedSlugToken = normalizeBustlySkillLookupToken(normalizedSlug);
+    const nextRows = [...existingCache];
+    const matchedIndex = nextRows.findIndex((entry) =>
+      normalizeBustlySkillLookupToken(entry.slug) === normalizedSlugToken,
+    );
+    if (matchedIndex >= 0) {
+      nextRows[matchedIndex] = resolvedRows[0];
+    } else {
+      nextRows.push(resolvedRows[0]);
+    }
+    writeCatalogRowsCache(nextRows);
+  }
+
+  return resolvedRows;
 }
 
 function resolveSkillCatalogItemSource(params: {
@@ -848,21 +964,24 @@ export function resolveBustlyDefaultInstalledSkillTokens(): Set<string> {
 }
 
 export async function refreshBustlyDefaultInstalledSkillsSnapshot(): Promise<void> {
-  const rows = await fetchBustlyGlobalSkillCatalogRows();
+  const rows = await fetchBustlyGlobalSkillCatalogRows({ forceRefresh: true });
   resolveCatalogDefaultInstalled(rows);
   await ensureDefaultInstalledSkillsMaterialized(rows);
 }
 
 export async function listBustlyGlobalSkillCatalog(): Promise<BustlyGlobalSkillCatalogItem[]> {
   const rows = await fetchBustlyGlobalSkillCatalogRows();
-  resolveCatalogDefaultInstalled(rows);
-  await ensureDefaultInstalledSkillsMaterialized(rows);
+  const defaultInstalledByToken = resolveCatalogDefaultInstalled(rows);
+  scheduleDefaultInstalledSkillsMaterialization(rows);
   const installedRecords = readInstalledSkillRecords();
 
   return rows.map((row) => {
     const skillToken = normalizeBustlySkillLookupToken(row.slug);
     const installedRecord = skillToken ? installedRecords.get(skillToken) : undefined;
-    const installedVersionId = installedRecord?.manifest.publishedVersionId;
+    const defaultSnapshotEntry = skillToken ? defaultInstalledByToken.get(skillToken) : undefined;
+    const installedVersionId =
+      installedRecord?.manifest.publishedVersionId
+      ?? (row.defaultInstalled ? defaultSnapshotEntry?.installedVersionId : undefined);
 
     const publishedVersionId = row.publishedVersionId;
     const hasUpdate = Boolean(
@@ -870,11 +989,11 @@ export async function listBustlyGlobalSkillCatalog(): Promise<BustlyGlobalSkillC
       && publishedVersionId
       && installedVersionId !== publishedVersionId,
     );
-    const installed = Boolean(installedRecord);
+    const installed = Boolean(installedRecord) || Boolean(row.defaultInstalled && installedVersionId);
     const hasInstallArtifact = Boolean(row.artifact?.zipUrl && row.artifact?.sha256);
 
     const canInstall = !installed && Boolean(publishedVersionId && hasInstallArtifact);
-    const canUpdate = installed && Boolean(publishedVersionId && hasInstallArtifact && hasUpdate);
+    const canUpdate = Boolean(installedRecord && publishedVersionId && hasInstallArtifact && hasUpdate);
     const canUninstall = Boolean(installedRecord && !row.defaultInstalled);
 
     const source = resolveSkillCatalogItemSource({
@@ -913,7 +1032,10 @@ export async function installBustlyGlobalSkill(skillKey: string): Promise<void> 
     throw new Error("Skill key is required.");
   }
 
-  const [row] = await fetchBustlyGlobalSkillCatalogRows({ slug: normalizedSkillKey });
+  const [row] = await fetchBustlyGlobalSkillCatalogRows({
+    slug: normalizedSkillKey,
+    forceRefresh: true,
+  });
   if (!row) {
     throw new Error(`Skill "${normalizedSkillKey}" not found.`);
   }
@@ -936,6 +1058,7 @@ export async function installBustlyGlobalSkill(skillKey: string): Promise<void> 
     publishedVersionId,
     artifact,
   });
+  invalidateCatalogRowsCache();
   bumpSkillsSnapshotVersion({ reason: "manual" });
 }
 
@@ -945,7 +1068,10 @@ export async function updateBustlyGlobalSkill(skillKey: string): Promise<void> {
     throw new Error("Skill key is required.");
   }
 
-  const [row] = await fetchBustlyGlobalSkillCatalogRows({ slug: normalizedSkillKey });
+  const [row] = await fetchBustlyGlobalSkillCatalogRows({
+    slug: normalizedSkillKey,
+    forceRefresh: true,
+  });
   if (!row) {
     throw new Error(`Skill "${normalizedSkillKey}" not found.`);
   }
@@ -978,6 +1104,7 @@ export async function updateBustlyGlobalSkill(skillKey: string): Promise<void> {
     publishedVersionId,
     artifact,
   });
+  invalidateCatalogRowsCache();
   bumpSkillsSnapshotVersion({ reason: "manual" });
 }
 
@@ -1000,5 +1127,6 @@ export async function uninstallBustlyGlobalSkill(skillKey: string): Promise<void
   }
 
   rmSync(installDir, { recursive: true, force: true });
+  invalidateCatalogRowsCache();
   bumpSkillsSnapshotVersion({ reason: "manual" });
 }

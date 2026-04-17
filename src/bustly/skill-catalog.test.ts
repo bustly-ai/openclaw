@@ -83,6 +83,8 @@ describe("bustly skill catalog", () => {
   let tempRoot: string;
   let bundledSkillsDir: string;
   let previousBundledSkillsEnv: string | undefined;
+  let previousDefaultEnabledSkillsJsonEnv: string | undefined;
+  let previousDefaultEnabledSkillsEnv: string | undefined;
 
   function writeDefaultEnabledSkills(defaultEnabled: string[]): void {
     writeFileSync(
@@ -99,7 +101,11 @@ describe("bustly skill catalog", () => {
     mkdirSync(bundledSkillsDir, { recursive: true });
     writeDefaultEnabledSkills([]);
     previousBundledSkillsEnv = process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+    previousDefaultEnabledSkillsJsonEnv = process.env.BUSTLY_DEFAULT_ENABLED_SKILLS_JSON;
+    previousDefaultEnabledSkillsEnv = process.env.BUSTLY_DEFAULT_ENABLED_SKILLS;
     process.env.OPENCLAW_BUNDLED_SKILLS_DIR = bundledSkillsDir;
+    delete process.env.BUSTLY_DEFAULT_ENABLED_SKILLS_JSON;
+    delete process.env.BUSTLY_DEFAULT_ENABLED_SKILLS;
 
     supabaseRowsRef.current = [];
     fetchPayloadRef.current = Buffer.from("skill-archive");
@@ -126,6 +132,16 @@ describe("bustly skill catalog", () => {
       delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
     } else {
       process.env.OPENCLAW_BUNDLED_SKILLS_DIR = previousBundledSkillsEnv;
+    }
+    if (previousDefaultEnabledSkillsJsonEnv === undefined) {
+      delete process.env.BUSTLY_DEFAULT_ENABLED_SKILLS_JSON;
+    } else {
+      process.env.BUSTLY_DEFAULT_ENABLED_SKILLS_JSON = previousDefaultEnabledSkillsJsonEnv;
+    }
+    if (previousDefaultEnabledSkillsEnv === undefined) {
+      delete process.env.BUSTLY_DEFAULT_ENABLED_SKILLS;
+    } else {
+      process.env.BUSTLY_DEFAULT_ENABLED_SKILLS = previousDefaultEnabledSkillsEnv;
     }
     rmSync(tempRoot, { recursive: true, force: true });
     vi.resetModules();
@@ -233,15 +249,8 @@ describe("bustly skill catalog", () => {
 
     const snapshotPath = path.join(configDirRef.current, "skills", ".bustly-default-installed.json");
     expect(existsSync(snapshotPath)).toBe(true);
-    const defaultInstallDir = path.join(configDirRef.current, "skills", "default-ops");
-    expect(existsSync(path.join(defaultInstallDir, "SKILL.md"))).toBe(true);
-    expect(
-      JSON.parse(readFileSync(path.join(defaultInstallDir, ".bustly-skill.json"), "utf-8")),
-    ).toMatchObject({
-      skillKey: "default-ops",
-      publishedVersionId: "v3",
-      source: "skillops-zip",
-    });
+    await Promise.resolve();
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     const snapshot = JSON.parse(readFileSync(snapshotPath, "utf-8")) as {
       skills: Array<{ skillKey: string; installedVersionId?: string }>;
     };
@@ -253,6 +262,49 @@ describe("bustly skill catalog", () => {
         }),
       ]),
     );
+  });
+
+  it("does not block catalog listing on default skill materialization", async () => {
+    writeDefaultEnabledSkills(["default-ops"]);
+    const checksum = sha256Hex(Buffer.from("deferred-default-zip"));
+    supabaseRowsRef.current = [
+      createCatalogRow({
+        slug: "default-ops",
+        publishedVersionId: "v4",
+        zipUrl: "https://example.com/default-ops.zip",
+        sha256: checksum,
+      }),
+    ];
+
+    let releaseDownload: (() => void) | null = null;
+    fetchWithSsrFGuardMock.mockImplementationOnce(
+      async () =>
+        await new Promise((resolve) => {
+          releaseDownload = () => {
+            resolve({
+              response: new Response(Buffer.from("deferred-default-zip"), { status: 200 }),
+              release: async () => {},
+            });
+          };
+        }),
+    );
+
+    const mod = await import("./skill-catalog.js");
+    const items = await mod.listBustlyGlobalSkillCatalog();
+    expect(items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          skillKey: "default-ops",
+          defaultInstalled: true,
+          installed: true,
+          installedVersionId: "v4",
+        }),
+      ]),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+
+    releaseDownload?.();
+    await Promise.resolve();
   });
 
   it("installs default-installed skills when install is requested without managed files", async () => {
@@ -279,6 +331,44 @@ describe("bustly skill catalog", () => {
       skillKey: "default-ops",
       publishedVersionId: "v2",
       source: "skillops-zip",
+    });
+  });
+
+  it("falls back to env-provided default-installed skills when bundled default file is unavailable", async () => {
+    delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+    process.env.BUSTLY_DEFAULT_ENABLED_SKILLS_JSON = JSON.stringify([
+      "commerce-core-ops",
+      "ads-core-ops",
+    ]);
+
+    fetchPayloadRef.current = Buffer.from("zip-success");
+    const checksum = sha256Hex(fetchPayloadRef.current);
+    supabaseRowsRef.current = [
+      createCatalogRow({
+        slug: "commerce-core-ops",
+        publishedVersionId: "v2",
+        zipUrl: "https://example.com/commerce-core-ops.zip",
+        sha256: checksum,
+      }),
+      createCatalogRow({
+        slug: "ads-core-ops",
+        publishedVersionId: "v1",
+        zipUrl: "https://example.com/ads-core-ops.zip",
+        sha256: checksum,
+      }),
+    ];
+
+    const mod = await import("./skill-catalog.js");
+    const items = await mod.listBustlyGlobalSkillCatalog();
+    const byKey = new Map(items.map((item) => [item.skillKey, item]));
+
+    expect(byKey.get("commerce-core-ops")).toMatchObject({
+      defaultInstalled: true,
+      installed: true,
+    });
+    expect(byKey.get("ads-core-ops")).toMatchObject({
+      defaultInstalled: true,
+      installed: true,
     });
   });
 
