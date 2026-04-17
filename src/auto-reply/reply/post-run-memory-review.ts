@@ -29,20 +29,21 @@ export const DEFAULT_POST_RUN_MEMORY_REVIEW_MAX_RECENT_MESSAGES = 120;
 export const DEFAULT_POST_RUN_MEMORY_REVIEW_MODEL = "bustly/chat.standard";
 
 export const DEFAULT_POST_RUN_MEMORY_REVIEW_PROMPT = [
-  "You are the consolidation classifier for a completed agent session.",
+  "You are the consolidation extractor for a completed agent session.",
   "Return JSON only.",
-  "Classify the completed work into exactly one layer: none, memory, skill, or retrieval_only.",
+  "Extract durable facts, reusable procedures, correction episodes, and searchable precedents from the completed work.",
+  "The runtime decides final storage and promotion. Your layer field is advisory only.",
   "Use memory for durable facts, decisions, and preferences.",
   "Use skill for stable reusable procedures, SOPs, or repeatable playbooks.",
-  "Use retrieval_only when the work should remain searchable precedent but should not yet become memory or skill.",
-  "Promote to skill when the task is demonstrably repeated or when the work is clearly reusable procedural knowledge.",
+  "Use retrieval_only when there is a correction or precedent worth preserving even if it should not yet become memory or skill.",
+  "Correction episodes should capture what was wrong, how the user corrected it, how it was verified, and the actionable rule that should persist.",
   "Do not write files yourself. Do not emit prose outside JSON.",
 ].join(" ");
 
 export const DEFAULT_POST_RUN_MEMORY_REVIEW_SYSTEM_PROMPT = [
   "Silent consolidation stage after a completed agent run.",
   "This stage is runtime-controlled, not user-visible.",
-  "Your job is classification only: decide what should be stored and in which layer.",
+  "Your job is extraction only: surface facts, procedures, corrections, and precedents so runtime can route them.",
   "Return one JSON object and nothing else.",
 ].join(" ");
 
@@ -72,6 +73,20 @@ type ConsolidationClassification = {
   confidence: number;
   repeatedTask: boolean;
   summary: string;
+  keywords?: string[];
+  correction?: {
+    wrongAssumption: string;
+    userCorrection: string;
+    verifiedFix: string;
+    actionableRule: string;
+    scope?: string;
+  };
+  precedent?: {
+    title: string;
+    problem: string;
+    resolution: string;
+    rule: string;
+  };
   memory?: {
     target: "memory_md" | "daily_log";
     heading: string;
@@ -90,6 +105,33 @@ type ConsolidationOutcome = {
   confidence: number;
   matchedPriorSessions: number;
   repeatedTask: boolean;
+};
+
+type RetrievalEntry = {
+  timestamp: string;
+  layer: "retrieval_only";
+  summary: string;
+  reason: string;
+  confidence: number;
+  query: string;
+  sourceSessionId: string;
+  sourceSessionKey?: string;
+  reviewRunId: string;
+  snippet: string;
+  keywords: string[];
+  correction?: ConsolidationClassification["correction"];
+  precedent?: ConsolidationClassification["precedent"];
+};
+
+type ConsolidationRoutingResult = {
+  primaryLayer: ConsolidationLayer;
+  reason: string;
+  confidence: number;
+  repeatedTask: boolean;
+  writeMemory?: NonNullable<ConsolidationClassification["memory"]>;
+  writeSkill?: NonNullable<ConsolidationClassification["skill"]>;
+  writeRetrieval: boolean;
+  retrievalReason?: string;
 };
 
 function ensureNoReplyHint(text: string): string {
@@ -132,6 +174,53 @@ function cleanParagraph(value: unknown): string {
     .map((line) => line.trimEnd())
     .join("\n")
     .trim();
+}
+
+function cleanKeywords(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => cleanLine(item))
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function cleanCorrection(value: unknown): ConsolidationClassification["correction"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const wrongAssumption = cleanParagraph(record.wrongAssumption);
+  const userCorrection = cleanParagraph(record.userCorrection);
+  const verifiedFix = cleanParagraph(record.verifiedFix);
+  const actionableRule = cleanParagraph(record.actionableRule);
+  const scope = cleanLine(record.scope);
+  if (!wrongAssumption || !userCorrection || !verifiedFix || !actionableRule) {
+    return undefined;
+  }
+  return {
+    wrongAssumption,
+    userCorrection,
+    verifiedFix,
+    actionableRule,
+    ...(scope ? { scope } : {}),
+  };
+}
+
+function cleanPrecedent(value: unknown): ConsolidationClassification["precedent"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const title = cleanLine(record.title);
+  const problem = cleanParagraph(record.problem);
+  const resolution = cleanParagraph(record.resolution);
+  const rule = cleanParagraph(record.rule);
+  if (!title || !problem || !resolution || !rule) {
+    return undefined;
+  }
+  return { title, problem, resolution, rule };
 }
 
 export function resolvePostRunMemoryReviewSettings(
@@ -289,6 +378,9 @@ function normalizeClassification(raw: unknown): ConsolidationClassification {
     confidence: clampConfidence(record.confidence),
     repeatedTask: record.repeatedTask === true,
     summary: cleanParagraph(record.summary) || "No summary provided.",
+    keywords: cleanKeywords(record.keywords),
+    correction: cleanCorrection(record.correction),
+    precedent: cleanPrecedent(record.precedent),
     memory,
     skill,
   };
@@ -302,6 +394,7 @@ async function appendReviewLedger(params: {
   toolCallCount: number;
   changedMemory: boolean;
   changedSkills: boolean;
+  changedRetrieval?: boolean;
   reviewRunId: string;
   skipped?: string;
   outcome?: ConsolidationOutcome;
@@ -318,6 +411,7 @@ async function appendReviewLedger(params: {
     toolCallCount: params.toolCallCount,
     changedMemory: params.changedMemory,
     changedSkills: params.changedSkills,
+    changedRetrieval: params.changedRetrieval ?? false,
     skipped: params.skipped,
     outcome: params.outcome,
   };
@@ -397,6 +491,37 @@ async function applySkillWrite(params: {
   });
 }
 
+async function appendRetrievalEntry(params: {
+  agentDir: string;
+  sessionId: string;
+  sessionKey?: string;
+  reviewRunId: string;
+  searchQuery: string;
+  summary: string;
+  snippet: string;
+  classification: ConsolidationClassification;
+}) {
+  const dir = path.join(params.agentDir, "experience");
+  const file = path.join(dir, "entries.jsonl");
+  await fs.mkdir(dir, { recursive: true });
+  const row: RetrievalEntry = {
+    timestamp: new Date().toISOString(),
+    layer: "retrieval_only",
+    summary: params.summary,
+    reason: params.classification.reason,
+    confidence: params.classification.confidence,
+    query: params.searchQuery,
+    sourceSessionId: params.sessionId,
+    sourceSessionKey: params.sessionKey,
+    reviewRunId: params.reviewRunId,
+    snippet: params.snippet,
+    keywords: params.classification.keywords ?? [],
+    correction: params.classification.correction,
+    precedent: params.classification.precedent,
+  };
+  await fs.appendFile(file, `${JSON.stringify(row)}\n`, "utf-8");
+}
+
 async function classifyConsolidation(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
@@ -427,6 +552,20 @@ async function classifyConsolidation(params: {
   "confidence": number,
   "repeatedTask": boolean,
   "summary": string,
+  "keywords": string[] | null,
+  "correction": {
+    "wrongAssumption": string,
+    "userCorrection": string,
+    "verifiedFix": string,
+    "actionableRule": string,
+    "scope": string
+  } | null,
+  "precedent": {
+    "title": string,
+    "problem": string,
+    "resolution": string,
+    "rule": string
+  } | null,
   "memory": { "target": "memory_md" | "daily_log", "heading": string, "body": string } | null,
   "skill": { "skillName": string, "description": string, "body": string } | null
 }`,
@@ -495,55 +634,77 @@ export function enforceRuntimeRouting(params: {
   matchedPriorSessions: number;
   toolCallCount: number;
   settings: PostRunMemoryReviewSettings;
-}): ConsolidationClassification {
+}): ConsolidationRoutingResult {
   const repeatedTask =
     params.classification.repeatedTask || params.matchedPriorSessions > 0;
   const confidence = params.classification.confidence;
 
   if (confidence < 0.55) {
     return {
-      ...params.classification,
-      layer: "none",
+      primaryLayer: "none",
       reason: "low_confidence",
+      confidence,
+      repeatedTask,
+      writeRetrieval: false,
     };
   }
 
-  if (params.classification.layer === "skill") {
-    const hasProcedureSignal =
-      repeatedTask || params.toolCallCount >= params.settings.minToolCalls;
-    if (!hasProcedureSignal || !params.classification.skill) {
-      return {
-        ...params.classification,
-        layer: params.classification.memory ? "memory" : "none",
-        reason: hasProcedureSignal ? "missing_skill_payload" : "insufficient_procedure_signal",
-      };
+  const hasProcedureSignal = repeatedTask || params.toolCallCount >= params.settings.minToolCalls;
+  const writeSkill =
+    params.classification.skill && hasProcedureSignal ? params.classification.skill : undefined;
+  const writeMemory = params.classification.memory;
+  const writeRetrieval = Boolean(
+    params.classification.correction ||
+      params.classification.precedent ||
+      params.classification.layer === "retrieval_only",
+  );
+
+  let primaryLayer: ConsolidationLayer = "none";
+  let reason = params.classification.reason;
+  let retrievalReason: string | undefined;
+
+  if (writeSkill) {
+    primaryLayer = "skill";
+    if (params.classification.memory && repeatedTask) {
+      reason = "runtime_promoted_repeated_procedure";
+    }
+  } else if (params.classification.skill && !hasProcedureSignal) {
+    reason = "insufficient_procedure_signal";
+  }
+
+  if (writeMemory && primaryLayer === "none") {
+    primaryLayer = "memory";
+    if (!reason || reason === "unspecified") {
+      reason = "runtime_preserved_memory";
     }
   }
 
-  if (
-    params.classification.layer === "memory" &&
-    repeatedTask &&
-    params.classification.skill
-  ) {
-    return {
-      ...params.classification,
-      layer: "skill",
-      repeatedTask,
-      reason: "runtime_promoted_repeated_procedure",
-    };
+  if (writeRetrieval) {
+    retrievalReason = params.classification.correction
+      ? "runtime_preserved_correction_precedent"
+      : "runtime_preserved_precedent";
+    if (primaryLayer === "none") {
+      primaryLayer = "retrieval_only";
+      reason =
+        params.classification.layer === "retrieval_only"
+          ? params.classification.reason
+          : retrievalReason;
+    }
   }
 
-  if (params.classification.layer === "memory" && !params.classification.memory) {
-    return {
-      ...params.classification,
-      layer: "none",
-      reason: "missing_memory_payload",
-    };
+  if (!writeMemory && params.classification.layer === "memory") {
+    reason = "missing_memory_payload";
   }
 
   return {
-    ...params.classification,
+    primaryLayer,
+    reason,
+    confidence,
     repeatedTask,
+    writeMemory,
+    writeSkill,
+    writeRetrieval,
+    retrievalReason,
   };
 }
 
@@ -630,9 +791,11 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
   const dailyMemoryFile = path.join(workspaceDir, "memory");
   const skillsDir = path.join(workspaceDir, "skills");
+  const experienceFile = path.join(params.followupRun.run.agentDir, "experience", "entries.jsonl");
   const beforeMemoryMtime = await statMtimeMs(memoryFile);
   const beforeDailyDirMtime = await statMtimeMs(dailyMemoryFile);
   const beforeSkillsDirMtime = await statMtimeMs(skillsDir);
+  const beforeExperienceMtime = await statMtimeMs(experienceFile);
   const reviewSessionId = buildIsolatedInternalSessionId(
     params.followupRun.run.sessionId,
     "post-run-review",
@@ -668,20 +831,38 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
       settings,
     });
 
-    if (routed.layer === "memory" && routed.memory) {
+    if (routed.writeMemory) {
       await applyMemoryWrite({
         workspaceDir,
-        memory: routed.memory,
+        memory: routed.writeMemory,
       });
-    } else if (routed.layer === "skill" && routed.skill) {
+    }
+    if (routed.writeSkill) {
       await applySkillWrite({
         workspaceDir,
-        skill: routed.skill,
+        skill: routed.writeSkill,
+      });
+    }
+    if (routed.writeRetrieval) {
+      await appendRetrievalEntry({
+        agentDir: params.followupRun.run.agentDir,
+        sessionId: params.followupRun.run.sessionId,
+        sessionKey: params.sessionKey,
+        reviewRunId,
+        searchQuery,
+        summary: classification.summary,
+        snippet: currentTurnSummary,
+        classification: {
+          ...classification,
+          reason: routed.retrievalReason ?? routed.reason,
+          repeatedTask: routed.repeatedTask,
+          confidence: routed.confidence,
+        },
       });
     }
 
     outcome = {
-      layer: routed.layer,
+      layer: routed.primaryLayer,
       reason: routed.reason,
       confidence: routed.confidence,
       matchedPriorSessions,
@@ -698,6 +879,7 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
         toolCallCount: decision.toolCallCount,
         changedMemory: false,
         changedSkills: false,
+        changedRetrieval: false,
         reviewRunId,
         skipped: String(err),
         outcome,
@@ -711,9 +893,11 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
   const afterMemoryMtime = await statMtimeMs(memoryFile);
   const afterDailyDirMtime = await statMtimeMs(dailyMemoryFile);
   const afterSkillsDirMtime = await statMtimeMs(skillsDir);
+  const afterExperienceMtime = await statMtimeMs(experienceFile);
   const changedMemory =
     beforeMemoryMtime !== afterMemoryMtime || beforeDailyDirMtime !== afterDailyDirMtime;
   const changedSkills = beforeSkillsDirMtime !== afterSkillsDirMtime;
+  const changedRetrieval = beforeExperienceMtime !== afterExperienceMtime;
 
   try {
     await appendReviewLedger({
@@ -724,6 +908,7 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
       toolCallCount: decision.toolCallCount,
       changedMemory,
       changedSkills,
+      changedRetrieval,
       reviewRunId,
       outcome,
     });

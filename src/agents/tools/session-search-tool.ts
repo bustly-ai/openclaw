@@ -20,6 +20,32 @@ type TranscriptMessage = {
   text?: unknown;
 };
 
+type ExperienceEntry = {
+  timestamp?: string;
+  layer?: string;
+  summary?: string;
+  reason?: string;
+  confidence?: number;
+  query?: string;
+  sourceSessionId?: string;
+  sourceSessionKey?: string;
+  snippet?: string;
+  keywords?: unknown;
+  correction?: {
+    wrongAssumption?: string;
+    userCorrection?: string;
+    verifiedFix?: string;
+    actionableRule?: string;
+    scope?: string;
+  };
+  precedent?: {
+    title?: string;
+    problem?: string;
+    resolution?: string;
+    rule?: string;
+  };
+};
+
 export type SessionSearchMatch = {
   sessionKey: string;
   sessionId: string;
@@ -63,6 +89,28 @@ function parseTranscriptMessages(sessionFile: string): TranscriptMessage[] {
       .filter((entry): entry is { type?: string; message?: TranscriptMessage } => Boolean(entry))
       .filter((entry) => entry.type === "message" && Boolean(entry.message))
       .map((entry) => entry.message ?? {});
+  } catch {
+    return [];
+  }
+}
+
+function parseExperienceEntries(experienceFile: string): ExperienceEntry[] {
+  if (!fs.existsSync(experienceFile)) {
+    return [];
+  }
+  try {
+    const raw = fs.readFileSync(experienceFile, "utf-8");
+    return raw
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line) as ExperienceEntry;
+        } catch {
+          return null;
+        }
+      })
+      .filter((entry): entry is ExperienceEntry => Boolean(entry));
   } catch {
     return [];
   }
@@ -127,6 +175,8 @@ export function searchSessionTranscripts(params: {
   const agentId = resolveAgentIdFromSessionKey(params.agentSessionKey);
   const storePath = resolveDefaultSessionStorePath(agentId);
   const sessionsDir = path.dirname(storePath);
+  const agentRootDir = path.dirname(sessionsDir);
+  const experienceFile = path.join(agentRootDir, "agent", "experience", "entries.jsonl");
   const currentSessionKey = params.agentSessionKey?.trim();
   const query = params.query.trim();
   const normalizedQuery = query.toLowerCase();
@@ -145,6 +195,39 @@ export function searchSessionTranscripts(params: {
     .slice(0, maxSessions);
 
   const matches: SessionSearchMatch[] = [];
+
+  for (const entry of parseExperienceEntries(experienceFile)) {
+    const text = [
+      entry.summary,
+      entry.reason,
+      entry.snippet,
+      entry.correction?.wrongAssumption,
+      entry.correction?.userCorrection,
+      entry.correction?.verifiedFix,
+      entry.correction?.actionableRule,
+      entry.correction?.scope,
+      entry.precedent?.title,
+      entry.precedent?.problem,
+      entry.precedent?.resolution,
+      entry.precedent?.rule,
+      ...(Array.isArray(entry.keywords) ? entry.keywords.filter((item) => typeof item === "string") : []),
+    ]
+      .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+      .join("\n");
+    const score = computeMatchScore(text, normalizedQuery, tokens);
+    if (score <= 0) {
+      continue;
+    }
+    matches.push({
+      sessionKey: entry.sourceSessionKey?.trim() || "experience:precedent",
+      sessionId: entry.sourceSessionId?.trim() || "experience",
+      sessionFile: experienceFile,
+      role: "experience",
+      updatedAt: entry.timestamp ? Date.parse(entry.timestamp) : undefined,
+      snippet: buildSnippet(text, normalizedQuery, tokens),
+      score: score + 5,
+    });
+  }
 
   for (const [sessionKey, entry] of entries) {
     const sessionId = entry?.sessionId?.trim();
