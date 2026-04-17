@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE,
   createBustlyWorkspaceAgent,
   createBustlyWorkspaceAgentSession,
   deleteBustlyWorkspaceAgent,
@@ -358,6 +359,17 @@ describe("workspace-agents", () => {
   it("skips bootstrap when the preset agent already exists on disk", async () => {
     const existingDir = path.join(stateDir, "workspaces", "workspace-1", "agents", "marketing");
     mkdirSync(existingDir, { recursive: true });
+    writeFileSync(
+      path.join(existingDir, ".bustly-agent.json"),
+      JSON.stringify(
+        {
+          createdAt: BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE + 60_000,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
 
     const bootstrapped = await ensureBustlyWorkspacePresetAgents({
       workspaceId: "workspace-1",
@@ -369,11 +381,63 @@ describe("workspace-agents", () => {
 
     expect(bootstrapped).toBe(0);
     expect(bootstrapMock).not.toHaveBeenCalled();
-    expect(existsSync(path.join(existingDir, ".bustly-agent.json"))).toBe(false);
+    const metadata = JSON.parse(
+      readFileSync(path.join(existingDir, ".bustly-agent.json"), "utf-8"),
+    ) as { createdAt?: number };
+    expect(metadata.createdAt).toBe(BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE + 60_000);
 
     const nextConfig = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
     expect(
       nextConfig.agents?.list?.some((entry) => entry.id === "bustly-workspace-1-marketing"),
     ).toBe(true);
+  });
+
+  it("force-refreshes legacy preset agents created before the cutoff", async () => {
+    const existingDir = path.join(stateDir, "workspaces", "workspace-1", "agents", "marketing");
+    mkdirSync(existingDir, { recursive: true });
+    const legacyCreatedAt = BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE - 60_000;
+    writeFileSync(
+      path.join(existingDir, ".bustly-agent.json"),
+      JSON.stringify(
+        {
+          createdAt: legacyCreatedAt,
+          icon: "OldIcon",
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+    config.agents = {
+      ...config.agents,
+      list: [
+        ...(config.agents?.list ?? []),
+        {
+          id: "bustly-workspace-1-marketing",
+          name: "Marketing",
+          workspace: existingDir,
+        },
+      ],
+    };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const bootstrapped = await ensureBustlyWorkspacePresetAgents({
+      workspaceId: "workspace-1",
+      workspaceName: "Workspace One",
+      presets: [{ slug: "marketing", label: "Marketing", icon: "TrendUp", isMain: false }],
+      configPath,
+      env: process.env,
+    });
+
+    expect(bootstrapped).toBe(1);
+    expect(bootstrapMock).toHaveBeenCalledTimes(1);
+    const metadata = JSON.parse(
+      readFileSync(path.join(existingDir, ".bustly-agent.json"), "utf-8"),
+    ) as { createdAt?: number; icon?: string };
+    expect(typeof metadata.createdAt).toBe("number");
+    expect((metadata.createdAt ?? 0) > legacyCreatedAt).toBe(true);
+    expect(metadata.icon).toBe("OldIcon");
   });
 });

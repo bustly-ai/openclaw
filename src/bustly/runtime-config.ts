@@ -6,6 +6,7 @@ import { readBustlyOAuthState } from "../bustly-oauth.js";
 export const BUSTLY_PROVIDER_PROFILE_ID = `${BUSTLY_PROVIDER_ID}:default`;
 export const BUSTLY_MODEL_GATEWAY_BASE_URL_DEFAULT = "https://gw.bustly.ai/api/v1";
 export const BUSTLY_DEFAULT_MODEL_REF = `${BUSTLY_PROVIDER_ID}/chat.ultra`;
+export const BUSTLY_DEFAULT_HEARTBEAT_MODEL_REF = `${BUSTLY_PROVIDER_ID}/chat.standard`;
 
 export const BUSTLY_ROUTE_MODELS = [
   {
@@ -160,6 +161,9 @@ export function applyBustlyOnlyConfig(
     nextAgentModels[entry.modelRef] = { alias: entry.alias };
   }
   const existingDefaults = cfg.agents?.defaults ?? {};
+  const existingHeartbeatConfig = existingDefaults.heartbeat;
+  const heartbeatModel =
+    existingHeartbeatConfig?.model?.trim() || BUSTLY_DEFAULT_HEARTBEAT_MODEL_REF;
   const existingModelConfig = existingDefaults.model;
   const preservedFallbacks =
     typeof existingModelConfig === "object" &&
@@ -186,6 +190,10 @@ export function applyBustlyOnlyConfig(
       ...cfg.agents,
       defaults: {
         ...existingDefaults,
+        heartbeat: {
+          ...existingHeartbeatConfig,
+          model: heartbeatModel,
+        },
         model: {
           ...(preservedFallbacks ? { fallbacks: preservedFallbacks } : {}),
           primary: selectedModel,

@@ -16,7 +16,7 @@ const MAX_EVENT_ACTION_PROMPT_CHARS = 500;
 
 export type BustlyHeartbeatSeverity = "critical" | "warning" | "suggestion";
 export type BustlyHeartbeatStatus = "open" | "resolved";
-export type BustlyHeartbeatHealthStatus = "Healthy" | "Attention" | "At Risk" | "Critical";
+export type BustlyHeartbeatHealthStatus = "Healthy" | "Warning" | "Critical";
 
 export type BustlyHeartbeatDefinition = {
   goal: string;
@@ -483,18 +483,19 @@ export function resolveBustlyHeartbeatHealthSummary(params: {
     }
     counts[event.severity] += 1;
   }
-  const score = Math.max(
-    0,
-    100 - counts.critical * 10 - counts.warning * 5 - counts.suggestion * 2,
-  );
+  // Health should follow the highest-severity open event, not a weighted deduction.
   let status: BustlyHeartbeatHealthStatus = "Healthy";
-  if (score < 55) {
+  if (counts.critical > 0) {
     status = "Critical";
-  } else if (score < 75) {
-    status = "At Risk";
-  } else if (score < 90) {
-    status = "Attention";
+  } else if (counts.warning > 0) {
+    status = "Warning";
   }
+  const scoreByStatus: Record<BustlyHeartbeatHealthStatus, number> = {
+    Healthy: 100,
+    Warning: 66,
+    Critical: 33,
+  };
+  const score = scoreByStatus[status];
   return {
     score,
     status,

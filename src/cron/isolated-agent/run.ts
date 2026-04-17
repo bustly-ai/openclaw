@@ -235,12 +235,16 @@ export async function runCronIsolatedAgentTurn(params: {
     sessionId: runSessionId,
     sessionKey: runSessionKey,
   });
-  if (!cronSession.sessionEntry.label?.trim() && baseSessionKey.startsWith("cron:")) {
+  if (baseSessionKey.startsWith("cron:")) {
     const labelSuffix =
       typeof params.job.name === "string" && params.job.name.trim()
         ? params.job.name.trim()
         : params.job.id;
-    cronSession.sessionEntry.label = labelSuffix;
+    const existingLabel = cronSession.sessionEntry.label?.trim();
+    // Rewrite legacy "Cron: ..." labels, but keep explicit custom labels intact.
+    if (!existingLabel || existingLabel.startsWith("Cron:")) {
+      cronSession.sessionEntry.label = labelSuffix;
+    }
   }
 
   // Respect session model override — check session.modelOverride before falling

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseBustlyHeartbeatEventsJson, parseBustlyHeartbeatMarkdown } from "./heartbeats.js";
+import {
+  parseBustlyHeartbeatEventsJson,
+  parseBustlyHeartbeatMarkdown,
+  resolveBustlyHeartbeatHealthSummary,
+} from "./heartbeats.js";
 
 describe("parseBustlyHeartbeatEventsJson", () => {
   it("parses strict json array payloads", () => {
@@ -75,5 +79,87 @@ Notify me when any critical risk appears.
       goal: "Monitor payment failures and conversion drops.",
       notifyWhen: "Notify me when any critical risk appears.",
     });
+  });
+});
+
+describe("resolveBustlyHeartbeatHealthSummary", () => {
+  it("maps open critical events to Critical status", () => {
+    const summary = resolveBustlyHeartbeatHealthSummary({
+      lastScanAt: 1,
+      events: [
+        {
+          id: "evt-1",
+          agentId: "agent-a",
+          severity: "critical",
+          title: "Critical issue",
+          message: "Critical issue message",
+          actionPrompt: "Do something now",
+          status: "open",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    expect(summary.status).toBe("Critical");
+  });
+
+  it("maps warning-only open events to Warning status", () => {
+    const summary = resolveBustlyHeartbeatHealthSummary({
+      lastScanAt: 2,
+      events: [
+        {
+          id: "evt-1",
+          agentId: "agent-a",
+          severity: "warning",
+          title: "Warning issue",
+          message: "Warning issue message",
+          actionPrompt: "Do something",
+          status: "open",
+          createdAt: 2,
+          updatedAt: 2,
+        },
+      ],
+    });
+    expect(summary.status).toBe("Warning");
+  });
+
+  it("ignores resolved events for status escalation", () => {
+    const summary = resolveBustlyHeartbeatHealthSummary({
+      lastScanAt: 3,
+      events: [
+        {
+          id: "evt-1",
+          agentId: "agent-a",
+          severity: "critical",
+          title: "Resolved critical",
+          message: "Resolved critical message",
+          actionPrompt: "None",
+          status: "resolved",
+          createdAt: 3,
+          updatedAt: 3,
+        },
+      ],
+    });
+    expect(summary.status).toBe("Healthy");
+  });
+
+  it("keeps healthy when only suggestion events are open", () => {
+    const summary = resolveBustlyHeartbeatHealthSummary({
+      lastScanAt: 4,
+      events: [
+        {
+          id: "evt-1",
+          agentId: "agent-a",
+          severity: "suggestion",
+          title: "Suggestion only",
+          message: "Suggestion message",
+          actionPrompt: "Optional action",
+          status: "open",
+          createdAt: 4,
+          updatedAt: 4,
+        },
+      ],
+    });
+    expect(summary.status).toBe("Healthy");
   });
 });

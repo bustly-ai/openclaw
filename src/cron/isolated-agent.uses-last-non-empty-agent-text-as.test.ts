@@ -568,7 +568,7 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("preserves an existing cron session label", async () => {
+  it("preserves an existing custom cron session label", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const raw = await fs.readFile(storePath, "utf-8");
@@ -588,6 +588,32 @@ describe("runCronIsolatedAgentTurn", () => {
       const entry = await readSessionEntry(storePath, "agent:main:cron:job-1");
 
       expect(entry?.label).toBe("Nightly digest");
+    });
+  });
+
+  it("rewrites legacy Cron-prefixed session labels to the job name", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const raw = await fs.readFile(storePath, "utf-8");
+      const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      store["agent:main:cron:job-1"] = {
+        sessionId: "old",
+        updatedAt: Date.now(),
+        label: "Cron: Morning Briefing",
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+      await withFastTestEnvDisabled(async () => {
+        await runCronTurn(home, {
+          jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
+          jobOverrides: { name: "Morning Briefing" },
+          message: "ping",
+          storePath,
+        });
+      });
+      const entry = await readSessionEntry(storePath, "agent:main:cron:job-1");
+
+      expect(entry?.label).toBe("Morning Briefing");
     });
   });
 });

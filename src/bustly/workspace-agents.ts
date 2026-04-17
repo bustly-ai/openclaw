@@ -41,6 +41,9 @@ const DEFAULT_PRESET_HEARTBEAT: NonNullable<OpenClawAgentListEntry["heartbeat"]>
   every: DEFAULT_BUSTLY_HEARTBEAT_EVERY,
   target: "none",
 };
+// Preset workspace agents created before this timestamp will be force-refreshed
+// so prompt/template updates can overwrite legacy bootstrap files once.
+export const BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE = Date.UTC(2026, 4, 17, 0, 0, 0, 0);
 
 export type BustlyWorkspaceAgentSummary = {
   agentId: string;
@@ -736,6 +739,14 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
       existingEntry?.workspace?.trim() ||
       resolveBustlyWorkspaceAgentWorkspaceDir(normalizedWorkspaceId, preset.slug, params.env);
     const workspaceExists = existsSync(workspaceDir);
+    const workspaceMetadata = workspaceExists ? loadBustlyAgentMetadata(workspaceDir) : {};
+    const workspaceCreatedAt = workspaceExists
+      ? resolveBustlyAgentCreatedAt(workspaceDir, workspaceMetadata)
+      : null;
+    const shouldForceRefresh =
+      workspaceExists &&
+      workspaceCreatedAt !== null &&
+      workspaceCreatedAt < BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE;
     if (!workspaceAgentIds.has(agentId)) {
       await createBustlyWorkspaceAgent({
         // Keep the full workspace UUID for bootstrap/Supabase lookups.
@@ -755,10 +766,13 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
       workspaceAgentIds.add(agentId);
       if (!workspaceExists) {
         bootstrappedCount += 1;
+        continue;
       }
-      continue;
+      if (!shouldForceRefresh) {
+        continue;
+      }
     }
-    if (!workspaceExists) {
+    if (!workspaceExists || shouldForceRefresh) {
       await initializeBustlyWorkspaceBootstrap({
         workspaceDir,
         workspaceId: params.workspaceId,
@@ -766,6 +780,10 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
         agentName: preset.slug,
         ...(preset.bootstrapMetadata ? { metadata: preset.bootstrapMetadata } : {}),
         requireAgentMetadata: true,
+      });
+      setBustlyAgentMetadata({
+        workspaceDir,
+        createdAt: Date.now(),
       });
       bootstrappedCount += 1;
     }
