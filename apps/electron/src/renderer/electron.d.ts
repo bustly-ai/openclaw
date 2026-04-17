@@ -202,6 +202,7 @@ interface ElectronAPI {
   bustlyOpenLogin: () => Promise<{ success: boolean; error?: string }>;
   bustlyOpenSettings: () => Promise<{ success: boolean; error?: string }>;
   bustlyOpenWorkspaceSettings: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
+  bustlyOpenWorkspaceIntegrations: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
   bustlyOpenWorkspaceInvite: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
   bustlyOpenWorkspaceManage: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
   bustlyOpenWorkspacePricing: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;

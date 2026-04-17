@@ -3333,6 +3333,23 @@ function setupIpcHandlers(): void {
     }
   });
 
+  ipcMain.handle("bustly-open-workspace-integrations", async (_event, workspaceId: string) => {
+    try {
+      const url = buildBustlyAdminUrl({
+        setting_modal: "integration",
+        workspace_id: workspaceId,
+      });
+      await shell.openExternal(url);
+      return { success: true };
+    } catch (error) {
+      writeMainError("[Bustly Workspace Integrations] Error:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
   ipcMain.handle("bustly-open-workspace-invite", async (_event, workspaceId: string) => {
     try {
       const url = buildBustlyAdminUrl({
