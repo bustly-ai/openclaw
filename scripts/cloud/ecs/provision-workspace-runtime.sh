@@ -34,6 +34,7 @@ Usage:
     [--bustly-jwt-secret <secret>] \
     [--bustly-oauth-state-b64 <base64_json>] \
     [--bustly-user-access-token <token>] \
+    [--bustly-supabase-access-token <token>] \
     [--bustly-refresh-token <token>] \
     [--bustly-legacy-supabase-refresh-token <token>] \
     [--bustly-supabase-access-token-expires-at <epoch_seconds>] \
@@ -113,6 +114,7 @@ BUSTLY_USER_EMAIL="${BUSTLY_USER_EMAIL:-}"
 BUSTLY_JWT_SECRET="${BUSTLY_JWT_SECRET:-}"
 BUSTLY_OAUTH_STATE_B64=""
 BUSTLY_USER_ACCESS_TOKEN=""
+BUSTLY_SUPABASE_ACCESS_TOKEN="${BUSTLY_SUPABASE_ACCESS_TOKEN:-}"
 BUSTLY_REFRESH_TOKEN="${BUSTLY_REFRESH_TOKEN:-}"
 BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN="${BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN:-}"
 BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT="${BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT:-}"
@@ -246,6 +248,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --bustly-user-access-token)
       BUSTLY_USER_ACCESS_TOKEN="${2:-}"
+      shift 2
+      ;;
+    --bustly-supabase-access-token)
+      BUSTLY_SUPABASE_ACCESS_TOKEN="${2:-}"
       shift 2
       ;;
     --bustly-refresh-token)
@@ -512,6 +518,362 @@ if [[ -z "$BUSTLY_WORKSPACE_TEMPLATE_BASE_URL" ]]; then
   BUSTLY_WORKSPACE_TEMPLATE_BASE_URL="$BUSTLY_WORKSPACE_TEMPLATE_BASE_URL_DEFAULT"
 fi
 
+AUTH_TOKEN_RESOLUTION="$(
+  WORKSPACE_ID="$WORKSPACE_ID" \
+  BUSTLY_OAUTH_STATE_B64="$BUSTLY_OAUTH_STATE_B64" \
+  BUSTLY_USER_ACCESS_TOKEN="$BUSTLY_USER_ACCESS_TOKEN" \
+  BUSTLY_SUPABASE_ACCESS_TOKEN="$BUSTLY_SUPABASE_ACCESS_TOKEN" \
+  BUSTLY_REFRESH_TOKEN="$BUSTLY_REFRESH_TOKEN" \
+  BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN="$BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN" \
+  BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT="$BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT" \
+  BUSTLY_SESSION_ID="$BUSTLY_SESSION_ID" \
+  BUSTLY_USER_ID="$BUSTLY_USER_ID" \
+  BUSTLY_USER_NAME="$BUSTLY_USER_NAME" \
+  BUSTLY_USER_EMAIL="$BUSTLY_USER_EMAIL" \
+  BUSTLY_SUPABASE_URL="$BUSTLY_SUPABASE_URL" \
+  BUSTLY_SUPABASE_ANON_KEY="$BUSTLY_SUPABASE_ANON_KEY" \
+  BUSTLY_LOGIN_TRACE_ID="$BUSTLY_LOGIN_TRACE_ID" \
+  BUSTLY_ACCOUNT_API_BASE_URL="$BUSTLY_ACCOUNT_API_BASE_URL" \
+  python3 - <<'PY'
+import base64
+import json
+import os
+import shlex
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+def text(value):
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def pick(*values):
+    for value in values:
+        normalized = text(value)
+        if normalized:
+            return normalized
+    return ""
+
+
+def decode_oauth_state(encoded):
+    payload = text(encoded)
+    if not payload:
+        return {}
+    try:
+        raw = base64.b64decode(payload).decode("utf-8")
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        return {}
+    return {}
+
+
+def decode_jwt_claims(token):
+    raw = text(token)
+    if not raw:
+        return {}
+    parts = raw.split(".")
+    if len(parts) < 2:
+        return {}
+    body = parts[1]
+    body += "=" * ((4 - len(body) % 4) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(body.encode("ascii")).decode("utf-8")
+        parsed = json.loads(decoded)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        return {}
+    return {}
+
+
+def request_json(url, method="GET", headers=None, body=None):
+    data = None
+    if body is not None:
+        if isinstance(body, (dict, list)):
+            data = json.dumps(body).encode("utf-8")
+        elif isinstance(body, str):
+            data = body.encode("utf-8")
+        else:
+            data = body
+    req = urllib.request.Request(url, data=data, method=method)
+    for key, value in (headers or {}).items():
+        if value is not None:
+            req.add_header(key, value)
+
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            status = int(resp.getcode() or 0)
+            payload = resp.read().decode("utf-8", errors="replace")
+            return status, payload, ""
+    except urllib.error.HTTPError as err:
+        payload = err.read().decode("utf-8", errors="replace")
+        return int(err.code or 0), payload, ""
+    except Exception as err:
+        return 0, "", str(err)
+
+
+def parse_json_object(raw):
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        return {}
+    return {}
+
+
+def verify_supabase_token(supabase_url, supabase_anon_key, access_token):
+    url = f"{supabase_url.rstrip('/')}/auth/v1/user"
+    status, payload, transport_error = request_json(
+        url,
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "apikey": supabase_anon_key,
+            "Accept": "application/json",
+        },
+    )
+    if status == 200:
+        return True, status, ""
+    reason = payload.strip() or transport_error or "unknown error"
+    return False, status, reason[:320]
+
+
+def refresh_supabase_legacy(supabase_url, supabase_anon_key, refresh_token):
+    url = f"{supabase_url.rstrip('/')}/auth/v1/token?grant_type=refresh_token"
+    status, payload, transport_error = request_json(
+        url,
+        method="POST",
+        headers={
+            "apikey": supabase_anon_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        body={"refresh_token": refresh_token},
+    )
+    if status != 200:
+        reason = payload.strip() or transport_error or "unknown error"
+        return False, {}, f"Supabase refresh failed ({status}): {reason[:320]}"
+
+    data = parse_json_object(payload)
+    access_token = text(data.get("access_token"))
+    if not access_token:
+        return False, {}, "Supabase refresh returned no access_token"
+    return (
+        True,
+        {
+            "access_token": access_token,
+            "refresh_token": text(data.get("refresh_token")),
+            "expires_at": text(data.get("expires_at")),
+            "session_id": text(decode_jwt_claims(access_token).get("session_id")),
+        },
+        "",
+    )
+
+
+def refresh_bustly(account_api_base_url, refresh_token):
+    endpoint = f"{account_api_base_url.rstrip('/')}/api/oauth/api/v1/oauth/refresh"
+    status, payload, transport_error = request_json(
+        endpoint,
+        method="POST",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        },
+        body=urllib.parse.urlencode({"refresh_token": refresh_token}),
+    )
+    if status != 200:
+        reason = payload.strip() or transport_error or "unknown error"
+        return False, {}, f"Bustly refresh failed ({status}): {reason[:320]}"
+
+    envelope = parse_json_object(payload)
+    if not envelope:
+        return False, {}, "Bustly refresh returned invalid JSON"
+    envelope_status = text(envelope.get("status"))
+    if envelope_status and envelope_status != "0":
+        return False, {}, f"Bustly refresh rejected: {text(envelope.get('message'))[:320]}"
+
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        data = {}
+    extras = data.get("extras")
+    if not isinstance(extras, dict):
+        extras = {}
+    supabase_session = extras.get("supabase_session")
+    if not isinstance(supabase_session, dict):
+        supabase_session = {}
+
+    access_token = pick(
+        data.get("supabaseAccessToken"),
+        data.get("accessToken"),
+        supabase_session.get("access_token"),
+    )
+    if not access_token:
+        return False, {}, "Bustly refresh returned no Supabase access token"
+
+    return (
+        True,
+        {
+            "access_token": access_token,
+            "bustly_refresh_token": text(data.get("refreshToken")),
+            "legacy_supabase_refresh_token": pick(
+                data.get("legacySupabaseRefreshToken"),
+                data.get("userRefreshToken"),
+                supabase_session.get("refresh_token"),
+            ),
+            "expires_at": pick(
+                data.get("supabaseAccessTokenExpiresAt"),
+                data.get("expiresAt"),
+            ),
+            "session_id": pick(
+                data.get("bustlySessionId"),
+                decode_jwt_claims(access_token).get("session_id"),
+            ),
+        },
+        "",
+    )
+
+
+def shell_export(name, value):
+    return f"{name}={shlex.quote(text(value))}"
+
+
+state = decode_oauth_state(os.environ.get("BUSTLY_OAUTH_STATE_B64"))
+state_user = state.get("user") if isinstance(state.get("user"), dict) else {}
+state_supabase = state.get("supabase") if isinstance(state.get("supabase"), dict) else {}
+
+workspace_id = text(os.environ.get("WORKSPACE_ID"))
+login_trace_id = pick(os.environ.get("BUSTLY_LOGIN_TRACE_ID"), state.get("loginTraceId"), f"cloud-{workspace_id[:12]}")
+supabase_access_token = pick(
+    os.environ.get("BUSTLY_USER_ACCESS_TOKEN"),
+    os.environ.get("BUSTLY_SUPABASE_ACCESS_TOKEN"),
+    state_user.get("supabaseAccessToken"),
+    state_user.get("userAccessToken"),
+)
+user_access_token = pick(
+    os.environ.get("BUSTLY_USER_ACCESS_TOKEN"),
+    supabase_access_token,
+    state_user.get("userAccessToken"),
+)
+bustly_refresh_token = pick(
+    os.environ.get("BUSTLY_REFRESH_TOKEN"),
+    state_user.get("bustlyRefreshToken"),
+)
+legacy_supabase_refresh_token = pick(
+    os.environ.get("BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN"),
+    state_user.get("legacySupabaseRefreshToken"),
+    state_user.get("userRefreshToken"),
+)
+supabase_access_token_expires_at = pick(
+    os.environ.get("BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT"),
+    state_user.get("supabaseAccessTokenExpiresAt"),
+)
+session_id = pick(
+    os.environ.get("BUSTLY_SESSION_ID"),
+    state_user.get("bustlySessionId"),
+    decode_jwt_claims(supabase_access_token or user_access_token).get("session_id"),
+)
+user_id = pick(os.environ.get("BUSTLY_USER_ID"), state_user.get("userId"))
+user_name = pick(os.environ.get("BUSTLY_USER_NAME"), state_user.get("userName"))
+user_email = pick(os.environ.get("BUSTLY_USER_EMAIL"), state_user.get("userEmail"))
+supabase_url = pick(os.environ.get("BUSTLY_SUPABASE_URL"), state_supabase.get("url"))
+supabase_anon_key = pick(os.environ.get("BUSTLY_SUPABASE_ANON_KEY"), state_supabase.get("anonKey"))
+account_api_base_url = text(os.environ.get("BUSTLY_ACCOUNT_API_BASE_URL"))
+
+if supabase_access_token and supabase_url and supabase_anon_key:
+    valid, status, reason = verify_supabase_token(
+        supabase_url, supabase_anon_key, supabase_access_token
+    )
+    if not valid:
+        refreshed = False
+        refresh_errors = []
+
+        if legacy_supabase_refresh_token:
+            ok, payload, error = refresh_supabase_legacy(
+                supabase_url, supabase_anon_key, legacy_supabase_refresh_token
+            )
+            if ok:
+                supabase_access_token = payload.get("access_token", supabase_access_token)
+                user_access_token = supabase_access_token
+                if payload.get("refresh_token"):
+                    legacy_supabase_refresh_token = payload.get("refresh_token", legacy_supabase_refresh_token)
+                if payload.get("expires_at"):
+                    supabase_access_token_expires_at = payload.get("expires_at", supabase_access_token_expires_at)
+                if payload.get("session_id"):
+                    session_id = payload.get("session_id", session_id)
+                refreshed = True
+            elif error:
+                refresh_errors.append(error)
+
+        if not refreshed and bustly_refresh_token and account_api_base_url:
+            ok, payload, error = refresh_bustly(account_api_base_url, bustly_refresh_token)
+            if ok:
+                supabase_access_token = payload.get("access_token", supabase_access_token)
+                user_access_token = supabase_access_token
+                if payload.get("bustly_refresh_token"):
+                    bustly_refresh_token = payload.get("bustly_refresh_token", bustly_refresh_token)
+                if payload.get("legacy_supabase_refresh_token"):
+                    legacy_supabase_refresh_token = payload.get(
+                        "legacy_supabase_refresh_token", legacy_supabase_refresh_token
+                    )
+                if payload.get("expires_at"):
+                    supabase_access_token_expires_at = payload.get("expires_at", supabase_access_token_expires_at)
+                if payload.get("session_id"):
+                    session_id = payload.get("session_id", session_id)
+                refreshed = True
+            elif error:
+                refresh_errors.append(error)
+
+        if not refreshed:
+            context = f"supabase token validation failed ({status})"
+            if reason:
+                context = f"{context}: {reason}"
+            if refresh_errors:
+                context = f"{context}; refresh attempts: {' | '.join(refresh_errors)}"
+            print(f"error: {context}", file=sys.stderr)
+            sys.exit(1)
+
+        valid, status, reason = verify_supabase_token(
+            supabase_url, supabase_anon_key, supabase_access_token
+        )
+        if not valid:
+            context = f"refreshed supabase token validation failed ({status})"
+            if reason:
+                context = f"{context}: {reason}"
+            print(f"error: {context}", file=sys.stderr)
+            sys.exit(1)
+
+for line in [
+    shell_export("BUSTLY_LOGIN_TRACE_ID", login_trace_id),
+    shell_export("BUSTLY_USER_ACCESS_TOKEN", user_access_token),
+    shell_export("BUSTLY_SUPABASE_ACCESS_TOKEN", supabase_access_token),
+    shell_export("BUSTLY_REFRESH_TOKEN", bustly_refresh_token),
+    shell_export("BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN", legacy_supabase_refresh_token),
+    shell_export("BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT", supabase_access_token_expires_at),
+    shell_export("BUSTLY_SESSION_ID", session_id),
+    shell_export("BUSTLY_USER_ID", user_id),
+    shell_export("BUSTLY_USER_NAME", user_name),
+    shell_export("BUSTLY_USER_EMAIL", user_email),
+    shell_export("BUSTLY_SUPABASE_URL", supabase_url),
+    shell_export("BUSTLY_SUPABASE_ANON_KEY", supabase_anon_key),
+]:
+    print(line)
+PY
+)"
+eval "$AUTH_TOKEN_RESOLUTION"
+if [[ -z "$BUSTLY_USER_ACCESS_TOKEN" ]]; then
+  BUSTLY_USER_ACCESS_TOKEN="$BUSTLY_SUPABASE_ACCESS_TOKEN"
+fi
+if [[ -z "$BUSTLY_SUPABASE_ACCESS_TOKEN" ]]; then
+  BUSTLY_SUPABASE_ACCESS_TOKEN="$BUSTLY_USER_ACCESS_TOKEN"
+fi
+
 if [[ -z "$BUSTLY_DEFAULT_ENABLED_SKILLS_JSON" ]]; then
   DEFAULT_ENABLED_SKILLS_PATH="${OPENCLAW_DEFAULT_ENABLED_SKILLS_PATH:-${PWD}/bustly-skills/skills/.bustly-default-enabled.json}"
   if [[ -f "$DEFAULT_ENABLED_SKILLS_PATH" ]]; then
@@ -633,6 +995,7 @@ export SKIP_CRON
 export WORKSPACE_ID
 export BUSTLY_OAUTH_STATE_B64
 export BUSTLY_USER_ACCESS_TOKEN
+export BUSTLY_SUPABASE_ACCESS_TOKEN
 export BUSTLY_REFRESH_TOKEN
 export BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN
 export BUSTLY_SUPABASE_ACCESS_TOKEN_EXPIRES_AT
@@ -666,6 +1029,7 @@ env = [
     {"name": "BUSTLY_WORKSPACE_ID", "value": os.environ.get("WORKSPACE_ID", "")},
     {"name": "BUSTLY_OAUTH_STATE_B64", "value": os.environ.get("BUSTLY_OAUTH_STATE_B64", "")},
     {"name": "BUSTLY_USER_ACCESS_TOKEN", "value": os.environ.get("BUSTLY_USER_ACCESS_TOKEN", "")},
+    {"name": "BUSTLY_SUPABASE_ACCESS_TOKEN", "value": os.environ.get("BUSTLY_SUPABASE_ACCESS_TOKEN", "")},
     {"name": "BUSTLY_REFRESH_TOKEN", "value": os.environ.get("BUSTLY_REFRESH_TOKEN", "")},
     {
         "name": "BUSTLY_LEGACY_SUPABASE_REFRESH_TOKEN",
