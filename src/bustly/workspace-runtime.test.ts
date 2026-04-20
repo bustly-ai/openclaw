@@ -66,11 +66,33 @@ describe("workspace-runtime", () => {
   let tempDir: string;
   let previousStateDir: string | undefined;
   let previousConfigPath: string | undefined;
+  let previousWorkspaceTemplateBaseUrl: string | undefined;
+
+  function expectOverviewBootstrapCalled(): void {
+    expect(bootstrapMock).toHaveBeenCalled();
+    expect(
+      bootstrapMock.mock.calls.some(([params]) => {
+        const bootstrapParams = params as {
+          workspaceId?: string;
+          agentName?: string;
+          workspaceDir?: string;
+        };
+        return (
+          bootstrapParams.workspaceId === "workspace-1" &&
+          bootstrapParams.agentName === "overview" &&
+          bootstrapParams.workspaceDir?.includes(
+            path.join("workspaces", "workspace-1", "agents", "overview"),
+          )
+        );
+      }),
+    ).toBe(true);
+  }
 
   beforeEach(() => {
     tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-bustly-runtime-"));
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    previousWorkspaceTemplateBaseUrl = process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
     process.env.OPENCLAW_STATE_DIR = path.join(tempDir, "state");
     process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, "state", "openclaw.json");
     oauthStateRef.current = null;
@@ -100,6 +122,11 @@ describe("workspace-runtime", () => {
       delete process.env.OPENCLAW_CONFIG_PATH;
     } else {
       process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+    }
+    if (previousWorkspaceTemplateBaseUrl === undefined) {
+      delete process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
+    } else {
+      process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL = previousWorkspaceTemplateBaseUrl;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -145,7 +172,7 @@ describe("workspace-runtime", () => {
     });
 
     expect(binding.workspaceId).toBe("workspace-1");
-    expect(bootstrapMock).toHaveBeenCalledTimes(1);
+    expectOverviewBootstrapCalled();
   });
 
   it("uses a refreshed oauth state before cloud preflight", async () => {
@@ -179,7 +206,7 @@ describe("workspace-runtime", () => {
 
     expect(readBustlyOAuthStateEnsuringFreshTokenMock).toHaveBeenCalledTimes(1);
     expect(binding.workspaceId).toBe("workspace-1");
-    expect(bootstrapMock).toHaveBeenCalledTimes(1);
+    expectOverviewBootstrapCalled();
   });
 
   it("initializes config and workspace binding for cloud mode", async () => {
@@ -208,7 +235,7 @@ describe("workspace-runtime", () => {
       path.join("workspaces", "workspace-1", "agents", "overview"),
     );
     expect(refreshDefaultInstalledSkillsSnapshotMock).toHaveBeenCalledTimes(1);
-    expect(bootstrapMock).toHaveBeenCalledTimes(1);
+    expectOverviewBootstrapCalled();
     const configPath = process.env.OPENCLAW_CONFIG_PATH!;
     const config = JSON.parse(readFileSync(configPath, "utf-8")) as {
       gateway?: {

@@ -1,4 +1,4 @@
-import { readBustlyOAuthState } from "../../bustly-oauth.js";
+import { readBustlyOAuthStateEnsuringFreshToken } from "../../bustly-oauth.js";
 import { createBustlyIssueReportArchive } from "../../bustly/issue-report.js";
 import {
   applyBustlyRuntimeManifest,
@@ -9,13 +9,14 @@ import {
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-function resolveWorkspaceIdParam(params: Record<string, unknown>): string {
+async function resolveWorkspaceIdParam(params: Record<string, unknown>): Promise<string> {
   const explicitWorkspaceId =
     typeof params.workspaceId === "string" ? params.workspaceId.trim() : "";
   if (explicitWorkspaceId) {
     return explicitWorkspaceId;
   }
-  return readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
+  const state = await readBustlyOAuthStateEnsuringFreshToken();
+  return state?.user?.workspaceId?.trim() ?? "";
 }
 
 function normalizePresetAgentsInput(raw: unknown): BustlyRuntimePresetAgent[] {
@@ -49,7 +50,7 @@ export const bustlyRuntimeHandlers: GatewayRequestHandlers = {
   },
   "bustly.runtime.manifest.apply": async ({ params, respond }) => {
     try {
-      const workspaceId = resolveWorkspaceIdParam(params);
+      const workspaceId = await resolveWorkspaceIdParam(params);
       if (!workspaceId) {
         respond(
           false,
@@ -102,7 +103,7 @@ export const bustlyRuntimeHandlers: GatewayRequestHandlers = {
   },
   "bustly.runtime.bootstrap": async ({ params, respond }) => {
     try {
-      const workspaceId = resolveWorkspaceIdParam(params);
+      const workspaceId = await resolveWorkspaceIdParam(params);
       const workspaceName =
         typeof params.workspaceName === "string" ? params.workspaceName.trim() : undefined;
       const agentName = typeof params.agentName === "string" ? params.agentName.trim() : undefined;

@@ -3,14 +3,14 @@ import { bustlyRuntimeHandlers } from "./bustly-runtime.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const {
-  readBustlyOAuthStateMock,
+  readBustlyOAuthStateEnsuringFreshTokenMock,
   getBustlyRuntimeHealthSnapshotMock,
   getBustlyRuntimeHealthSnapshotEnsuringFreshTokenMock,
   applyBustlyRuntimeManifestMock,
   bootstrapBustlyRuntimeMock,
   createBustlyIssueReportArchiveMock,
 } = vi.hoisted(() => ({
-  readBustlyOAuthStateMock: vi.fn(),
+  readBustlyOAuthStateEnsuringFreshTokenMock: vi.fn(),
   getBustlyRuntimeHealthSnapshotMock: vi.fn(),
   getBustlyRuntimeHealthSnapshotEnsuringFreshTokenMock: vi.fn(),
   applyBustlyRuntimeManifestMock: vi.fn(),
@@ -19,7 +19,8 @@ const {
 }));
 
 vi.mock("../../bustly-oauth.js", () => ({
-  readBustlyOAuthState: () => readBustlyOAuthStateMock(),
+  readBustlyOAuthStateEnsuringFreshToken: (options?: { forceRefresh?: boolean }) =>
+    readBustlyOAuthStateEnsuringFreshTokenMock(options),
 }));
 
 vi.mock("../../bustly/runtime-manifest.js", () => ({
@@ -85,7 +86,7 @@ async function invoke(
 
 describe("gateway bustly.runtime methods", () => {
   beforeEach(() => {
-    readBustlyOAuthStateMock.mockReset();
+    readBustlyOAuthStateEnsuringFreshTokenMock.mockReset();
     getBustlyRuntimeHealthSnapshotMock.mockReset();
     getBustlyRuntimeHealthSnapshotEnsuringFreshTokenMock.mockReset();
     applyBustlyRuntimeManifestMock.mockReset();
@@ -119,7 +120,7 @@ describe("gateway bustly.runtime methods", () => {
   });
 
   it("validates workspace id for runtime manifest apply", async () => {
-    readBustlyOAuthStateMock.mockReturnValue(null);
+    readBustlyOAuthStateEnsuringFreshTokenMock.mockResolvedValue(null);
     const respond = await invoke(bustlyRuntimeHandlers, "bustly.runtime.manifest.apply", {});
     expect(respond).toEqual({
       ok: false,
@@ -132,7 +133,7 @@ describe("gateway bustly.runtime methods", () => {
   });
 
   it("applies runtime manifest with selected model aliases and preset agents", async () => {
-    readBustlyOAuthStateMock.mockReturnValue({
+    readBustlyOAuthStateEnsuringFreshTokenMock.mockResolvedValue({
       user: {
         workspaceId: "workspace-from-oauth",
       },
@@ -169,7 +170,7 @@ describe("gateway bustly.runtime methods", () => {
   });
 
   it("bootstraps runtime with shared remote presets when preset agents are omitted", async () => {
-    readBustlyOAuthStateMock.mockReturnValue({
+    readBustlyOAuthStateEnsuringFreshTokenMock.mockResolvedValue({
       user: {
         workspaceId: "workspace-from-oauth",
       },

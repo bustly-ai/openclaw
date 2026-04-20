@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../protocol/index.js";
 
 const mocks = vi.hoisted(() => ({
-  readBustlyOAuthState: vi.fn(),
+  readBustlyOAuthStateEnsuringFreshToken: vi.fn(),
   getBustlySupabaseAuthConfigEnsuringFreshToken: vi.fn(),
   listBustlyWorkspaceAgents: vi.fn(),
   createBustlyWorkspaceAgent: vi.fn(),
@@ -15,10 +15,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../bustly-oauth.js", () => ({
-  readBustlyOAuthState: () => mocks.readBustlyOAuthState(),
-  getBustlyAccessToken: (
-    state: { user?: { supabaseAccessToken?: string; userAccessToken?: string } } | null | undefined,
-  ) => state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "",
+  readBustlyOAuthStateEnsuringFreshToken: (options?: { forceRefresh?: boolean }) =>
+    mocks.readBustlyOAuthStateEnsuringFreshToken(options),
 }));
 
 vi.mock("../../bustly/workspace-agents.js", () => ({
@@ -67,7 +65,7 @@ async function invoke(
 
 describe("gateway bustly agent/session handlers", () => {
   beforeEach(() => {
-    mocks.readBustlyOAuthState.mockReset();
+    mocks.readBustlyOAuthStateEnsuringFreshToken.mockReset();
     mocks.getBustlySupabaseAuthConfigEnsuringFreshToken.mockReset();
     mocks.listBustlyWorkspaceAgents.mockReset();
     mocks.createBustlyWorkspaceAgent.mockReset();
@@ -81,7 +79,7 @@ describe("gateway bustly agent/session handlers", () => {
   });
 
   it("lists empty agent list when workspace id is unavailable", async () => {
-    mocks.readBustlyOAuthState.mockReturnValue(null);
+    mocks.readBustlyOAuthStateEnsuringFreshToken.mockResolvedValue(null);
     const { respond } = await invoke("bustly.agents.list");
     expect(respond).toHaveBeenCalledWith(true, [], undefined);
     expect(mocks.listBustlyWorkspaceAgents).not.toHaveBeenCalled();
@@ -284,7 +282,7 @@ describe("gateway bustly agent/session handlers", () => {
   });
 
   it("refreshes bustly supabase config before returning it", async () => {
-    mocks.readBustlyOAuthState.mockReturnValue({
+    mocks.readBustlyOAuthStateEnsuringFreshToken.mockResolvedValue({
       supabase: {
         url: "https://example.supabase.co",
         anonKey: "anon-key",
