@@ -24,8 +24,7 @@ import {
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import {
-  buildBustlyHeartbeatRunPrompt,
-  buildBustlyHeartbeatSystemPrompt,
+  buildBustlyHeartbeatPrompt,
   loadBustlyHeartbeatState,
   parseBustlyHeartbeatEventsJson,
   parseBustlyHeartbeatMarkdown,
@@ -566,7 +565,6 @@ async function resolveHeartbeatPreflight(params: {
 
 type HeartbeatPromptResolution = {
   prompt: string;
-  heartbeatSystemPrompt?: string;
   hasExecCompletion: boolean;
   hasCronEvents: boolean;
   bustlyWorkspaceId: string | null;
@@ -621,7 +619,6 @@ async function resolveHeartbeatRunPrompt(params: {
   const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
   const hasCronEvents = cronEvents.length > 0;
   let bustlyWorkspaceId: string | null = null;
-  let heartbeatSystemPrompt: string | undefined;
   let prompt = resolveHeartbeatPrompt(params.cfg, params.heartbeat);
   if (!hasExecCompletion && !hasCronEvents) {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
@@ -633,8 +630,7 @@ async function resolveHeartbeatRunPrompt(params: {
           "utf-8",
         );
         if (parseBustlyHeartbeatMarkdown(heartbeatContent)) {
-          heartbeatSystemPrompt = buildBustlyHeartbeatSystemPrompt();
-          prompt = buildBustlyHeartbeatRunPrompt({
+          prompt = buildBustlyHeartbeatPrompt({
             digestWindow: resolveHeartbeatDigestWindow({
               cfg: params.cfg,
               heartbeat: params.heartbeat,
@@ -657,7 +653,7 @@ async function resolveHeartbeatRunPrompt(params: {
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : prompt;
 
-  return { prompt, heartbeatSystemPrompt, hasExecCompletion, hasCronEvents, bustlyWorkspaceId };
+  return { prompt, hasExecCompletion, hasCronEvents, bustlyWorkspaceId };
 }
 
 function resolveHeartbeatDuplicateWindowMs() {
@@ -794,7 +790,7 @@ export async function runHeartbeatOnce(opts: {
   const canRelayToUser = Boolean(
     delivery.channel !== "none" && delivery.to && visibility.showAlerts,
   );
-  const { prompt, heartbeatSystemPrompt, hasExecCompletion, hasCronEvents, bustlyWorkspaceId } =
+  const { prompt, hasExecCompletion, hasCronEvents, bustlyWorkspaceId } =
     await resolveHeartbeatRunPrompt({
       cfg,
       agentId,
@@ -803,11 +799,8 @@ export async function runHeartbeatOnce(opts: {
       canRelayToUser,
       startedAt,
     });
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
-    AgentDir: workspaceDir,
-    WorkspaceDir: workspaceDir,
     From: sender,
     To: sender,
     OriginatingChannel: delivery.channel !== "none" ? delivery.channel : undefined,
@@ -870,20 +863,14 @@ export async function runHeartbeatOnce(opts: {
 
     const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
-    const heartbeatPromptForRun =
-      !hasExecCompletion && !hasCronEvents
-        ? (heartbeatSystemPrompt ?? resolveHeartbeatPrompt(cfg, heartbeat))
-        : undefined;
     const replyOpts = heartbeatModelOverride
       ? {
           isHeartbeat: true,
           heartbeatModelOverride,
-          heartbeatPrompt: heartbeatPromptForRun,
           suppressToolErrorWarnings,
         }
       : {
           isHeartbeat: true,
-          heartbeatPrompt: heartbeatPromptForRun,
           suppressToolErrorWarnings,
         };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
@@ -1333,42 +1320,52 @@ export function startHeartbeatRunner(opts: {
       }
     }
 
-    for (const agent of state.agents.values()) {
-      if (isInterval && now < agent.nextDueMs) {
-        continue;
-      }
+    const dueAgents = Array.from(state.agents.values()).filter(
+      (agent) => !isInterval || now >= agent.nextDueMs,
+    );
+    const results = await Promise.all(
+      dueAgents.map(async (agent) => {
+        try {
+          const res = await runOnce({
+            cfg: state.cfg,
+            agentId: agent.agentId,
+            heartbeat: agent.heartbeat,
+            reason,
+            deps: { runtime: state.runtime },
+          });
+          return { agent, res } as const;
+        } catch (err) {
+          return { agent, error: formatErrorMessage(err) } as const;
+        }
+      }),
+    );
 
-      let res: HeartbeatRunResult;
-      try {
-        res = await runOnce({
-          cfg: state.cfg,
-          agentId: agent.agentId,
-          heartbeat: agent.heartbeat,
-          reason,
-          deps: { runtime: state.runtime },
-        });
-      } catch (err) {
+    let sawRequestsInFlight = false;
+    for (const result of results) {
+      if ("error" in result) {
         // If runOnce throws (e.g. during session compaction), we must still
         // advance the timer and call scheduleNext so heartbeats keep firing.
-        const errMsg = formatErrorMessage(err);
-        log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
-        advanceAgentSchedule(agent, now);
+        log.error(`heartbeat runner: runOnce threw unexpectedly: ${result.error}`, {
+          error: result.error,
+        });
+        advanceAgentSchedule(result.agent, now);
         continue;
       }
-      if (res.status === "skipped" && res.reason === "requests-in-flight") {
-        advanceAgentSchedule(agent, now);
-        scheduleNext();
-        return res;
+      if (result.res.status === "skipped" && result.res.reason === "requests-in-flight") {
+        sawRequestsInFlight = true;
       }
-      if (res.status !== "skipped" || res.reason !== "disabled") {
-        advanceAgentSchedule(agent, now);
+      if (result.res.status !== "skipped" || result.res.reason !== "disabled") {
+        advanceAgentSchedule(result.agent, now);
       }
-      if (res.status === "ran") {
+      if (result.res.status === "ran") {
         ran = true;
       }
     }
 
     scheduleNext();
+    if (sawRequestsInFlight) {
+      return { status: "skipped", reason: "requests-in-flight" };
+    }
     if (ran) {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }

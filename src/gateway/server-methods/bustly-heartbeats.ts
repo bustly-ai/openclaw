@@ -515,9 +515,9 @@ export const bustlyHeartbeatHandlers: GatewayRequestHandlers = {
       }
       setHeartbeatsEnabled(true);
       const heartbeats = await listWorkspaceHeartbeats(workspaceId);
-      const runs = [];
-      for (const heartbeat of heartbeats.heartbeats.filter((item) => item.enabled)) {
-        runs.push({
+      const enabledHeartbeats = heartbeats.heartbeats.filter((item) => item.enabled);
+      const runs = await Promise.all(
+        enabledHeartbeats.map(async (heartbeat) => ({
           agentId: heartbeat.agentId,
           result: await runHeartbeatOnce({
             cfg: loadConfig(),
@@ -525,8 +525,8 @@ export const bustlyHeartbeatHandlers: GatewayRequestHandlers = {
             reason: "wake",
             force: true,
           }),
-        });
-      }
+        })),
+      );
       respond(
         true,
         {

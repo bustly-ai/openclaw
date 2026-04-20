@@ -146,22 +146,47 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
     pendingWakes.clear();
     running = true;
     try {
-      for (const pendingWake of pendingBatch) {
-        const wakeOpts = {
-          reason: pendingWake.reason ?? undefined,
-          ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
-          ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
-        };
-        const res = await active(wakeOpts);
-        if (res.status === "skipped" && res.reason === "requests-in-flight") {
+      const wakeResults = await Promise.all(
+        pendingBatch.map(async (pendingWake) => {
+          const wakeOpts = {
+            reason: pendingWake.reason ?? undefined,
+            ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
+            ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
+          };
+          try {
+            const res = await active(wakeOpts);
+            return { pendingWake, res } as const;
+          } catch (error) {
+            return { pendingWake, error } as const;
+          }
+        }),
+      );
+      let shouldRetry = false;
+      for (const wakeResult of wakeResults) {
+        if ("error" in wakeResult) {
+          queuePendingWakeReason({
+            reason: wakeResult.pendingWake.reason ?? "retry",
+            agentId: wakeResult.pendingWake.agentId,
+            sessionKey: wakeResult.pendingWake.sessionKey,
+          });
+          shouldRetry = true;
+          continue;
+        }
+        if (
+          wakeResult.res.status === "skipped" &&
+          wakeResult.res.reason === "requests-in-flight"
+        ) {
           // The main lane is busy; retry this wake target soon.
           queuePendingWakeReason({
-            reason: pendingWake.reason ?? "retry",
-            agentId: pendingWake.agentId,
-            sessionKey: pendingWake.sessionKey,
+            reason: wakeResult.pendingWake.reason ?? "retry",
+            agentId: wakeResult.pendingWake.agentId,
+            sessionKey: wakeResult.pendingWake.sessionKey,
           });
-          schedule(DEFAULT_RETRY_MS, "retry");
+          shouldRetry = true;
         }
+      }
+      if (shouldRetry) {
+        schedule(DEFAULT_RETRY_MS, "retry");
       }
     } catch {
       // Error is already logged by the heartbeat runner; schedule a retry.

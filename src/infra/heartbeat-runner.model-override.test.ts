@@ -188,13 +188,46 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     );
   });
 
-  it("passes heartbeatPrompt into the run options for system prompt injection", async () => {
-    const replyOpts = await runDefaultsHeartbeat({ model: undefined });
-    expect(replyOpts).toEqual(
-      expect.objectContaining({
-        isHeartbeat: true,
-        heartbeatPrompt: expect.stringContaining("Read HEARTBEAT.md"),
-      }),
-    );
+  it("embeds heartbeat rules into the main-session message body instead of run options", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
+
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          Body: expect.stringContaining("Read HEARTBEAT.md"),
+          SessionKey: sessionKey,
+        }),
+        expect.objectContaining({
+          isHeartbeat: true,
+        }),
+        cfg,
+      );
+      expect(replySpy.mock.calls[0]?.[1]).not.toHaveProperty("heartbeatPrompt");
+    });
   });
 });

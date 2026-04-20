@@ -318,4 +318,47 @@ describe("heartbeat-wake", () => {
       ]),
     );
   });
+
+  it("starts distinct targeted wakes in parallel within the same batch", async () => {
+    vi.useFakeTimers();
+    let resolveOps: ((value: { status: "ran"; durationMs: number }) => void) | undefined;
+    let resolveMain: ((value: { status: "ran"; durationMs: number }) => void) | undefined;
+    const opsPromise = new Promise<{ status: "ran"; durationMs: number }>((resolve) => {
+      resolveOps = resolve;
+    });
+    const mainPromise = new Promise<{ status: "ran"; durationMs: number }>((resolve) => {
+      resolveMain = resolve;
+    });
+    const handler = vi.fn().mockImplementation(async (opts?: { agentId?: string }) => {
+      if (opts?.agentId === "ops") {
+        return await opsPromise;
+      }
+      return await mainPromise;
+    });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeatNow({
+      reason: "cron:job-a",
+      agentId: "ops",
+      sessionKey: "agent:ops:discord:channel:alerts",
+      coalesceMs: 0,
+    });
+    requestHeartbeatNow({
+      reason: "cron:job-b",
+      agentId: "main",
+      sessionKey: "agent:main:telegram:group:-1001",
+      coalesceMs: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls.map((call) => call[0]?.agentId)).toEqual(
+      expect.arrayContaining(["ops", "main"]),
+    );
+
+    resolveOps?.({ status: "ran", durationMs: 1 });
+    resolveMain?.({ status: "ran", durationMs: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+  });
 });

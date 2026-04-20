@@ -204,6 +204,52 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("runs due heartbeat agents in parallel", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    let resolveMain: ((value: { status: "ran"; durationMs: number }) => void) | undefined;
+    let resolveOps: ((value: { status: "ran"; durationMs: number }) => void) | undefined;
+    const mainPromise = new Promise<{ status: "ran"; durationMs: number }>((resolve) => {
+      resolveMain = resolve;
+    });
+    const opsPromise = new Promise<{ status: "ran"; durationMs: number }>((resolve) => {
+      resolveOps = resolve;
+    });
+    const runSpy = vi.fn().mockImplementation(async ({ agentId }: { agentId: string }) => {
+      if (agentId === "main") {
+        return await mainPromise;
+      }
+      return await opsPromise;
+    });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "30m" } },
+          list: [
+            { id: "main", heartbeat: { every: "30m" } },
+            { id: "ops", heartbeat: { every: "30m" } },
+          ],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(runSpy.mock.calls.map((call) => call[0]?.agentId)).toEqual(
+      expect.arrayContaining(["main", "ops"]),
+    );
+
+    resolveMain?.({ status: "ran", durationMs: 1 });
+    resolveOps?.({ status: "ran", durationMs: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    runner.stop();
+  });
+
   it("refreshes config before targeted wake when the requested agent is not in the current runner state", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));

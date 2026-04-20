@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildBustlyHeartbeatPrompt,
   buildBustlyHeartbeatRunPrompt,
   buildBustlyHeartbeatSystemPrompt,
   parseBustlyHeartbeatEventsJson,
@@ -82,7 +83,7 @@ Notify me when any critical risk appears.
 });
 
 describe("bustly heartbeat prompts", () => {
-  it("splits fixed rules into the system prompt and digest window into the run prompt", () => {
+  it("keeps heartbeat guidance in the message prompt with the digest window", () => {
     const systemPrompt = buildBustlyHeartbeatSystemPrompt();
     const runPrompt = buildBustlyHeartbeatRunPrompt({
       digestWindow: {
@@ -90,15 +91,19 @@ describe("bustly heartbeat prompts", () => {
         to: "2026-04-20T08:30:00.000Z",
       },
     });
+    const prompt = buildBustlyHeartbeatPrompt({
+      digestWindow: {
+        from: "2026-04-20T08:00:00.000Z",
+        to: "2026-04-20T08:30:00.000Z",
+      },
+    });
 
-    expect(systemPrompt).toContain("Read HEARTBEAT.md if it exists");
-    expect(systemPrompt).toContain("Treat HEARTBEAT.md as the long-running objective");
-    expect(systemPrompt).toContain("Output rules:");
-    expect(systemPrompt).not.toContain("heartbeat_digest_search");
-
+    expect(systemPrompt).toBe("");
     expect(runPrompt).toContain("heartbeat_digest_search");
     expect(runPrompt).toContain('"from":"2026-04-20T08:00:00.000Z"');
-    expect(runPrompt).not.toContain("Output rules:");
+    expect(runPrompt).toContain("Output rules:");
+    expect(prompt).toContain("heartbeat_digest_search");
+    expect(prompt).toContain("Read `heartbeat.md`");
   });
 });
 

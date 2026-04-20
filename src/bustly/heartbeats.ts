@@ -185,9 +185,25 @@ export function renderBustlyHeartbeatMarkdown(definition: BustlyHeartbeatDefinit
   return normalized ? `${normalized}\n` : "";
 }
 
-export function buildBustlyHeartbeatOutputRulePrompt(): string {
+export function buildBustlyHeartbeatSystemPrompt(): string {
   return [
+    "",
+  ].join("\n");
+}
+
+function buildHeartbeatDigestSearchPrompt(
+  digestWindow?: BustlyHeartbeatDigestWindow,
+): string[] {
+  const from = digestWindow?.from?.trim();
+  const to = digestWindow?.to?.trim();
+  return [
+    "Read `heartbeat.md` (the long-term goals provided by the user), then, use the corresponding skills to identify recent business issues.",
+    "Call `heartbeat_digest_search` (Use digest results to understand what the user recently asked.) to understand what matters most to the user at this time.",
+    `{"from":"${from}","to":"${to}"}`,
+    "Then, share with the user your key findings regarding the business.",
     "Output rules:",
+    "- When you discover an issue, do not take direct action on my behalf; you must notify me instead.",
+    "- Do not repeat stale issues from prior runs if they are no longer relevant.",
     "- If nothing needs attention, reply exactly: HEARTBEAT_OK",
     "- If something needs attention, reply with JSON only",
     "- The JSON must be a top-level array",
@@ -197,34 +213,6 @@ export function buildBustlyHeartbeatOutputRulePrompt(): string {
     `- message must be at most ${MAX_EVENT_MESSAGE_CHARS} characters`,
     `- actionPrompt must be at most ${MAX_EVENT_ACTION_PROMPT_CHARS} characters`,
     "- Do not include markdown, code fences, or extra text before or after the JSON",
-  ].join("\n");
-}
-
-export function buildBustlyHeartbeatSystemPrompt(): string {
-  return [
-    "Read HEARTBEAT.md if it exists (workspace context).",
-    "Treat HEARTBEAT.md as the long-running objective and escalation guidance for this heartbeat.",
-    "Only surface concrete business issues or useful suggestions that match HEARTBEAT.md.",
-    "Do not repeat stale issues from prior runs if they are no longer relevant.",
-    buildBustlyHeartbeatOutputRulePrompt(),
-  ].join("\n");
-}
-
-function buildHeartbeatDigestSearchPrompt(
-  digestWindow?: BustlyHeartbeatDigestWindow,
-): string[] {
-  const from = digestWindow?.from?.trim();
-  const to = digestWindow?.to?.trim();
-  if (!from || !to) {
-    return [
-      "Before analysis, call heartbeat_digest_search first with the current heartbeat cycle time window (from/to).",
-      "Use digest results to understand what the user recently asked and what the agent already completed in that same window.",
-    ];
-  }
-  return [
-    "Before analysis, call heartbeat_digest_search first with this exact cycle window:",
-    `{"from":"${from}","to":"${to}"}`,
-    "Use digest results to understand what the user recently asked and what the agent already completed in that same window.",
   ];
 }
 
