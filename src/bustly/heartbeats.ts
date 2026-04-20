@@ -57,6 +57,11 @@ export type BustlyHeartbeatWorkspaceContext = {
   workspaceId: string;
 };
 
+export type BustlyHeartbeatDigestWindow = {
+  from: string;
+  to: string;
+};
+
 function normalizeMultilineValue(value: string): string {
   return value
     .replace(/\r\n/g, "\n")
@@ -228,11 +233,32 @@ export function buildBustlyHeartbeatOutputRulePrompt(): string {
   ].join("\n");
 }
 
-export function buildBustlyHeartbeatPrompt(): string {
+function buildHeartbeatDigestSearchPrompt(
+  digestWindow?: BustlyHeartbeatDigestWindow,
+): string[] {
+  const from = digestWindow?.from?.trim();
+  const to = digestWindow?.to?.trim();
+  if (!from || !to) {
+    return [
+      "Before analysis, call heartbeat_digest_search first with the current heartbeat cycle time window (from/to).",
+      "Use digest results to understand what the user recently asked and what the agent already completed in that same window.",
+    ];
+  }
+  return [
+    "Before analysis, call heartbeat_digest_search first with this exact cycle window:",
+    `{"from":"${from}","to":"${to}"}`,
+    "Use digest results to understand what the user recently asked and what the agent already completed in that same window.",
+  ];
+}
+
+export function buildBustlyHeartbeatPrompt(options?: {
+  digestWindow?: BustlyHeartbeatDigestWindow;
+}): string {
   return [
     "Read HEARTBEAT.md if it exists (workspace context).",
     "Treat the Goal section as the long-running objective and the Notify When section as the escalation threshold.",
     "Only surface concrete business issues or useful suggestions that match those instructions.",
+    ...buildHeartbeatDigestSearchPrompt(options?.digestWindow),
     "Do not repeat stale issues from prior runs if they are no longer relevant.",
     buildBustlyHeartbeatOutputRulePrompt(),
   ].join("\n");

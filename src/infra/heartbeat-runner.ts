@@ -570,12 +570,40 @@ type HeartbeatPromptResolution = {
   bustlyWorkspaceId: string | null;
 };
 
+function resolveHeartbeatDigestWindow(params: {
+  cfg: OpenClawConfig;
+  heartbeat?: HeartbeatConfig;
+  workspaceId: string;
+  agentId: string;
+  startedAt: number;
+}): { from: string; to: string } {
+  const previous = loadBustlyHeartbeatState({
+    workspaceId: params.workspaceId,
+    agentId: params.agentId,
+  });
+  const intervalMs = resolveHeartbeatIntervalMs(params.cfg, undefined, params.heartbeat) ?? 30 * 60 * 1000;
+  const fallbackFromMs = params.startedAt - intervalMs;
+  const previousScanAt =
+    typeof previous.lastScanAt === "number" && Number.isFinite(previous.lastScanAt)
+      ? previous.lastScanAt
+      : null;
+  const fromMs = Math.max(
+    0,
+    Math.min(params.startedAt, previousScanAt !== null ? previousScanAt + 1 : fallbackFromMs),
+  );
+  return {
+    from: new Date(fromMs).toISOString(),
+    to: new Date(params.startedAt).toISOString(),
+  };
+}
+
 async function resolveHeartbeatRunPrompt(params: {
   cfg: OpenClawConfig;
   agentId: string;
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;
+  startedAt: number;
 }): Promise<HeartbeatPromptResolution> {
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const pendingEvents = params.preflight.shouldInspectPendingEvents
@@ -602,7 +630,15 @@ async function resolveHeartbeatRunPrompt(params: {
           "utf-8",
         );
         if (parseBustlyHeartbeatMarkdown(heartbeatContent)) {
-          prompt = buildBustlyHeartbeatPrompt();
+          prompt = buildBustlyHeartbeatPrompt({
+            digestWindow: resolveHeartbeatDigestWindow({
+              cfg: params.cfg,
+              heartbeat: params.heartbeat,
+              workspaceId: bustlyContext.workspaceId,
+              agentId: params.agentId,
+              startedAt: params.startedAt,
+            }),
+          });
           bustlyWorkspaceId = bustlyContext.workspaceId;
         }
       } catch {
@@ -756,12 +792,13 @@ export async function runHeartbeatOnce(opts: {
   );
   const { prompt, hasExecCompletion, hasCronEvents, bustlyWorkspaceId } =
     await resolveHeartbeatRunPrompt({
-    cfg,
-    agentId,
-    heartbeat,
-    preflight,
-    canRelayToUser,
-  });
+      cfg,
+      agentId,
+      heartbeat,
+      preflight,
+      canRelayToUser,
+      startedAt,
+    });
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,

@@ -220,6 +220,8 @@ export function createOpenClawCodingTools(options?: {
   runId?: string;
   /** Logical session id for per-command skill/model-gateway attribution. */
   sessionId?: string;
+  /** If true, include heartbeat-only tools. */
+  isHeartbeat?: boolean;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -488,6 +490,7 @@ export function createOpenClawCodingTools(options?: {
       requesterAgentIdOverride: agentId,
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
+      isHeartbeat: options?.isHeartbeat,
     }),
   ];
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
