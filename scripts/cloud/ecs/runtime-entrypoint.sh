@@ -22,7 +22,7 @@ CONTROL_UI_ALLOWED_ORIGINS="${BUSTLY_CONTROL_UI_ALLOWED_ORIGINS:-}"
 CONTROL_UI_DISABLE_DEVICE_AUTH="${BUSTLY_CONTROL_UI_DISABLE_DEVICE_AUTH:-0}"
 
 if [[ -n "${OPENCLAW_EFS_MOUNT_ROOT:-}" && -n "${OPENCLAW_PERSISTENT_ASSET_PATHS_JSON:-}" ]]; then
-  node dist/bustly/persistence-layout.js
+  node dist/persistence-layout.js
 fi
 
 if [[ -n "$OAUTH_STATE_B64" ]]; then
