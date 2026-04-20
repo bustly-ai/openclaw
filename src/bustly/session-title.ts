@@ -9,6 +9,7 @@ import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
 import { runTrackedModelRequest } from "../infra/model-request-adapter.js";
+import { isTransientNetworkError } from "../infra/unhandled-rejections.js";
 import { readBustlyOAuthState } from "../bustly-oauth.js";
 import { bustlySupabaseFetch } from "./supabase.js";
 import { normalizeBustlyWorkspaceId } from "./workspace-agent.js";
@@ -48,6 +49,34 @@ type ScheduleBustlySessionTitleParams = {
   sampleRouteKey?: string;
   cfg: OpenClawConfig;
   onLabelUpdated?: (payload: BustlySessionLabelUpdatedPayload) => void;
+};
+
+export type GenerateBustlySessionTitleParams = {
+  promptExcerpt?: string;
+  cfg: OpenClawConfig;
+  workspaceId: string;
+  sessionId: string;
+  sessionKey: string;
+};
+
+export type BustlySessionTitleFailureReason =
+  | "invalid_input"
+  | "model_unavailable"
+  | "timeout"
+  | "network_error"
+  | "provider_error"
+  | "invalid_output";
+
+export type BustlySessionTitleGenerationResult =
+  | { ok: true; title: string }
+  | { ok: false; reason: BustlySessionTitleFailureReason };
+
+export type UpsertBustlySessionTitleExtractParams = {
+  workspaceId: string;
+  sessionId: string;
+  sessionName: string;
+  sampleRouteKey?: string;
+  promptExcerpt?: string;
 };
 
 function resolveSessionTitleWorkspaceId(rawWorkspaceId: string): string {
@@ -99,37 +128,59 @@ function normalizeGeneratedSessionTitle(value: string): string | null {
   return normalized;
 }
 
-function normalizeSessionPromptExcerpt(value: string | undefined): string {
+export function normalizeBustlySessionPromptExcerpt(value: string | undefined): string {
   const normalized = value?.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim() ?? "";
   return normalized.slice(0, 500);
 }
 
-function normalizeSampleRouteKey(value: string | undefined): string {
+export function normalizeBustlySessionSampleRouteKey(value: string | undefined): string {
   return value?.trim() || "manual";
 }
 
-async function generateSessionTitle(params: {
+export async function generateBustlySessionTitleWithStatus(
+  params: GenerateBustlySessionTitleParams,
+): Promise<BustlySessionTitleGenerationResult> {
+  const workspaceId = resolveSessionTitleWorkspaceId(params.workspaceId);
+  const sessionId = params.sessionId.trim();
+  const sessionKey = params.sessionKey.trim();
+  const promptExcerpt = normalizeBustlySessionPromptExcerpt(params.promptExcerpt);
+  if (!workspaceId || !sessionId || !sessionKey || !promptExcerpt) {
+    return { ok: false, reason: "invalid_input" };
+  }
+  return await generateSessionTitleWithStatus({
+    promptExcerpt,
+    cfg: params.cfg,
+    workspaceId,
+    sessionId,
+    sessionKey,
+  });
+}
+
+export async function generateBustlySessionTitle(
+  params: GenerateBustlySessionTitleParams,
+): Promise<string | null> {
+  const result = await generateBustlySessionTitleWithStatus(params);
+  return result.ok ? result.title : null;
+}
+
+async function generateSessionTitleWithStatus(params: {
   promptExcerpt: string;
   cfg: OpenClawConfig;
   workspaceId: string;
   sessionId: string;
   sessionKey: string;
-}): Promise<string | null> {
+}): Promise<BustlySessionTitleGenerationResult> {
   const resolved = resolveModel(BUSTLY_PROVIDER_ID, SESSION_TITLE_MODEL_ID, undefined, params.cfg);
   if (!resolved.model) {
-    return null;
+    return { ok: false, reason: "model_unavailable" };
   }
 
-  const apiKey = requireApiKey(
-    await getApiKeyForModel({
-      model: resolved.model,
-      cfg: params.cfg,
-    }),
-    BUSTLY_PROVIDER_ID,
-  );
-
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SESSION_TITLE_TIMEOUT_MS);
+  let didTimeout = false;
+  const timeout = setTimeout(() => {
+    didTimeout = true;
+    controller.abort();
+  }, SESSION_TITLE_TIMEOUT_MS);
   const runId = `session-title-${randomUUID()}`;
   const headers = mergeBustlyRuntimeHeaders({
     modelHeaders: (resolved.model as { headers?: Record<string, string> }).headers,
@@ -156,6 +207,13 @@ async function generateSessionTitle(params: {
   ];
 
   try {
+    const apiKey = requireApiKey(
+      await getApiKeyForModel({
+        model: resolved.model,
+        cfg: params.cfg,
+      }),
+      BUSTLY_PROVIDER_ID,
+    );
     const eventStream = await Promise.resolve(
       runTrackedModelRequest({
         runId,
@@ -189,12 +247,25 @@ async function generateSessionTitle(params: {
     const stopReason = typeof (message as { stopReason?: unknown }).stopReason === "string"
       ? (message as { stopReason: string }).stopReason
       : "";
-    if (stopReason === "error" || stopReason === "aborted") {
-      return null;
+    if (stopReason === "aborted") {
+      return { ok: false, reason: didTimeout || controller.signal.aborted ? "timeout" : "provider_error" };
     }
-    return normalizeGeneratedSessionTitle(extractAssistantText(message));
-  } catch {
-    return null;
+    if (stopReason === "error") {
+      return { ok: false, reason: "provider_error" };
+    }
+    const normalizedTitle = normalizeGeneratedSessionTitle(extractAssistantText(message));
+    if (!normalizedTitle) {
+      return { ok: false, reason: "invalid_output" };
+    }
+    return { ok: true, title: normalizedTitle };
+  } catch (error) {
+    if (didTimeout || controller.signal.aborted) {
+      return { ok: false, reason: "timeout" };
+    }
+    if (isTransientNetworkError(error)) {
+      return { ok: false, reason: "network_error" };
+    }
+    return { ok: false, reason: "provider_error" };
   } finally {
     clearTimeout(timeout);
   }
@@ -231,6 +302,26 @@ async function upsertSessionNameExtract(params: {
       `workspace_session_name_extracts upsert failed: status=${response.status} body=${text}`,
     );
   }
+}
+
+export async function upsertBustlySessionTitleExtract(
+  params: UpsertBustlySessionTitleExtractParams,
+): Promise<void> {
+  const workspaceId = resolveSessionTitleWorkspaceId(params.workspaceId);
+  const sessionId = params.sessionId.trim();
+  const sessionName = normalizeGeneratedSessionTitle(params.sessionName);
+  const sampleRouteKey = normalizeBustlySessionSampleRouteKey(params.sampleRouteKey);
+  const promptExcerpt = normalizeBustlySessionPromptExcerpt(params.promptExcerpt);
+  if (!workspaceId || !sessionId || !sessionName || !promptExcerpt) {
+    return;
+  }
+  await upsertSessionNameExtract({
+    workspaceId,
+    sessionId,
+    sessionName,
+    sampleRouteKey,
+    promptExcerpt,
+  });
 }
 
 async function applySessionTitle(params: {
@@ -280,9 +371,9 @@ export function scheduleBustlySessionTitleGeneration(params: ScheduleBustlySessi
   const sessionKey = params.sessionKey.trim();
   const sessionId = params.sessionId.trim();
   const seedLabel = params.seedLabel.trim();
-  const directPromptExcerpt = normalizeSessionPromptExcerpt(params.promptExcerpt);
-  const promptExcerpt = directPromptExcerpt || normalizeSessionPromptExcerpt(seedLabel);
-  const sampleRouteKey = normalizeSampleRouteKey(params.sampleRouteKey);
+  const directPromptExcerpt = normalizeBustlySessionPromptExcerpt(params.promptExcerpt);
+  const promptExcerpt = directPromptExcerpt || normalizeBustlySessionPromptExcerpt(seedLabel);
+  const sampleRouteKey = normalizeBustlySessionSampleRouteKey(params.sampleRouteKey);
 
   if (!workspaceId || !agentId || !sessionKey || !sessionId || !seedLabel || !promptExcerpt) {
     return;
@@ -297,34 +388,37 @@ export function scheduleBustlySessionTitleGeneration(params: ScheduleBustlySessi
       return;
     }
 
-    const generatedTitle = await generateSessionTitle({
+    const generatedTitle = await generateBustlySessionTitle({
       promptExcerpt,
       cfg: params.cfg,
       workspaceId,
       sessionId,
       sessionKey,
     });
-    if (!generatedTitle) {
-      return;
-    }
+    const resolvedSessionName = generatedTitle || promptExcerpt;
 
-    const applied = await applySessionTitle({
-      cfg: params.cfg,
-      agentId,
-      sessionKey,
-      sessionId,
-      seedLabel,
-      generatedTitle,
-    });
-    if (applied.status === "missing" || applied.status === "rejected") {
-      return;
+    let applied:
+      | { status: "updated" | "unchanged" | "conflict" | "missing" | "rejected"; updatedAt: number | null }
+      | null = null;
+    if (generatedTitle) {
+      applied = await applySessionTitle({
+        cfg: params.cfg,
+        agentId,
+        sessionKey,
+        sessionId,
+        seedLabel,
+        generatedTitle,
+      });
+      if (applied.status === "missing" || applied.status === "rejected") {
+        return;
+      }
     }
 
     try {
       await upsertSessionNameExtract({
         workspaceId,
         sessionId,
-        sessionName: generatedTitle,
+        sessionName: resolvedSessionName,
         sampleRouteKey,
         promptExcerpt,
       });
@@ -332,7 +426,7 @@ export function scheduleBustlySessionTitleGeneration(params: ScheduleBustlySessi
       // Best effort; the local session label has already been updated.
     }
 
-    if (applied.status === "updated") {
+    if (generatedTitle && applied?.status === "updated") {
       params.onLabelUpdated?.({
         agentId,
         sessionKey,
