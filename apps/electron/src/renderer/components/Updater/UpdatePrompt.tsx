@@ -280,7 +280,7 @@ export default function UpdatePrompt() {
                   }}
                   className="rounded-xl bg-[#1A162F] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#1A162F]/90"
                 >
-                  Restart now
+                  Restart and install
                 </button>
               </div>
             ) : isAvailable ? (

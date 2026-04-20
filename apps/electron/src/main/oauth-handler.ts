@@ -394,7 +394,7 @@ const PROVIDERS = {
     id: "bustly",
     label: "Bustly",
     authMethods: [{ id: "oauth", label: "Bustly Login", kind: "oauth" as AuthMethodKind }],
-    defaultModel: "bustly/chat.ultra",
+    defaultModel: "bustly/chat.standard",
     envKey: "BUSTLY_USER_ACCESS_TOKEN",
   },
   anthropic: {
@@ -602,7 +602,7 @@ export async function authenticateWithOAuth(params: {
         provider: "bustly",
         token: accessToken,
       },
-      defaultModel: "bustly/chat.ultra",
+      defaultModel: "bustly/chat.standard",
     };
   }
 

@@ -907,7 +907,7 @@ function normalizeBustlyModelRef(value: unknown): string {
     return `${BUSTLY_PROVIDER_ID}/${raw}`;
   }
   if (raw === "lite" || raw === "auto") {
-    return "bustly/chat.ultra";
+    return "bustly/chat.standard";
   }
   if (raw === "pro") {
     return "bustly/chat.advanced";
@@ -915,7 +915,7 @@ function normalizeBustlyModelRef(value: unknown): string {
   if (raw === "max") {
     return "bustly/chat.ultra";
   }
-  return "bustly/chat.ultra";
+  return "bustly/chat.standard";
 }
 
 function resolveCurrentBustlyModelRef(cfg: OpenClawConfig): string {
@@ -4174,6 +4174,10 @@ function setupIpcHandlers(): void {
       updateInstalling = true;
       setTimeout(() => {
         writeMainLog("[Updater] Calling quitAndInstall");
+        // Allow the window to close during updater-triggered restart.
+        // Otherwise our close handler will intercept and hide the window,
+        // preventing the app from fully quitting for install.
+        isAppQuitting = true;
         autoUpdater.quitAndInstall(false, true);
       }, 1_200);
       return { success: true };

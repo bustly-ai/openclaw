@@ -181,6 +181,7 @@ const TOOL_RUNNING_MIN_VISIBLE_MS = 600;
 const SIDEBAR_TASKS_REFRESH_EVENT = "openclaw:sidebar-refresh-tasks";
 const SIDEBAR_TASK_RUN_STATE_EVENT = "openclaw:sidebar-task-run-state";
 const CHAT_MODEL_LEVEL_STORAGE_KEY = "bustly.chat.model-level.v1";
+const CHAT_MODEL_LEVEL_BOOTSTRAP_KEY = "bustly.chat.model-level.bootstrap.v1";
 const INITIAL_SESSION_USAGE: SessionUsageSummary = {
   totalTokens: null,
   contextTokens: null,
@@ -785,6 +786,10 @@ export default function ChatPage() {
   const [canManageSubscription, setCanManageSubscription] = useState(false);
   const [workspaceStateLoading, setWorkspaceStateLoading] = useState(true);
   const [modelLevel, setModelLevel] = useState<ChatModelLevelId>(() => {
+    const hasBootstrapped = window.localStorage.getItem(CHAT_MODEL_LEVEL_BOOTSTRAP_KEY) === "1";
+    if (!hasBootstrapped) {
+      return "standard";
+    }
     const stored = window.localStorage.getItem(CHAT_MODEL_LEVEL_STORAGE_KEY);
     if (stored === "standard" || stored === "advanced" || stored === "ultra") {
       return stored;
@@ -799,7 +804,7 @@ export default function ChatPage() {
     if (stored === "max") {
       return "ultra";
     }
-    return "ultra";
+    return "standard";
   });
 
   const clientRef = useRef<GatewayBrowserClient | null>(null);
@@ -3225,6 +3230,9 @@ export default function ChatPage() {
     });
   }, [currentViewKey, setSessionDraft]);
   useEffect(() => {
+    if (window.localStorage.getItem(CHAT_MODEL_LEVEL_BOOTSTRAP_KEY) !== "1") {
+      window.localStorage.setItem(CHAT_MODEL_LEVEL_BOOTSTRAP_KEY, "1");
+    }
     window.localStorage.setItem(CHAT_MODEL_LEVEL_STORAGE_KEY, modelLevel);
   }, [modelLevel]);
 
