@@ -38,8 +38,16 @@ function resolveWorkspaceIdParam(params: Record<string, unknown>): string {
   return readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
 }
 
-function summarizeHeartbeatTitle(goal: string, fallback: string): string {
-  const normalized = goal.replace(/\s+/g, " ").trim();
+function summarizeHeartbeatTitle(content: string, fallback: string): string {
+  const normalized = content
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean)
+    ?.replace(/^#+\s*/, "")
+    .replace(/^[-*]\s+/, "")
+    .replace(/\s+/g, " ")
+    .trim() ?? "";
   if (!normalized) {
     return fallback;
   }
@@ -105,8 +113,7 @@ function resolveAgentHeartbeatConfig(cfg: ReturnType<typeof loadConfig>, agentId
 function buildHeartbeatListItem(params: {
   workspaceId: string;
   agent: HeartbeatAgentSummary;
-  goal: string;
-  notifyWhen: string;
+  content: string;
   state: ReturnType<typeof loadBustlyHeartbeatState>;
 }) {
   const heartbeatConfig = resolveAgentHeartbeatConfig(loadConfig(), params.agent.agentId);
@@ -114,14 +121,13 @@ function buildHeartbeatListItem(params: {
   const openEvents = params.state.events
     .filter((event) => event.status === "open")
     .sort(sortPriorityEvents);
-  const title = summarizeHeartbeatTitle(params.goal, params.agent.name);
+  const title = summarizeHeartbeatTitle(params.content, params.agent.name);
 
   return {
     agentId: params.agent.agentId,
     agentName: params.agent.name,
     title,
-    goal: params.goal,
-    notifyWhen: params.notifyWhen,
+    content: params.content,
     enabled,
     createdAt: params.agent.createdAt,
     updatedAt: params.agent.updatedAt,
@@ -144,14 +150,12 @@ async function listWorkspaceHeartbeats(workspaceId: string) {
     if (!definition && !heartbeatConfig && heartbeatState.events.length === 0) {
       continue;
     }
-    const goal = definition?.goal?.trim() ?? "";
-    const notifyWhen = definition?.notifyWhen?.trim() ?? "";
+    const content = definition?.content?.trim() ?? "";
     cards.push(
       buildHeartbeatListItem({
         workspaceId,
         agent,
-        goal,
-        notifyWhen,
+        content,
         state: heartbeatState,
       }),
     );
@@ -256,8 +260,7 @@ function resolveHeartbeatAgent(workspaceId: string, agentId: string): HeartbeatA
 async function saveHeartbeatFile(params: {
   workspaceId: string;
   agent: HeartbeatAgentSummary;
-  goal: string;
-  notifyWhen: string;
+  content: string;
 }) {
   const workspaceDir = agentWorkspaceDir(params.agent);
   if (!workspaceDir) {
@@ -268,8 +271,7 @@ async function saveHeartbeatFile(params: {
   await fs.writeFile(
     filePath,
     renderBustlyHeartbeatMarkdown({
-      goal: params.goal,
-      notifyWhen: params.notifyWhen,
+      content: params.content,
     }),
     "utf-8",
   );
@@ -278,8 +280,7 @@ async function saveHeartbeatFile(params: {
 async function saveHeartbeatDefinition(params: {
   workspaceId: string;
   agentId: string;
-  goal: string;
-  notifyWhen: string;
+  content: string;
 }) {
   const agent = resolveHeartbeatAgent(params.workspaceId, params.agentId);
   if (!agent) {
@@ -288,8 +289,7 @@ async function saveHeartbeatDefinition(params: {
   await saveHeartbeatFile({
     workspaceId: params.workspaceId,
     agent,
-    goal: params.goal,
-    notifyWhen: params.notifyWhen,
+    content: params.content,
   });
   const cfg = updateAgentHeartbeatConfig({
     cfg: loadConfig(),
@@ -309,8 +309,7 @@ async function saveHeartbeatDefinition(params: {
   return buildHeartbeatListItem({
     workspaceId: params.workspaceId,
     agent,
-    goal: params.goal.trim(),
-    notifyWhen: params.notifyWhen.trim(),
+    content: params.content.trim(),
     state,
   });
 }
@@ -366,9 +365,12 @@ export const bustlyHeartbeatHandlers: GatewayRequestHandlers = {
     try {
       const workspaceId = resolveWorkspaceIdParam(params);
       const agentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
-      const goal = typeof params.goal === "string" ? params.goal.trim() : "";
-      const notifyWhen =
+      const content = typeof params.content === "string" ? params.content.trim() : "";
+      const legacyGoal = typeof params.goal === "string" ? params.goal.trim() : "";
+      const legacyNotifyWhen =
         typeof params.notifyWhen === "string" ? params.notifyWhen.trim() : "";
+      const resolvedContent =
+        content || [legacyGoal, legacyNotifyWhen].filter(Boolean).join("\n\n");
       if (!workspaceId) {
         respond(
           false,
@@ -381,23 +383,14 @@ export const bustlyHeartbeatHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"));
         return;
       }
-      if (!goal) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "goal is required"));
-        return;
-      }
-      if (!notifyWhen) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "notifyWhen is required"),
-        );
+      if (!resolvedContent) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "content is required"));
         return;
       }
       const item = await saveHeartbeatDefinition({
         workspaceId,
         agentId,
-        goal,
-        notifyWhen,
+        content: resolvedContent,
       });
       respond(true, item, undefined);
     } catch (err) {
@@ -457,8 +450,7 @@ export const bustlyHeartbeatHandlers: GatewayRequestHandlers = {
         buildHeartbeatListItem({
           workspaceId,
           agent,
-          goal: definition?.goal?.trim() ?? "",
-          notifyWhen: definition?.notifyWhen?.trim() ?? "",
+          content: definition?.content?.trim() ?? "",
           state,
         }),
         undefined,

@@ -173,6 +173,7 @@ export function buildEmbeddedRunBaseParams(params: {
     config: params.run.config,
     skillFilter: params.run.skillFilter,
     ownerNumbers: params.run.ownerNumbers,
+    heartbeatPrompt: params.run.heartbeatPrompt,
     senderIsOwner: params.run.senderIsOwner,
     enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider),
     provider: params.provider,

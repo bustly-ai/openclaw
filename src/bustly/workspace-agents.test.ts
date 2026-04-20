@@ -171,6 +171,7 @@ describe("workspace-agents", () => {
     const sessions = listBustlyWorkspaceAgentSessions({
       workspaceId: "workspace-1",
       agentId: "bustly-workspace-1-overview",
+      includeHeartbeatMainSessions: true,
     });
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.sessionKey).toBe(created.sessionKey);
@@ -206,9 +207,16 @@ describe("workspace-agents", () => {
       ),
     );
 
+    const hiddenByDefault = listBustlyWorkspaceAgentSessions({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+    });
+    expect(hiddenByDefault).toEqual([]);
+
     const sessions = listBustlyWorkspaceAgentSessions({
       workspaceId: "workspace-1",
       agentId: "bustly-workspace-1-overview",
+      includeHeartbeatMainSessions: true,
     });
 
     expect(sessions).toEqual([
@@ -227,6 +235,57 @@ describe("workspace-agents", () => {
         name: "Daily pulse",
         icon: undefined,
         updatedAt: 200,
+      },
+    ]);
+  });
+
+  it("lists heartbeat main sessions in the agent session list", () => {
+    const sessionsDir = path.join(stateDir, "agents", "bustly-workspace-1-overview", "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify(
+        {
+          "agent:bustly-workspace-1-overview:main": {
+            sessionId: "heartbeat-session",
+            updatedAt: 400,
+            lastTo: "heartbeat",
+            origin: {
+              provider: "heartbeat",
+              label: "heartbeat",
+              from: "heartbeat",
+              to: "heartbeat",
+            },
+            deliveryContext: {
+              to: "heartbeat",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const hiddenByDefault = listBustlyWorkspaceAgentSessions({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+    });
+    expect(hiddenByDefault).toEqual([]);
+
+    const sessions = listBustlyWorkspaceAgentSessions({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+      includeHeartbeatMainSessions: true,
+    });
+
+    expect(sessions).toEqual([
+      {
+        agentId: "bustly-workspace-1-overview",
+        sessionKey: "agent:bustly-workspace-1-overview:main",
+        kind: "heartbeat",
+        name: "Heartbeat",
+        icon: undefined,
+        updatedAt: 400,
       },
     ]);
   });

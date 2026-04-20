@@ -187,4 +187,14 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       }),
     );
   });
+
+  it("passes heartbeatPrompt into the run options for system prompt injection", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ model: undefined });
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        heartbeatPrompt: expect.stringContaining("Read HEARTBEAT.md"),
+      }),
+    );
+  });
 });

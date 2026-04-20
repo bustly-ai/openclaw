@@ -24,6 +24,7 @@ import {
   buildBustlyWorkspaceAgentId,
   buildBustlyWorkspaceAgentPrefix,
   DEFAULT_BUSTLY_AGENT_NAME,
+  isAgentMainSessionKey,
   isBustlyAgentConversationSessionKey,
   isBustlyAgentScheduledSessionKey,
   normalizeBustlyAgentName,
@@ -61,7 +62,7 @@ export type BustlyWorkspaceAgentSummary = {
 export type BustlyWorkspaceAgentSessionSummary = {
   agentId: string;
   sessionKey: string;
-  kind: "conversation" | "scheduled";
+  kind: "conversation" | "scheduled" | "heartbeat";
   name: string;
   icon?: string;
   updatedAt: number | null;
@@ -294,19 +295,51 @@ function listBustlyWorkspaceAgentIds(cfg: OpenClawConfig, workspaceId: string): 
     .map((entry) => entry.id);
 }
 
+function isBustlyAgentHeartbeatSession(
+  sessionKey: string,
+  entry: {
+    origin?: { provider?: string; label?: string; from?: string; to?: string };
+    deliveryContext?: { to?: string };
+    lastTo?: string;
+  } | undefined,
+  agentId: string,
+): boolean {
+  if (!isAgentMainSessionKey(sessionKey, agentId)) {
+    return false;
+  }
+  const markers = [
+    entry?.origin?.provider,
+    entry?.origin?.label,
+    entry?.origin?.from,
+    entry?.origin?.to,
+    entry?.deliveryContext?.to,
+    entry?.lastTo,
+  ]
+    .map((value) => value?.trim().toLowerCase())
+    .filter(Boolean);
+  return markers.includes("heartbeat");
+}
+
 function listBustlyAgentVisibleSessions(agentId: string): BustlyWorkspaceAgentSessionSummary[] {
   const store = loadSessionStore(resolveDefaultSessionStorePath(agentId));
   return Object.entries(store)
     .filter(
-      ([sessionKey]) =>
+      ([sessionKey, entry]) =>
         isBustlyAgentConversationSessionKey(sessionKey, agentId) ||
-        isBustlyAgentScheduledSessionKey(sessionKey, agentId),
+        isBustlyAgentScheduledSessionKey(sessionKey, agentId) ||
+        isBustlyAgentHeartbeatSession(sessionKey, entry, agentId),
     )
     .map(([sessionKey, entry]) => ({
       agentId,
       sessionKey,
-      kind: isBustlyAgentScheduledSessionKey(sessionKey, agentId) ? "scheduled" : "conversation",
-      name: entry.label?.trim() || "New conversation",
+      kind: isBustlyAgentHeartbeatSession(sessionKey, entry, agentId)
+        ? "heartbeat"
+        : isBustlyAgentScheduledSessionKey(sessionKey, agentId)
+          ? "scheduled"
+          : "conversation",
+      name: isBustlyAgentHeartbeatSession(sessionKey, entry, agentId)
+        ? entry.label?.trim() || "Heartbeat"
+        : entry.label?.trim() || "New conversation",
       icon: entry.icon?.trim() || undefined,
       updatedAt: entry.updatedAt ?? null,
     }))
@@ -425,6 +458,7 @@ export function listBustlyWorkspaceAgents(params: {
 export function listBustlyWorkspaceAgentSessions(params: {
   workspaceId: string;
   agentId: string;
+  includeHeartbeatMainSessions?: boolean;
 }): BustlyWorkspaceAgentSessionSummary[] {
   const normalizedWorkspaceId = normalizeBustlyWorkspaceId(params.workspaceId);
   if (!normalizedWorkspaceId) {
@@ -435,6 +469,9 @@ export function listBustlyWorkspaceAgentSessions(params: {
   const legacyMainAgentId = `bustly-${normalizedWorkspaceId}`;
   if (!agentId.startsWith(prefix) && agentId !== legacyMainAgentId) {
     return [];
+  }
+  if (params.includeHeartbeatMainSessions !== true) {
+    return listBustlyAgentVisibleSessions(agentId).filter((session) => session.kind !== "heartbeat");
   }
   return listBustlyAgentVisibleSessions(agentId);
 }

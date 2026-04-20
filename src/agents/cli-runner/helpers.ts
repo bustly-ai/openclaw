@@ -7,7 +7,6 @@ import path from "node:path";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
-import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { isRecord } from "../../utils.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
@@ -57,7 +56,6 @@ export function buildSystemPrompt(params: {
   heartbeatPrompt?: string;
   docsPath?: string;
   tools: AgentTool[];
-  contextFiles?: EmbeddedContextFile[];
   modelDisplay: string;
   agentId?: string;
 }) {
@@ -99,7 +97,6 @@ export function buildSystemPrompt(params: {
     userTimezone,
     userTime,
     userTimeFormat,
-    contextFiles: params.contextFiles,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
   });

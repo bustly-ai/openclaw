@@ -3,7 +3,7 @@ import type { EmbeddedContextFile } from "../../agents/pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveAgentSkillsFilter, resolveSessionAgentIds } from "../../agents/agent-scope.js";
-import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
+import { resolveBootstrapFilesForRun } from "../../agents/bootstrap-files.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
@@ -27,12 +27,13 @@ export async function resolveCommandsSystemPromptBundle(
   params: HandleCommandsParams,
 ): Promise<CommandsSystemPromptBundle> {
   const workspaceDir = params.workspaceDir;
-  const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
+  const bootstrapFiles = await resolveBootstrapFilesForRun({
     workspaceDir,
     config: params.cfg,
     sessionKey: params.sessionKey,
     sessionId: params.sessionEntry?.sessionId,
   });
+  const injectedFiles: EmbeddedContextFile[] = [];
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.cfg,
@@ -122,7 +123,6 @@ export async function resolveCommandsSystemPromptBundle(
     userTimezone,
     userTime,
     userTimeFormat,
-    contextFiles: injectedFiles,
     skillsPrompt,
     heartbeatPrompt: undefined,
     ttsHint,

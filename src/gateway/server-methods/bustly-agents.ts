@@ -23,6 +23,17 @@ function resolveWorkspaceIdParam(params: Record<string, unknown>): string {
   return readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
 }
 
+function shouldExposeBustlyHeartbeatMainSessions(env: NodeJS.ProcessEnv = process.env): boolean {
+  const electronDev = env.OPENCLAW_ELECTRON_DEV?.trim().toLowerCase();
+  if (electronDev === "1" || electronDev === "true") {
+    return true;
+  }
+  const values = [env.OPENCLAW_PROFILE, env.OPENCLAW_ENV, env.NODE_ENV]
+    .map((value) => value?.trim().toLowerCase())
+    .filter(Boolean);
+  return values.includes("dev") || values.includes("development");
+}
+
 export const bustlyAgentsHandlers: GatewayRequestHandlers = {
   "bustly.agents.get-config": async ({ params, respond }) => {
     try {
@@ -231,6 +242,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         listBustlyWorkspaceAgentSessions({
           workspaceId,
           agentId,
+          includeHeartbeatMainSessions: shouldExposeBustlyHeartbeatMainSessions(),
         }),
         undefined,
       );

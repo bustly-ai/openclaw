@@ -24,7 +24,8 @@ import {
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import {
-  buildBustlyHeartbeatPrompt,
+  buildBustlyHeartbeatRunPrompt,
+  buildBustlyHeartbeatSystemPrompt,
   loadBustlyHeartbeatState,
   parseBustlyHeartbeatEventsJson,
   parseBustlyHeartbeatMarkdown,
@@ -565,10 +566,38 @@ async function resolveHeartbeatPreflight(params: {
 
 type HeartbeatPromptResolution = {
   prompt: string;
+  heartbeatSystemPrompt?: string;
   hasExecCompletion: boolean;
   hasCronEvents: boolean;
   bustlyWorkspaceId: string | null;
 };
+
+function resolveHeartbeatDigestWindow(params: {
+  cfg: OpenClawConfig;
+  heartbeat?: HeartbeatConfig;
+  workspaceId: string;
+  agentId: string;
+  startedAt: number;
+}): { from: string; to: string } {
+  const previous = loadBustlyHeartbeatState({
+    workspaceId: params.workspaceId,
+    agentId: params.agentId,
+  });
+  const intervalMs = resolveHeartbeatIntervalMs(params.cfg, undefined, params.heartbeat) ?? 30 * 60 * 1000;
+  const fallbackFromMs = params.startedAt - intervalMs;
+  const previousScanAt =
+    typeof previous.lastScanAt === "number" && Number.isFinite(previous.lastScanAt)
+      ? previous.lastScanAt
+      : null;
+  const fromMs = Math.max(
+    0,
+    Math.min(params.startedAt, previousScanAt !== null ? previousScanAt + 1 : fallbackFromMs),
+  );
+  return {
+    from: new Date(fromMs).toISOString(),
+    to: new Date(params.startedAt).toISOString(),
+  };
+}
 
 async function resolveHeartbeatRunPrompt(params: {
   cfg: OpenClawConfig;
@@ -576,6 +605,7 @@ async function resolveHeartbeatRunPrompt(params: {
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;
+  startedAt: number;
 }): Promise<HeartbeatPromptResolution> {
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const pendingEvents = params.preflight.shouldInspectPendingEvents
@@ -591,6 +621,7 @@ async function resolveHeartbeatRunPrompt(params: {
   const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
   const hasCronEvents = cronEvents.length > 0;
   let bustlyWorkspaceId: string | null = null;
+  let heartbeatSystemPrompt: string | undefined;
   let prompt = resolveHeartbeatPrompt(params.cfg, params.heartbeat);
   if (!hasExecCompletion && !hasCronEvents) {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
@@ -602,7 +633,16 @@ async function resolveHeartbeatRunPrompt(params: {
           "utf-8",
         );
         if (parseBustlyHeartbeatMarkdown(heartbeatContent)) {
-          prompt = buildBustlyHeartbeatPrompt();
+          heartbeatSystemPrompt = buildBustlyHeartbeatSystemPrompt();
+          prompt = buildBustlyHeartbeatRunPrompt({
+            digestWindow: resolveHeartbeatDigestWindow({
+              cfg: params.cfg,
+              heartbeat: params.heartbeat,
+              workspaceId: bustlyContext.workspaceId,
+              agentId: params.agentId,
+              startedAt: params.startedAt,
+            }),
+          });
           bustlyWorkspaceId = bustlyContext.workspaceId;
         }
       } catch {
@@ -617,7 +657,7 @@ async function resolveHeartbeatRunPrompt(params: {
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : prompt;
 
-  return { prompt, hasExecCompletion, hasCronEvents, bustlyWorkspaceId };
+  return { prompt, heartbeatSystemPrompt, hasExecCompletion, hasCronEvents, bustlyWorkspaceId };
 }
 
 function resolveHeartbeatDuplicateWindowMs() {
@@ -754,16 +794,20 @@ export async function runHeartbeatOnce(opts: {
   const canRelayToUser = Boolean(
     delivery.channel !== "none" && delivery.to && visibility.showAlerts,
   );
-  const { prompt, hasExecCompletion, hasCronEvents, bustlyWorkspaceId } =
+  const { prompt, heartbeatSystemPrompt, hasExecCompletion, hasCronEvents, bustlyWorkspaceId } =
     await resolveHeartbeatRunPrompt({
-    cfg,
-    agentId,
-    heartbeat,
-    preflight,
-    canRelayToUser,
-  });
+      cfg,
+      agentId,
+      heartbeat,
+      preflight,
+      canRelayToUser,
+      startedAt,
+    });
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
+    AgentDir: workspaceDir,
+    WorkspaceDir: workspaceDir,
     From: sender,
     To: sender,
     OriginatingChannel: delivery.channel !== "none" ? delivery.channel : undefined,
@@ -826,9 +870,22 @@ export async function runHeartbeatOnce(opts: {
 
     const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
+    const heartbeatPromptForRun =
+      !hasExecCompletion && !hasCronEvents
+        ? (heartbeatSystemPrompt ?? resolveHeartbeatPrompt(cfg, heartbeat))
+        : undefined;
     const replyOpts = heartbeatModelOverride
-      ? { isHeartbeat: true, heartbeatModelOverride, suppressToolErrorWarnings }
-      : { isHeartbeat: true, suppressToolErrorWarnings };
+      ? {
+          isHeartbeat: true,
+          heartbeatModelOverride,
+          heartbeatPrompt: heartbeatPromptForRun,
+          suppressToolErrorWarnings,
+        }
+      : {
+          isHeartbeat: true,
+          heartbeatPrompt: heartbeatPromptForRun,
+          suppressToolErrorWarnings,
+        };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
@@ -1206,6 +1263,12 @@ export function startHeartbeatRunner(opts: {
     scheduleNext();
   };
 
+  const refreshAgentsFromLatestConfig = () => {
+    const latestConfig = loadConfig();
+    updateConfig(latestConfig);
+    return latestConfig;
+  };
+
   const run: HeartbeatWakeHandler = async (params) => {
     if (state.stopped) {
       return {
@@ -1219,24 +1282,28 @@ export function startHeartbeatRunner(opts: {
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-    if (state.agents.size === 0) {
+    const reason = params?.reason;
+    const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
+    const requestedSessionKey = params?.sessionKey?.trim() || undefined;
+    const hasTargetedRequest = Boolean(requestedSessionKey || requestedAgentId);
+    if (!hasTargetedRequest && state.agents.size === 0) {
       return {
         status: "skipped",
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-
-    const reason = params?.reason;
-    const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const requestedSessionKey = params?.sessionKey?.trim() || undefined;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
     let ran = false;
 
-    if (requestedSessionKey || requestedAgentId) {
+    if (hasTargetedRequest) {
       const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
-      const targetAgent = state.agents.get(targetAgentId);
+      let targetAgent = state.agents.get(targetAgentId);
+      if (!targetAgent) {
+        refreshAgentsFromLatestConfig();
+        targetAgent = state.agents.get(targetAgentId);
+      }
       if (!targetAgent) {
         scheduleNext();
         return { status: "skipped", reason: "disabled" };

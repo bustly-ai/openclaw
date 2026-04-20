@@ -372,12 +372,10 @@ export function buildAgentSystemPrompt(params: {
       ].join(" ")
     : undefined;
   const reasoningLevel = params.reasoningLevel ?? "off";
+  const hasExplicitReasoningLevel = params.reasoningLevel !== undefined;
   const userTimezone = params.userTimezone?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
-  const heartbeatPromptLine = heartbeatPrompt
-    ? `Heartbeat prompt: ${heartbeatPrompt}`
-    : "Heartbeat prompt: (configured)";
   const runtimeInfo = params.runtimeInfo;
   const runtimeChannel = runtimeInfo?.channel?.trim().toLowerCase();
   const runtimeCapabilities = (runtimeInfo?.capabilities ?? [])
@@ -542,9 +540,6 @@ export function buildAgentSystemPrompt(params: {
     ...buildTimeSection({
       userTimezone,
     }),
-    "## Workspace Files (injected)",
-    "These user-editable files are loaded by OpenClaw and included below in Project Context.",
-    "",
     ...buildReplyTagsSection(isMinimal),
     ...buildMessagingSection({
       isMinimal,
@@ -555,6 +550,15 @@ export function buildAgentSystemPrompt(params: {
       messageToolHints: params.messageToolHints,
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
+    hasExplicitReasoningLevel ? "## Reasoning" : "",
+    hasExplicitReasoningLevel ? `Reasoning: ${reasoningLevel}` : "",
+    hasExplicitReasoningLevel
+      ? "Toggle with /reasoning on|off|stream. /status shows Reasoning when enabled."
+      : "",
+    hasExplicitReasoningLevel ? "" : "",
+    !isMinimal && heartbeatPrompt ? "## Heartbeats" : "",
+    !isMinimal && heartbeatPrompt ? heartbeatPrompt : "",
+    !isMinimal && heartbeatPrompt ? "" : "",
   ];
 
   if (extraSystemPrompt) {
@@ -595,6 +599,11 @@ export function buildAgentSystemPrompt(params: {
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
   if (validContextFiles.length > 0) {
+    lines.push(
+      "## Workspace Files (injected)",
+      "These user-editable files are loaded by OpenClaw and included below in Project Context.",
+      "",
+    );
     const hasSoulFile = validContextFiles.some((file) => {
       const normalizedPath = file.path.trim().replace(/\\/g, "/");
       const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
@@ -653,6 +662,7 @@ export function buildRuntimeLine(
     runtimeChannel
       ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
       : "",
+    defaultThinkLevel ? `thinking=${defaultThinkLevel}` : "",
   ]
     .filter(Boolean)
     .join(" | ")}`;

@@ -151,6 +151,17 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("<available_skills>");
   });
 
+  it("renders heartbeat rules as a dedicated system section in full prompt mode", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      heartbeatPrompt: "Read HEARTBEAT.md.\nReply HEARTBEAT_OK when nothing needs attention.",
+    });
+
+    expect(prompt).toContain("## Heartbeats");
+    expect(prompt).toContain("Read HEARTBEAT.md.");
+    expect(prompt).toContain("Reply HEARTBEAT_OK when nothing needs attention.");
+  });
+
   it("omits skills in minimal prompt mode when skillsPrompt is absent", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -442,6 +453,15 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).not.toContain("## Skills");
     expect(prompt).not.toContain("<available_skills>");
+  });
+
+  it("omits injected workspace file section when no context files are provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).not.toContain("## Workspace Files (injected)");
+    expect(prompt).not.toContain("# Project Context");
   });
 
   it("renders project context files when provided", () => {

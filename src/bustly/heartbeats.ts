@@ -5,8 +5,6 @@ import { resolveStateDir } from "../config/paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeBustlyWorkspaceId } from "./workspace-agent.js";
 
-export const BUSTLY_HEARTBEAT_GOAL_HEADING = "Goal";
-export const BUSTLY_HEARTBEAT_NOTIFY_HEADING = "Notify When";
 export const DEFAULT_BUSTLY_HEARTBEAT_EVERY = "30m";
 const MAX_HEARTBEAT_EVENTS = 16;
 const MAX_HEARTBEAT_HISTORY = 200;
@@ -19,8 +17,7 @@ export type BustlyHeartbeatStatus = "open" | "resolved";
 export type BustlyHeartbeatHealthStatus = "Healthy" | "Warning" | "Critical";
 
 export type BustlyHeartbeatDefinition = {
-  goal: string;
-  notifyWhen: string;
+  content: string;
 };
 
 export type BustlyHeartbeatStructuredEvent = {
@@ -57,6 +54,11 @@ export type BustlyHeartbeatWorkspaceContext = {
   workspaceId: string;
 };
 
+export type BustlyHeartbeatDigestWindow = {
+  from: string;
+  to: string;
+};
+
 function normalizeMultilineValue(value: string): string {
   return value
     .replace(/\r\n/g, "\n")
@@ -64,24 +66,6 @@ function normalizeMultilineValue(value: string): string {
     .map((line) => line.trimEnd())
     .join("\n")
     .trim();
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function extractHeadingSection(content: string, heading: string): string {
-  const normalized = content.replace(/\r\n/g, "\n");
-  const headingPattern = new RegExp(`^##\\s+${escapeRegExp(heading)}\\s*$`, "im");
-  const headingMatch = headingPattern.exec(normalized);
-  if (!headingMatch) {
-    return "";
-  }
-  const sectionStart = headingMatch.index + headingMatch[0].length;
-  const rest = normalized.slice(sectionStart);
-  const nextHeadingMatch = /^##\s+[^\n]+\s*$/m.exec(rest);
-  const section = nextHeadingMatch ? rest.slice(0, nextHeadingMatch.index) : rest;
-  return normalizeMultilineValue(section);
 }
 
 function normalizeStructuredText(value: unknown, maxChars: number): string {
@@ -184,33 +168,21 @@ function buildEmptyState(agentId: string): BustlyHeartbeatState {
 export function parseBustlyHeartbeatMarkdown(
   content: string | undefined | null,
 ): BustlyHeartbeatDefinition | null {
-  if (typeof content !== "string" || !content.trim()) {
+  if (typeof content !== "string") {
     return null;
   }
-  const goal = extractHeadingSection(content, BUSTLY_HEARTBEAT_GOAL_HEADING);
-  const notifyWhen = extractHeadingSection(content, BUSTLY_HEARTBEAT_NOTIFY_HEADING);
-  if (!goal && !notifyWhen) {
+  const normalized = normalizeMultilineValue(content);
+  if (!normalized) {
     return null;
   }
   return {
-    goal,
-    notifyWhen,
+    content: normalized,
   };
 }
 
 export function renderBustlyHeartbeatMarkdown(definition: BustlyHeartbeatDefinition): string {
-  const goal = normalizeMultilineValue(definition.goal);
-  const notifyWhen = normalizeMultilineValue(definition.notifyWhen);
-  return [
-    "# HEARTBEAT.md",
-    "",
-    `## ${BUSTLY_HEARTBEAT_GOAL_HEADING}`,
-    goal || "_Add the monitoring goal for this heartbeat._",
-    "",
-    `## ${BUSTLY_HEARTBEAT_NOTIFY_HEADING}`,
-    notifyWhen || "_Describe when this heartbeat should notify you._",
-    "",
-  ].join("\n");
+  const normalized = normalizeMultilineValue(definition.content);
+  return normalized ? `${normalized}\n` : "";
 }
 
 export function buildBustlyHeartbeatOutputRulePrompt(): string {
@@ -228,14 +200,49 @@ export function buildBustlyHeartbeatOutputRulePrompt(): string {
   ].join("\n");
 }
 
-export function buildBustlyHeartbeatPrompt(): string {
+export function buildBustlyHeartbeatSystemPrompt(): string {
   return [
     "Read HEARTBEAT.md if it exists (workspace context).",
-    "Treat the Goal section as the long-running objective and the Notify When section as the escalation threshold.",
-    "Only surface concrete business issues or useful suggestions that match those instructions.",
+    "Treat HEARTBEAT.md as the long-running objective and escalation guidance for this heartbeat.",
+    "Only surface concrete business issues or useful suggestions that match HEARTBEAT.md.",
     "Do not repeat stale issues from prior runs if they are no longer relevant.",
     buildBustlyHeartbeatOutputRulePrompt(),
   ].join("\n");
+}
+
+function buildHeartbeatDigestSearchPrompt(
+  digestWindow?: BustlyHeartbeatDigestWindow,
+): string[] {
+  const from = digestWindow?.from?.trim();
+  const to = digestWindow?.to?.trim();
+  if (!from || !to) {
+    return [
+      "Before analysis, call heartbeat_digest_search first with the current heartbeat cycle time window (from/to).",
+      "Use digest results to understand what the user recently asked and what the agent already completed in that same window.",
+    ];
+  }
+  return [
+    "Before analysis, call heartbeat_digest_search first with this exact cycle window:",
+    `{"from":"${from}","to":"${to}"}`,
+    "Use digest results to understand what the user recently asked and what the agent already completed in that same window.",
+  ];
+}
+
+export function buildBustlyHeartbeatRunPrompt(options?: {
+  digestWindow?: BustlyHeartbeatDigestWindow;
+}): string {
+  return buildHeartbeatDigestSearchPrompt(options?.digestWindow).join("\n");
+}
+
+export function buildBustlyHeartbeatPrompt(options?: {
+  digestWindow?: BustlyHeartbeatDigestWindow;
+}): string {
+  return [
+    buildBustlyHeartbeatSystemPrompt(),
+    buildBustlyHeartbeatRunPrompt(options),
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function parseBustlyHeartbeatEventsJson(

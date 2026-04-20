@@ -66,6 +66,7 @@ async function invoke(
 
 describe("gateway bustly agent/session handlers", () => {
   beforeEach(() => {
+    vi.unstubAllEnvs();
     mocks.readBustlyOAuthState.mockReset();
     mocks.loadBustlyRemoteAgentMetadata.mockReset();
     mocks.listBustlyWorkspaceAgents.mockReset();
@@ -232,6 +233,99 @@ describe("gateway bustly agent/session handlers", () => {
         workspaceId: "workspace-1",
         agentId: "bustly-workspace-1-growth",
       },
+      undefined,
+    );
+  });
+
+  it("hides heartbeat main sessions outside develop mode", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    mocks.listBustlyWorkspaceAgentSessions.mockReturnValue([]);
+
+    const { respond } = await invoke("bustly.sessions.list", {
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+    });
+
+    expect(mocks.listBustlyWorkspaceAgentSessions).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+      includeHeartbeatMainSessions: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, [], undefined);
+  });
+
+  it("shows heartbeat main sessions in develop mode", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "dev");
+    mocks.listBustlyWorkspaceAgentSessions.mockReturnValue([
+      {
+        agentId: "bustly-workspace-1-overview",
+        sessionKey: "agent:bustly-workspace-1-overview:main",
+        kind: "heartbeat",
+        name: "Heartbeat",
+        updatedAt: 100,
+      },
+    ]);
+
+    const { respond } = await invoke("bustly.sessions.list", {
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+    });
+
+    expect(mocks.listBustlyWorkspaceAgentSessions).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+      includeHeartbeatMainSessions: true,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      [
+        {
+          agentId: "bustly-workspace-1-overview",
+          sessionKey: "agent:bustly-workspace-1-overview:main",
+          kind: "heartbeat",
+          name: "Heartbeat",
+          updatedAt: 100,
+        },
+      ],
+      undefined,
+    );
+  });
+
+  it("shows heartbeat main sessions in electron develop mode", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("OPENCLAW_PROFILE", "bustly");
+    vi.stubEnv("OPENCLAW_ELECTRON_DEV", "1");
+    mocks.listBustlyWorkspaceAgentSessions.mockReturnValue([
+      {
+        agentId: "bustly-workspace-1-overview",
+        sessionKey: "agent:bustly-workspace-1-overview:main",
+        kind: "heartbeat",
+        name: "Heartbeat",
+        updatedAt: 100,
+      },
+    ]);
+
+    const { respond } = await invoke("bustly.sessions.list", {
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+    });
+
+    expect(mocks.listBustlyWorkspaceAgentSessions).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+      includeHeartbeatMainSessions: true,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      [
+        {
+          agentId: "bustly-workspace-1-overview",
+          sessionKey: "agent:bustly-workspace-1-overview:main",
+          kind: "heartbeat",
+          name: "Heartbeat",
+          updatedAt: 100,
+        },
+      ],
       undefined,
     );
   });

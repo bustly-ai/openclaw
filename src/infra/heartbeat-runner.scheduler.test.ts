@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
@@ -197,6 +198,50 @@ describe("startHeartbeatRunner", () => {
         agentId: "ops",
         reason: "cron:job-123",
         sessionKey: "agent:ops:discord:channel:alerts",
+      }),
+    );
+
+    runner.stop();
+  });
+
+  it("refreshes config before targeted wake when the requested agent is not in the current runner state", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const refreshedConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [{ id: "bustly-workspace-2-store-ops", heartbeat: { every: "30m" } }],
+      },
+    } as OpenClawConfig;
+    const loadConfigSpy = vi.spyOn(configModule, "loadConfig").mockReturnValue(refreshedConfig);
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "30m" } },
+          list: [{ id: "bustly-workspace-1-store-ops", heartbeat: { every: "30m" } }],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeatNow({
+      reason: "wake",
+      agentId: "bustly-workspace-2-store-ops",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(loadConfigSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: refreshedConfig,
+        agentId: "bustly-workspace-2-store-ops",
+        heartbeat: { every: "30m" },
+        reason: "wake",
       }),
     );
 

@@ -30,6 +30,8 @@ export type GetReplyOptions = {
   onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;
   isHeartbeat?: boolean;
+  /** Explicit heartbeat rules to inject into the system prompt for this run. */
+  heartbeatPrompt?: string;
   /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
   heartbeatModelOverride?: string;
   /** If true, suppress tool error warning payloads for this run. */
