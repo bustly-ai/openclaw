@@ -1,6 +1,6 @@
 {
   "name": "bustly",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Bustly Desktop Client",
   "main": "dist/main/index.js",
   "private": true,
