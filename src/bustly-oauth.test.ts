@@ -135,4 +135,52 @@ describe("root bustly oauth state", () => {
     expect(persistedState.user?.bustlyRefreshToken).toBe("bustly-refresh-token-2");
     expect(persistedState.user?.bustlySessionId).toBe("session-1");
   });
+
+  it("reads oauth state with an on-demand refresh when the stored session is expired", async () => {
+    writeOauthState({
+      deviceId: "device-1",
+      callbackPort: 17900,
+      loggedInAt: 1777000000000,
+      user: {
+        userId: "user-1",
+        userName: "Owner",
+        userEmail: "owner@example.com",
+        workspaceId: "workspace-1",
+        skills: [],
+        userAccessToken: "stale-token",
+        supabaseAccessToken: "stale-token",
+        supabaseAccessTokenExpiresAt: 1,
+        bustlyRefreshToken: "bustly-refresh-token",
+      },
+      supabase: {
+        url: "https://example.supabase.co",
+        anonKey: "anon-key",
+      },
+    });
+    process.env.BUSTLY_ACCOUNT_API_BASE_URL = "https://test-bustly-account.bustly.ai";
+
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request) =>
+        new Response(
+          JSON.stringify({
+            status: "0",
+            data: {
+              supabaseAccessToken: "fresh-token",
+              supabaseAccessTokenExpiresAt: Math.floor(Date.now() / 1000) + 3600,
+              refreshToken: "bustly-refresh-token-2",
+              bustlySessionId: "session-1",
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const oauth = await import("./bustly-oauth.js");
+    const state = await oauth.readBustlyOAuthStateEnsuringFreshToken();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(state?.user?.supabaseAccessToken).toBe("fresh-token");
+    expect(state?.user?.userAccessToken).toBe("fresh-token");
+  });
 });

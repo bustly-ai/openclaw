@@ -108,8 +108,15 @@ export async function resolveGatewayRuntimeConfig(params: {
     env: process.env,
     tailscaleMode,
   });
+  // TODO(2026-04-16): Restore control-plane verifier as the default cloud runtime path
+  // after the dynamic connect-bundle token flow is stabilized in staging. For the
+  // current MVP, cloud runtimes can opt into static gateway-token mode.
+  const useStaticGatewayTokenMode =
+    process.env.BUSTLY_GATEWAY_TOKEN_MODE?.trim().toLowerCase() === "static";
   const resolvedAuth: ResolvedGatewayAuth =
-    baseResolvedAuth.mode === "token" && hasBustlyControlPlaneRuntimeIdentity(process.env)
+    baseResolvedAuth.mode === "token" &&
+    !useStaticGatewayTokenMode &&
+    hasBustlyControlPlaneRuntimeIdentity(process.env)
       ? {
           ...baseResolvedAuth,
           verifier: async ({ token, req: _req, authSurface }) =>

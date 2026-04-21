@@ -482,6 +482,7 @@ export async function createBustlyWorkspaceAgent(params: {
   agentName: string;
   displayName?: string;
   description?: string;
+  preserveTemplateIdentityName?: boolean;
   icon?: string;
   heartbeat?: OpenClawAgentListEntry["heartbeat"];
   skills?: string[] | null;
@@ -562,11 +563,15 @@ export async function createBustlyWorkspaceAgent(params: {
     });
   }
   if (!params.skipBootstrap) {
-    syncBustlyAgentIdentityFields({
-      workspaceDir,
-      name: displayName,
-      description: params.description,
-    });
+    const shouldSyncIdentityName = !params.preserveTemplateIdentityName;
+    const shouldSyncIdentityDescription = Boolean(params.description?.trim());
+    if (shouldSyncIdentityName || shouldSyncIdentityDescription) {
+      syncBustlyAgentIdentityFields({
+        workspaceDir,
+        ...(shouldSyncIdentityName ? { name: displayName } : {}),
+        ...(shouldSyncIdentityDescription ? { description: params.description } : {}),
+      });
+    }
   }
   if (!params.skipBootstrap || icon || params.skills !== undefined) {
     setBustlyAgentMetadata({
@@ -780,10 +785,10 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
     const workspaceCreatedAt = workspaceExists
       ? resolveBustlyAgentCreatedAt(workspaceDir, workspaceMetadata)
       : null;
-    const shouldForceRefresh =
+    const shouldRefreshBootstrapTemplate =
       workspaceExists &&
-      workspaceCreatedAt !== null &&
-      workspaceCreatedAt < BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE;
+      (workspaceCreatedAt === null ||
+        workspaceCreatedAt < BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE);
     if (!workspaceAgentIds.has(agentId)) {
       await createBustlyWorkspaceAgent({
         // Keep the full workspace UUID for bootstrap/Supabase lookups.
@@ -791,6 +796,7 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
         workspaceName: params.workspaceName,
         agentName: preset.slug,
         displayName: preset.label,
+        preserveTemplateIdentityName: true,
         ...(workspaceExists ? {} : { icon: preset.icon }),
         heartbeat: DEFAULT_PRESET_HEARTBEAT,
         ...(preset.bootstrapMetadata ? { bootstrapMetadata: preset.bootstrapMetadata } : {}),
@@ -805,11 +811,11 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
         bootstrappedCount += 1;
         continue;
       }
-      if (!shouldForceRefresh) {
+      if (!shouldRefreshBootstrapTemplate) {
         continue;
       }
     }
-    if (!workspaceExists || shouldForceRefresh) {
+    if (!workspaceExists || shouldRefreshBootstrapTemplate) {
       await initializeBustlyWorkspaceBootstrap({
         workspaceDir,
         workspaceId: params.workspaceId,

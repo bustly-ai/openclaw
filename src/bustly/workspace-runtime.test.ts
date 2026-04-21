@@ -11,17 +11,18 @@ import {
 
 const {
   oauthStateRef,
+  oauthFreshStateRef,
   setActiveWorkspaceIdMock,
+  readBustlyOAuthStateEnsuringFreshTokenMock,
   bootstrapMock,
-  resolveFirstAccessibleWorkspaceMock,
 } = vi.hoisted(() => {
   return {
     oauthStateRef: { current: null as BustlyOAuthState | null },
+    oauthFreshStateRef: { current: null as BustlyOAuthState | null },
     setActiveWorkspaceIdMock: vi.fn<(workspaceId: string) => void>(),
-    bootstrapMock: vi.fn<(params: unknown) => Promise<void>>(async () => {}),
-    resolveFirstAccessibleWorkspaceMock: vi.fn<
-      () => Promise<{ id: string; name: string; status: string } | null>
-    >(async () => null),
+    readBustlyOAuthStateEnsuringFreshTokenMock:
+      vi.fn<(options?: { forceRefresh?: boolean }) => Promise<BustlyOAuthState | null>>(),
+    bootstrapMock: vi.fn(async () => {}),
   };
 });
 const { ensureModelsJsonMock, ensurePiAuthJsonMock } = vi.hoisted(() => {
@@ -34,9 +35,14 @@ const { ensureModelsJsonMock, ensurePiAuthJsonMock } = vi.hoisted(() => {
     >(async () => ({ authPath: "", wrote: true })),
   };
 });
+const { refreshDefaultInstalledSkillsSnapshotMock } = vi.hoisted(() => ({
+  refreshDefaultInstalledSkillsSnapshotMock: vi.fn(async () => {}),
+}));
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => oauthStateRef.current),
+  readBustlyOAuthStateEnsuringFreshToken: (options?: { forceRefresh?: boolean }) =>
+    readBustlyOAuthStateEnsuringFreshTokenMock(options),
   getBustlyAccessToken: (
     state: { user?: { supabaseAccessToken?: string; userAccessToken?: string } } | null | undefined,
   ) => state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "",
@@ -45,6 +51,10 @@ vi.mock("../bustly-oauth.js", () => ({
 
 vi.mock("./workspace-bootstrap.js", () => ({
   initializeBustlyWorkspaceBootstrap: (params: unknown) => bootstrapMock(params),
+}));
+
+vi.mock("./skill-catalog.js", () => ({
+  refreshBustlyDefaultInstalledSkillsSnapshot: () => refreshDefaultInstalledSkillsSnapshotMock(),
 }));
 
 vi.mock("../agents/models-config.js", () => ({
@@ -56,31 +66,54 @@ vi.mock("../agents/pi-auth-json.js", () => ({
   ensurePiAuthJsonFromAuthProfiles: (agentDir: string) => ensurePiAuthJsonMock(agentDir),
 }));
 
-vi.mock("./supabase.js", () => ({
-  resolveFirstAccessibleBustlyWorkspace: () => resolveFirstAccessibleWorkspaceMock(),
-}));
-
 describe("workspace-runtime", () => {
   let tempDir: string;
   let previousStateDir: string | undefined;
   let previousConfigPath: string | undefined;
+  let previousWorkspaceTemplateBaseUrl: string | undefined;
+
+  function expectOverviewBootstrapCalled(): void {
+    expect(bootstrapMock).toHaveBeenCalled();
+    expect(
+      bootstrapMock.mock.calls.some(([params]) => {
+        const bootstrapParams = params as {
+          workspaceId?: string;
+          agentName?: string;
+          workspaceDir?: string;
+        };
+        return (
+          bootstrapParams.workspaceId === "workspace-1" &&
+          bootstrapParams.agentName === "overview" &&
+          bootstrapParams.workspaceDir?.includes(
+            path.join("workspaces", "workspace-1", "agents", "overview"),
+          )
+        );
+      }),
+    ).toBe(true);
+  }
 
   beforeEach(() => {
     tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-bustly-runtime-"));
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    previousWorkspaceTemplateBaseUrl = process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
     process.env.OPENCLAW_STATE_DIR = path.join(tempDir, "state");
     process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, "state", "openclaw.json");
     oauthStateRef.current = null;
+    oauthFreshStateRef.current = null;
     setActiveWorkspaceIdMock.mockReset();
+    readBustlyOAuthStateEnsuringFreshTokenMock.mockReset();
+    readBustlyOAuthStateEnsuringFreshTokenMock.mockImplementation(async () => {
+      return oauthFreshStateRef.current ?? oauthStateRef.current;
+    });
     bootstrapMock.mockReset();
     bootstrapMock.mockResolvedValue(undefined);
-    resolveFirstAccessibleWorkspaceMock.mockReset();
-    resolveFirstAccessibleWorkspaceMock.mockResolvedValue(null);
     ensureModelsJsonMock.mockReset();
     ensureModelsJsonMock.mockResolvedValue({ agentDir: "", wrote: true });
     ensurePiAuthJsonMock.mockReset();
     ensurePiAuthJsonMock.mockResolvedValue({ authPath: "", wrote: true });
+    refreshDefaultInstalledSkillsSnapshotMock.mockReset();
+    refreshDefaultInstalledSkillsSnapshotMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -93,6 +126,11 @@ describe("workspace-runtime", () => {
       delete process.env.OPENCLAW_CONFIG_PATH;
     } else {
       process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+    }
+    if (previousWorkspaceTemplateBaseUrl === undefined) {
+      delete process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
+    } else {
+      process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL = previousWorkspaceTemplateBaseUrl;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -138,7 +176,41 @@ describe("workspace-runtime", () => {
     });
 
     expect(binding.workspaceId).toBe("workspace-1");
-    expect(bootstrapMock).toHaveBeenCalledTimes(1);
+    expectOverviewBootstrapCalled();
+  });
+
+  it("uses a refreshed oauth state before cloud preflight", async () => {
+    oauthStateRef.current = {
+      deviceId: "device-1",
+      callbackPort: 17900,
+      user: {
+        userId: "u-1",
+        userName: "Tester",
+        userEmail: "tester@example.com",
+        workspaceId: "workspace-1",
+        skills: [],
+      },
+      supabase: {
+        url: "https://example.supabase.co",
+        anonKey: "anon-key",
+      },
+    };
+    oauthFreshStateRef.current = {
+      ...oauthStateRef.current,
+      user: {
+        ...oauthStateRef.current.user!,
+        supabaseAccessToken: "fresh-jwt-token",
+        userAccessToken: "fresh-jwt-token",
+      },
+    };
+
+    const binding = await ensureBustlyCloudReady({
+      userAgent: "cloud-test-agent",
+    });
+
+    expect(readBustlyOAuthStateEnsuringFreshTokenMock).toHaveBeenCalledTimes(1);
+    expect(binding.workspaceId).toBe("workspace-1");
+    expectOverviewBootstrapCalled();
   });
 
   it("initializes config and workspace binding for cloud mode", async () => {
@@ -166,7 +238,8 @@ describe("workspace-runtime", () => {
     expect(binding.workspaceDir).toContain(
       path.join("workspaces", "workspace-1", "agents", "overview"),
     );
-    expect(bootstrapMock).toHaveBeenCalledTimes(1);
+    expect(refreshDefaultInstalledSkillsSnapshotMock).toHaveBeenCalledTimes(1);
+    expectOverviewBootstrapCalled();
     const configPath = process.env.OPENCLAW_CONFIG_PATH!;
     const config = JSON.parse(readFileSync(configPath, "utf-8")) as {
       gateway?: {
@@ -286,58 +359,6 @@ describe("workspace-runtime", () => {
       };
     };
     expect(config.models?.providers?.bustly?.headers?.["X-Workspace-Id"]).toBe("workspace-1");
-  });
-
-  it("falls back to the first accessible workspace when target workspace is missing", async () => {
-    oauthStateRef.current = {
-      deviceId: "device-1",
-      callbackPort: 17900,
-      user: {
-        userId: "u-1",
-        userName: "Tester",
-        userEmail: "tester@example.com",
-        userAccessToken: "token-1",
-        workspaceId: "workspace-1",
-        skills: [],
-      },
-      supabase: {
-        url: "https://example.supabase.co",
-        anonKey: "anon-key",
-      },
-    };
-    await synchronizeBustlyWorkspaceContext({
-      workspaceId: "workspace-1",
-      allowCreateConfig: true,
-    });
-
-    bootstrapMock.mockRejectedValueOnce(
-      new Error("Workspace workspace-2 not found for bootstrap."),
-    );
-    resolveFirstAccessibleWorkspaceMock.mockResolvedValueOnce({
-      id: "workspace-3",
-      name: "Fallback Workspace",
-      status: "ACTIVE",
-    });
-
-    const switched = await setActiveBustlyWorkspace({
-      workspaceId: "workspace-2",
-      allowCreateConfig: true,
-    });
-
-    expect(switched?.workspaceId).toBe("workspace-3");
-    expect(resolveFirstAccessibleWorkspaceMock).toHaveBeenCalledTimes(1);
-    expect(setActiveWorkspaceIdMock).toHaveBeenCalledWith("workspace-3");
-
-    const config = JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH!, "utf-8")) as {
-      models?: {
-        providers?: {
-          bustly?: {
-            headers?: Record<string, string>;
-          };
-        };
-      };
-    };
-    expect(config.models?.providers?.bustly?.headers?.["X-Workspace-Id"]).toBe("workspace-3");
   });
 
   it("preserves openclaw-lark plugin settings during cloud preflight", async () => {

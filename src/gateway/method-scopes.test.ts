@@ -12,6 +12,12 @@ describe("method scope resolution", () => {
       "operator.read",
     ]);
     expect(resolveLeastPrivilegeOperatorScopesForMethod("poll")).toEqual(["operator.write"]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("skills.catalog.list")).toEqual([
+      "operator.read",
+    ]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("skills.catalog.update")).toEqual([
+      "operator.write",
+    ]);
   });
 
   it("returns empty scopes for unknown methods", () => {

@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import {
   getBustlyAccessToken,
   readBustlyOAuthState,
+  readBustlyOAuthStateEnsuringFreshToken,
   setActiveWorkspaceId,
 } from "../bustly-oauth.js";
 import { applyAgentConfig, listAgentEntries } from "../commands/agents.config.js";
@@ -13,7 +14,6 @@ import {
   BUSTLY_DEFAULT_MODEL_REF,
   syncBustlyConfigFile,
 } from "./runtime-config.js";
-import { resolveFirstAccessibleBustlyWorkspace } from "./supabase.js";
 import {
   buildBustlyWorkspaceAgentId,
   DEFAULT_BUSTLY_AGENT_NAME,
@@ -260,40 +260,17 @@ export async function setActiveBustlyWorkspace(params: {
     throw new Error("Missing workspaceId");
   }
   const currentWorkspaceId = resolveBustlyWorkspaceIdFromOAuthState();
-  let binding: (BustlyWorkspaceBinding & { workspaceId: string }) | null;
-  try {
-    binding = await synchronizeBustlyWorkspaceContext({
-      workspaceId: nextWorkspaceId,
-      workspaceName: params.workspaceName,
-      agentName: params.agentName,
-      selectedModelInput: params.selectedModelInput,
-      configPath: params.configPath,
-      allowCreateConfig: params.allowCreateConfig,
-      userAgent: params.userAgent,
-      baseUrl: params.baseUrl,
-      env: params.env,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!/not found for bootstrap/i.test(message)) {
-      throw error;
-    }
-    const fallbackWorkspace = await resolveFirstAccessibleBustlyWorkspace();
-    if (!fallbackWorkspace || fallbackWorkspace.id === nextWorkspaceId) {
-      throw error;
-    }
-    binding = await synchronizeBustlyWorkspaceContext({
-      workspaceId: fallbackWorkspace.id,
-      workspaceName: fallbackWorkspace.name,
-      agentName: params.agentName,
-      selectedModelInput: params.selectedModelInput,
-      configPath: params.configPath,
-      allowCreateConfig: params.allowCreateConfig,
-      userAgent: params.userAgent,
-      baseUrl: params.baseUrl,
-      env: params.env,
-    });
-  }
+  const binding = await synchronizeBustlyWorkspaceContext({
+    workspaceId: nextWorkspaceId,
+    workspaceName: params.workspaceName,
+    agentName: params.agentName,
+    selectedModelInput: params.selectedModelInput,
+    configPath: params.configPath,
+    allowCreateConfig: params.allowCreateConfig,
+    userAgent: params.userAgent,
+    baseUrl: params.baseUrl,
+    env: params.env,
+  });
   const resolvedWorkspaceId = binding?.workspaceId?.trim() ?? "";
   if (binding && resolvedWorkspaceId && currentWorkspaceId !== resolvedWorkspaceId) {
     setActiveWorkspaceId(resolvedWorkspaceId);
@@ -312,7 +289,7 @@ export async function ensureBustlyCloudReady(params?: {
   nodeManager?: "npm" | "pnpm" | "bun";
 }): Promise<BustlyWorkspaceBinding & { workspaceId: string }> {
   const env = params?.env ?? process.env;
-  const state = readBustlyOAuthState();
+  const state = await readBustlyOAuthStateEnsuringFreshToken();
   const userAccessToken = getBustlyAccessToken(state).trim();
   const workspaceId = state?.user?.workspaceId?.trim() ?? "";
   if (!userAccessToken) {
@@ -325,6 +302,10 @@ export async function ensureBustlyCloudReady(params?: {
       "No Bustly workspace found in ~/.bustly/bustlyOauth.json (user.workspaceId). Please sign in first.",
     );
   }
+  // Keep the default-installed skills snapshot in sync before runtime startup so
+  // bundled skill loading can enforce the catalog policy deterministically.
+  const { refreshBustlyDefaultInstalledSkillsSnapshot } = await import("./skill-catalog.js");
+  await refreshBustlyDefaultInstalledSkillsSnapshot();
   // Use a lazy import to avoid a static cycle: gateway-runtime-init depends on
   // workspace-runtime for workspace binding and bootstrap helpers.
   const { ensureGatewayRuntimeInit } = await import("./gateway-runtime-init.js");

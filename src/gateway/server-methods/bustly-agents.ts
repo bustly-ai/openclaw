@@ -1,7 +1,8 @@
-import { getBustlyAccessToken, readBustlyOAuthState } from "../../bustly-oauth.js";
+import { readBustlyOAuthStateEnsuringFreshToken } from "../../bustly-oauth.js";
 import { loadBustlyRemoteAgentMetadata } from "../../bustly/agent-presets.js";
 import { scheduleBustlySessionTitleGeneration } from "../../bustly/session-title.js";
 import { normalizeBustlyAgentName } from "../../bustly/workspace-agent.js";
+import { getBustlySupabaseAuthConfigEnsuringFreshToken } from "../../bustly/supabase.js";
 import {
   createBustlyWorkspaceAgent,
   createBustlyWorkspaceAgentSession,
@@ -14,13 +15,14 @@ import { loadConfig } from "../../config/config.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-function resolveWorkspaceIdParam(params: Record<string, unknown>): string {
+async function resolveWorkspaceIdParam(params: Record<string, unknown>): Promise<string> {
   const explicitWorkspaceId =
     typeof params.workspaceId === "string" ? params.workspaceId.trim() : "";
   if (explicitWorkspaceId) {
     return explicitWorkspaceId;
   }
-  return readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
+  const state = await readBustlyOAuthStateEnsuringFreshToken();
+  return state?.user?.workspaceId?.trim() ?? "";
 }
 
 function shouldExposeBustlyHeartbeatMainSessions(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -60,9 +62,9 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       );
     }
   },
-  "bustly.agents.list": ({ params, respond }) => {
+  "bustly.agents.list": async ({ params, respond }) => {
     try {
-      const workspaceId = resolveWorkspaceIdParam(params);
+      const workspaceId = await resolveWorkspaceIdParam(params);
       if (!workspaceId) {
         respond(true, [], undefined);
         return;
@@ -84,7 +86,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
   },
   "bustly.agents.create": async ({ params, respond }) => {
     try {
-      const workspaceId = resolveWorkspaceIdParam(params);
+      const workspaceId = await resolveWorkspaceIdParam(params);
       const name = typeof params.name === "string" ? params.name.trim() : "";
       const description =
         typeof params.description === "string" ? params.description.trim() : undefined;
@@ -136,7 +138,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
   },
   "bustly.agents.update": async ({ params, respond }) => {
     try {
-      const workspaceId = resolveWorkspaceIdParam(params);
+      const workspaceId = await resolveWorkspaceIdParam(params);
       const agentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
       const name = typeof params.name === "string" ? params.name.trim() : "";
       const identityMarkdown =
@@ -186,7 +188,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
   },
   "bustly.agents.delete": async ({ params, respond }) => {
     try {
-      const workspaceId = resolveWorkspaceIdParam(params);
+      const workspaceId = await resolveWorkspaceIdParam(params);
       const agentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
       if (!workspaceId) {
         respond(
@@ -221,9 +223,9 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       );
     }
   },
-  "bustly.sessions.list": ({ params, respond }) => {
+  "bustly.sessions.list": async ({ params, respond }) => {
     try {
-      const workspaceId = resolveWorkspaceIdParam(params);
+      const workspaceId = await resolveWorkspaceIdParam(params);
       const agentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
       if (!workspaceId) {
         respond(
@@ -256,7 +258,7 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
   },
   "bustly.sessions.create": async ({ params, respond, context }) => {
     try {
-      const workspaceId = resolveWorkspaceIdParam(params);
+      const workspaceId = await resolveWorkspaceIdParam(params);
       const agentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const promptExcerpt =
@@ -313,30 +315,14 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
       );
     }
   },
-  "bustly.supabase.get-config": ({ respond }) => {
+  "bustly.supabase.get-config": async ({ respond }) => {
     try {
-      const state = readBustlyOAuthState();
-      const supabase = state?.supabase;
-      const user = state?.user;
-      const accessToken = getBustlyAccessToken(state).trim();
-      const workspaceId = user?.workspaceId?.trim() || "";
-      if (!supabase?.url || !supabase.anonKey || !accessToken) {
+      const config = await getBustlySupabaseAuthConfigEnsuringFreshToken();
+      if (!config) {
         respond(true, null, undefined);
         return;
       }
-      respond(
-        true,
-        {
-          url: supabase.url,
-          anonKey: supabase.anonKey,
-          accessToken,
-          workspaceId,
-          userId: user?.userId || "",
-          userEmail: user?.userEmail || "",
-          userName: user?.userName || "",
-        },
-        undefined,
-      );
+      respond(true, config, undefined);
     } catch (err) {
       respond(
         false,

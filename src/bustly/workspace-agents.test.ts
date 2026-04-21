@@ -499,4 +499,116 @@ describe("workspace-agents", () => {
     expect((metadata.createdAt ?? 0) > legacyCreatedAt).toBe(true);
     expect(metadata.icon).toBe("OldIcon");
   });
+
+  it("preserves template-provided IDENTITY name for preset agents", async () => {
+    bootstrapMock.mockImplementationOnce(async (params: unknown) => {
+      const typed = params as { workspaceDir: string };
+      mkdirSync(typed.workspaceDir, { recursive: true });
+      writeFileSync(
+        path.join(typed.workspaceDir, "IDENTITY.md"),
+        [
+          "<!-- Managed by Bustly bootstrap. Edit with care. -->",
+          "# IDENTITY.md - Agent Identity",
+          "",
+          "- **Name:** Bustly Store Ops",
+          "- **Role:** Store Operations Operator",
+          "",
+          "## Mission",
+          "",
+          "Keep {{WORKSPACE_NAME}} operationally healthy.",
+          "",
+        ].join("\n"),
+      );
+    });
+
+    const created = await createBustlyWorkspaceAgent({
+      workspaceId: "workspace-1",
+      agentName: "store-ops",
+      displayName: "Store Ops",
+      preserveTemplateIdentityName: true,
+      configPath,
+      env: process.env,
+    });
+
+    const identity = readFileSync(path.join(created.workspaceDir, "IDENTITY.md"), "utf-8");
+    expect(identity).toContain("- **Name:** Bustly Store Ops");
+    expect(identity).not.toContain("- Name: Store Ops");
+  });
+
+  it("refreshes existing preset agent templates during ensure", async () => {
+    const fullWorkspaceId = "412d0ede-8926-4f70-a611-b3b466596399";
+    const normalizedWorkspaceId = "412d0ede";
+    const marketingWorkspaceDir = path.join(
+      stateDir,
+      "workspaces",
+      normalizedWorkspaceId,
+      "agents",
+      "marketing",
+    );
+    mkdirSync(marketingWorkspaceDir, { recursive: true });
+    writeFileSync(path.join(marketingWorkspaceDir, "IDENTITY.md"), "stale identity\n");
+
+    const seedConfig: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: `bustly-${normalizedWorkspaceId}-overview`,
+            name: "Overview",
+            workspace: path.join(stateDir, "workspaces", normalizedWorkspaceId, "agents", "overview"),
+            default: true,
+          },
+          {
+            id: `bustly-${normalizedWorkspaceId}-marketing`,
+            name: "Marketing",
+            workspace: marketingWorkspaceDir,
+          },
+        ],
+      },
+    };
+    writeFileSync(configPath, JSON.stringify(seedConfig, null, 2));
+
+    bootstrapMock.mockImplementation(async (params: unknown) => {
+      const typed = params as { workspaceDir: string; agentName?: string };
+      if (typed.agentName === "marketing") {
+        mkdirSync(typed.workspaceDir, { recursive: true });
+        writeFileSync(
+          path.join(typed.workspaceDir, "IDENTITY.md"),
+          [
+            "<!-- Managed by Bustly bootstrap. Edit with care. -->",
+            "# IDENTITY.md - Agent Identity",
+            "",
+            "- **Name:** Bustly Marketing",
+            "- **Role:** Growth and Paid Acquisition Operator",
+            "",
+            "## Mission",
+            "",
+            "Protect growth.",
+            "",
+          ].join("\n"),
+        );
+      }
+    });
+
+    await ensureBustlyWorkspacePresetAgents({
+      workspaceId: fullWorkspaceId,
+      workspaceName: "Workspace One",
+      presets: [
+        { slug: "overview", label: "Overview", isMain: true },
+        { slug: "marketing", label: "Marketing", icon: "TrendUp" },
+      ],
+      configPath,
+      env: process.env,
+    });
+
+    expect(bootstrapMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: fullWorkspaceId,
+        workspaceDir: marketingWorkspaceDir,
+        agentName: "marketing",
+      }),
+    );
+    const identity = readFileSync(path.join(marketingWorkspaceDir, "IDENTITY.md"), "utf-8");
+    expect(identity).toContain("Bustly Marketing");
+    expect(identity).not.toContain("stale identity");
+  });
 });

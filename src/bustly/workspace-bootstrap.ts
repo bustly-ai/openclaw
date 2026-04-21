@@ -8,7 +8,7 @@ import {
   type BustlyAgentMetadata,
 } from "../agents/bustly-agent-metadata.js";
 import { loadWorkspaceTemplate } from "../agents/workspace.js";
-import { getBustlyAccessToken, readBustlyOAuthState } from "../bustly-oauth.js";
+import { getBustlyAccessToken, readBustlyOAuthStateEnsuringFreshToken } from "../bustly-oauth.js";
 import type { BustlyOAuthState } from "../config/types.base.js";
 import {
   loadBustlyRemoteAgentMetadata,
@@ -509,7 +509,7 @@ async function buildBustlyBootstrapContext(params: {
   workspaceId: string;
   workspaceName?: string;
 }): Promise<BustlyBootstrapContext> {
-  const state = readBustlyOAuthState();
+  const state = await readBustlyOAuthStateEnsuringFreshToken();
   if (!state?.user?.userId) {
     throw new Error("Missing Bustly OAuth user for workspace bootstrap.");
   }

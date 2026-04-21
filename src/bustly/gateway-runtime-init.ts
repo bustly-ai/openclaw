@@ -194,6 +194,25 @@ export async function ensureGatewayRuntimeInit(
     throw new Error("Failed to initialize Bustly workspace binding.");
   }
 
+  // Ensure preset sub-agents stay in sync with the remote Bustly prompt templates
+  // so cloud runtimes align with desktop defaults on every bootstrap.
+  const { loadEnabledBustlyRemoteAgentPresets } = await import("./agent-presets.js");
+  const { ensureBustlyWorkspacePresetAgents } = await import("./workspace-agents.js");
+  const presetAgents = await loadEnabledBustlyRemoteAgentPresets({ env });
+  await ensureBustlyWorkspacePresetAgents({
+    workspaceId,
+    workspaceName: options.workspaceName,
+    presets: presetAgents.map((preset) => ({
+      slug: preset.slug,
+      label: preset.label,
+      icon: preset.icon,
+      isMain: preset.isMain,
+    })),
+    configPath,
+    allowCreateConfig: true,
+    env,
+  });
+
   const finalSnapshot = await io.readConfigFileSnapshot();
   const finalConfig = finalSnapshot.valid ? finalSnapshot.config : runtimeBase.config;
   const agentDir = resolveGatewayRuntimeAgentDir(env);

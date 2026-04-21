@@ -7,10 +7,13 @@ import {
   applyBustlyRuntimeManifest,
   bootstrapBustlyRuntime,
   getBustlyRuntimeHealthSnapshot,
+  getBustlyRuntimeHealthSnapshotEnsuringFreshToken,
 } from "./runtime-manifest.js";
 
 const {
   oauthStateRef,
+  oauthFreshStateRef,
+  readBustlyOAuthStateEnsuringFreshTokenMock,
   setActiveBustlyWorkspaceMock,
   resolveActiveBustlyWorkspaceBindingMock,
   ensureBustlyWorkspacePresetAgentsMock,
@@ -18,13 +21,10 @@ const {
 } = vi.hoisted(() => {
   return {
     oauthStateRef: { current: null as BustlyOAuthState | null },
-    setActiveBustlyWorkspaceMock: vi.fn<
-      (params: unknown) => Promise<{
-        workspaceId: string;
-        agentId: string;
-        workspaceDir: string;
-      }>
-    >(async () => ({
+    oauthFreshStateRef: { current: null as BustlyOAuthState | null },
+    readBustlyOAuthStateEnsuringFreshTokenMock:
+      vi.fn<(options?: { forceRefresh?: boolean }) => Promise<BustlyOAuthState | null>>(),
+    setActiveBustlyWorkspaceMock: vi.fn(async () => ({
       workspaceId: "workspace-1",
       agentId: "bustly-workspace-1-overview",
       workspaceDir: "/tmp/workspaces/workspace-1/agents/overview",
@@ -49,6 +49,8 @@ const {
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => oauthStateRef.current),
+  readBustlyOAuthStateEnsuringFreshToken: (options?: { forceRefresh?: boolean }) =>
+    readBustlyOAuthStateEnsuringFreshTokenMock(options),
   getBustlyAccessToken: (
     state: { user?: { supabaseAccessToken?: string; userAccessToken?: string } } | null | undefined,
   ) => state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "",
@@ -80,6 +82,11 @@ describe("bustly runtime manifest", () => {
     process.env.OPENCLAW_STATE_DIR = path.join(tempDir, "state");
     process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, "state", "openclaw.json");
     oauthStateRef.current = null;
+    oauthFreshStateRef.current = null;
+    readBustlyOAuthStateEnsuringFreshTokenMock.mockReset();
+    readBustlyOAuthStateEnsuringFreshTokenMock.mockImplementation(async () => {
+      return oauthFreshStateRef.current ?? oauthStateRef.current;
+    });
     setActiveBustlyWorkspaceMock.mockReset();
     setActiveBustlyWorkspaceMock.mockResolvedValue({
       workspaceId: "workspace-1",
@@ -161,6 +168,38 @@ describe("bustly runtime manifest", () => {
 
     const health = getBustlyRuntimeHealthSnapshot();
     expect(health.loggedIn).toBe(true);
+  });
+
+  it("returns runtime health snapshot from refreshed oauth state", async () => {
+    oauthStateRef.current = {
+      deviceId: "device-1",
+      callbackPort: 17900,
+      user: {
+        userId: "u-1",
+        userName: "Tester",
+        userEmail: "tester@example.com",
+        workspaceId: "workspace-1",
+        skills: [],
+      },
+      supabase: {
+        url: "https://example.supabase.co",
+        anonKey: "anon-key",
+      },
+    };
+    oauthFreshStateRef.current = {
+      ...oauthStateRef.current,
+      user: {
+        ...oauthStateRef.current.user!,
+        supabaseAccessToken: "fresh-jwt-token",
+        userAccessToken: "fresh-jwt-token",
+      },
+    };
+
+    const health = await getBustlyRuntimeHealthSnapshotEnsuringFreshToken();
+
+    expect(readBustlyOAuthStateEnsuringFreshTokenMock).toHaveBeenCalledTimes(1);
+    expect(health.loggedIn).toBe(true);
+    expect(health.workspaceId).toBe("workspace-1");
   });
 
   it("applies runtime manifest and forwards preset agents", async () => {
