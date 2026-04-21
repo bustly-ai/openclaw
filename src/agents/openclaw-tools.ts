@@ -10,6 +10,7 @@ import { createBrowserTool } from "./tools/browser-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
+import { createHeartbeatDigestSearchTool } from "./tools/heartbeat-digest-search-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
@@ -112,6 +113,12 @@ export function createOpenClawTools(options?: {
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
+  const heartbeatDigestSearchTool =
+    options?.isHeartbeat === true
+      ? createHeartbeatDigestSearchTool({
+          agentDir: options?.agentDir,
+        })
+      : null;
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
@@ -173,6 +180,7 @@ export function createOpenClawTools(options?: {
     createSessionSearchTool({
       agentSessionKey: options?.agentSessionKey,
     }),
+    ...(heartbeatDigestSearchTool ? [heartbeatDigestSearchTool] : []),
     ...(workspaceDir
       ? [
           createSkillManageTool({
