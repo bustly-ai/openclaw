@@ -305,8 +305,8 @@ describe("gateway server chat", () => {
         const text = (first as { text?: unknown }).text;
         return typeof text === "string" ? text : undefined;
       };
-      expect(defaultMsgs.length).toBe(200);
-      expect(firstContentText(defaultMsgs[0])).toBe("m100");
+      expect(defaultMsgs.length).toBe(300);
+      expect(firstContentText(defaultMsgs[0])).toBe("m0");
     } finally {
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
