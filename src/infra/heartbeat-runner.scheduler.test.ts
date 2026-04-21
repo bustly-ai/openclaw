@@ -204,6 +204,48 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("does not double-run the same agent when targeted and interval wakes are queued together", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "30m" } },
+          list: [
+            { id: "main", heartbeat: { every: "30m" } },
+            { id: "ops", heartbeat: { every: "30m" } },
+          ],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // Move to the first due boundary, then queue both:
+    // - a targeted wake for ops
+    // - an interval wake (generic due-agent sweep)
+    vi.setSystemTime(new Date(30 * 60_000));
+    requestHeartbeatNow({
+      reason: "wake",
+      agentId: "ops",
+      sessionKey: "agent:ops:discord:channel:alerts",
+      coalesceMs: 0,
+    });
+    requestHeartbeatNow({
+      reason: "interval",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const calledAgents = runSpy.mock.calls.map((call) => call[0]?.agentId);
+    expect(calledAgents.filter((agentId) => agentId === "ops")).toHaveLength(1);
+    expect(calledAgents.filter((agentId) => agentId === "main")).toHaveLength(1);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
+
   it("runs due heartbeat agents in parallel", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));

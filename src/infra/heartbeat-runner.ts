@@ -1272,6 +1272,12 @@ export function startHeartbeatRunner(opts: {
     const reason = params?.reason;
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = params?.sessionKey?.trim() || undefined;
+    const skipAgentIds = new Set(
+      (params?.skipAgentIds ?? [])
+        .map((agentId) => agentId.trim())
+        .filter((agentId) => agentId.length > 0)
+        .map((agentId) => normalizeAgentId(agentId)),
+    );
     const hasTargetedRequest = Boolean(requestedSessionKey || requestedAgentId);
     if (!hasTargetedRequest && state.agents.size === 0) {
       return {
@@ -1321,7 +1327,7 @@ export function startHeartbeatRunner(opts: {
     }
 
     const dueAgents = Array.from(state.agents.values()).filter(
-      (agent) => !isInterval || now >= agent.nextDueMs,
+      (agent) => (!isInterval || now >= agent.nextDueMs) && !skipAgentIds.has(agent.agentId),
     );
     const results = await Promise.all(
       dueAgents.map(async (agent) => {
@@ -1377,6 +1383,7 @@ export function startHeartbeatRunner(opts: {
       reason: params.reason,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      skipAgentIds: params.skipAgentIds,
     });
   const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
   updateConfig(state.cfg);

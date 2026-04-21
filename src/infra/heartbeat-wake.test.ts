@@ -319,6 +319,34 @@ describe("heartbeat-wake", () => {
     );
   });
 
+  it("passes targeted agent ids to interval wakes in the same batch", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeatNow({
+      reason: "wake",
+      agentId: "ops",
+      sessionKey: "agent:ops:discord:channel:alerts",
+      coalesceMs: 0,
+    });
+    requestHeartbeatNow({
+      reason: "interval",
+      coalesceMs: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    const intervalCall = handler.mock.calls.find((call) => call[0]?.reason === "interval");
+    expect(intervalCall?.[0]).toEqual(
+      expect.objectContaining({
+        reason: "interval",
+        skipAgentIds: ["ops"],
+      }),
+    );
+  });
+
   it("starts distinct targeted wakes in parallel within the same batch", async () => {
     vi.useFakeTimers();
     let resolveOps: ((value: { status: "ran"; durationMs: number }) => void) | undefined;

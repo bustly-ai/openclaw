@@ -114,14 +114,6 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
-    id: "heartbeat_digest_search",
-    label: "heartbeat_digest_search",
-    description: "Search heartbeat digests by time range",
-    sectionId: "memory",
-    profiles: ["coding"],
-    includeInOpenClawGroup: true,
-  },
-  {
     id: "skill_manage",
     label: "skill_manage",
     description: "Manage workspace skills",

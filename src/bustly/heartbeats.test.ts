@@ -5,6 +5,7 @@ import {
   buildBustlyHeartbeatSystemPrompt,
   parseBustlyHeartbeatEventsJson,
   parseBustlyHeartbeatMarkdown,
+  reconcileBustlyHeartbeatState,
   resolveBustlyHeartbeatHealthSummary,
 } from "./heartbeats.js";
 
@@ -99,11 +100,94 @@ describe("bustly heartbeat prompts", () => {
     });
 
     expect(systemPrompt).toBe("");
-    expect(runPrompt).toContain("heartbeat_digest_search");
-    expect(runPrompt).toContain('"from":"2026-04-20T08:00:00.000Z"');
+    expect(runPrompt).toContain("from 2026-04-20T08:00:00.000Z to 2026-04-20T08:30:00.000Z");
     expect(runPrompt).toContain("Output rules:");
-    expect(prompt).toContain("heartbeat_digest_search");
     expect(prompt).toContain("Read `heartbeat.md`");
+  });
+});
+
+describe("reconcileBustlyHeartbeatState", () => {
+  it("keeps unmatched open events open instead of auto-resolving", () => {
+    const previous = {
+      agentId: "agent-a",
+      lastScanAt: 1_000,
+      lastPayloadText: "previous payload",
+      lastPayloadAt: 1_000,
+      events: [
+        {
+          id: "evt-keep-open",
+          agentId: "agent-a",
+          severity: "warning" as const,
+          title: "Inventory drift",
+          message: "Stock mismatch found",
+          actionPrompt: "Recount inventory for SKU-123",
+          status: "open" as const,
+          createdAt: 900,
+          updatedAt: 950,
+        },
+      ],
+    };
+
+    const next = reconcileBustlyHeartbeatState({
+      agentId: "agent-a",
+      previous,
+      events: [],
+      scannedAt: 2_000,
+      payloadText: "no new events",
+    });
+
+    expect(next.events).toHaveLength(1);
+    expect(next.events[0]).toMatchObject({
+      id: "evt-keep-open",
+      status: "open",
+      createdAt: 900,
+      updatedAt: 950,
+    });
+  });
+
+  it("reopens previously resolved events when they reappear", () => {
+    const previous = {
+      agentId: "agent-a",
+      lastScanAt: 1_000,
+      lastPayloadText: "previous payload",
+      lastPayloadAt: 1_000,
+      events: [
+        {
+          id: "evt-resolved",
+          agentId: "agent-a",
+          severity: "critical" as const,
+          title: "Payment risk",
+          message: "3 failed payouts in a row",
+          actionPrompt: "Audit payout settings and retry.",
+          status: "resolved" as const,
+          createdAt: 800,
+          updatedAt: 1_000,
+        },
+      ],
+    };
+
+    const next = reconcileBustlyHeartbeatState({
+      agentId: "agent-a",
+      previous,
+      events: [
+        {
+          severity: "critical",
+          title: "Payment risk",
+          message: "3 failed payouts in a row",
+          actionPrompt: "Audit payout settings and retry.",
+        },
+      ],
+      scannedAt: 2_000,
+      payloadText: "new payload",
+    });
+
+    expect(next.events).toHaveLength(1);
+    expect(next.events[0]).toMatchObject({
+      id: "evt-resolved",
+      status: "open",
+      createdAt: 800,
+      updatedAt: 2_000,
+    });
   });
 });
 

@@ -12,6 +12,7 @@ import {
   appendHeartbeatDigestEntry,
   type HeartbeatDigestResultStatus,
 } from "../../agents/heartbeat-digest-store.js";
+import { DEFAULT_HEARTBEAT_FILENAME } from "../../agents/workspace.js";
 import { createSkillManageTool } from "../../agents/tools/skill-manage-tool.js";
 import { searchSessionTranscripts } from "../../agents/tools/session-search-tool.js";
 import type { TemplateContext } from "../templating.js";
@@ -39,6 +40,7 @@ export const DEFAULT_POST_RUN_MEMORY_REVIEW_PROMPT = [
   "The runtime decides final storage and promotion. Your layer field is advisory only.",
   "Use memory for durable facts, decisions, and preferences.",
   "Use skill for stable reusable procedures, SOPs, or repeatable playbooks.",
+  "Use heartbeat for durable long-term goals that should be tracked in HEARTBEAT.md.",
   "Use retrieval_only when there is a correction or precedent worth preserving even if it should not yet become memory or skill.",
   "Correction episodes should capture what was wrong, how the user corrected it, how it was verified, and the actionable rule that should persist.",
   "Do not write files yourself. Do not emit prose outside JSON.",
@@ -69,7 +71,7 @@ type ReviewDecision = {
   toolCallCount: number;
 };
 
-type ConsolidationLayer = "none" | "memory" | "skill" | "retrieval_only";
+type ConsolidationLayer = "none" | "memory" | "skill" | "retrieval_only" | "heartbeat";
 
 type ConsolidationClassification = {
   layer: ConsolidationLayer;
@@ -93,6 +95,10 @@ type ConsolidationClassification = {
   };
   memory?: {
     target: "memory_md" | "daily_log";
+    heading: string;
+    body: string;
+  };
+  heartbeat?: {
     heading: string;
     body: string;
   };
@@ -133,6 +139,7 @@ type ConsolidationRoutingResult = {
   confidence: number;
   repeatedTask: boolean;
   writeMemory?: NonNullable<ConsolidationClassification["memory"]>;
+  writeHeartbeat?: NonNullable<ConsolidationClassification["heartbeat"]>;
   writeSkill?: NonNullable<ConsolidationClassification["skill"]>;
   writeRetrieval: boolean;
   retrievalReason?: string;
@@ -225,6 +232,37 @@ function cleanPrecedent(value: unknown): ConsolidationClassification["precedent"
     return undefined;
   }
   return { title, problem, resolution, rule };
+}
+
+function cleanHeartbeat(value: unknown): ConsolidationClassification["heartbeat"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const heading = cleanLine(record.heading);
+  const body = cleanParagraph(record.body);
+  if (!heading || !body) {
+    return undefined;
+  }
+  return { heading, body };
+}
+
+function deriveHeartbeatWriteFromSummary(
+  summary: string,
+): NonNullable<ConsolidationClassification["heartbeat"]> | undefined {
+  const cleanSummary = cleanParagraph(summary);
+  if (!cleanSummary) {
+    return undefined;
+  }
+  const firstLine = cleanLine(cleanSummary.split("\n")[0] ?? cleanSummary) || "Long-term Goal";
+  const heading = firstLine.slice(0, 80);
+  if (!heading) {
+    return undefined;
+  }
+  return {
+    heading,
+    body: cleanSummary,
+  };
 }
 
 export function resolvePostRunMemoryReviewSettings(
@@ -485,7 +523,10 @@ function normalizeClassification(raw: unknown): ConsolidationClassification {
     raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const layerRaw = cleanLine(record.layer).toLowerCase();
   const layer: ConsolidationLayer =
-    layerRaw === "memory" || layerRaw === "skill" || layerRaw === "retrieval_only"
+    layerRaw === "memory" ||
+    layerRaw === "skill" ||
+    layerRaw === "retrieval_only" ||
+    layerRaw === "heartbeat"
       ? layerRaw
       : "none";
   const memoryRaw =
@@ -507,6 +548,7 @@ function normalizeClassification(raw: unknown): ConsolidationClassification {
           body: cleanParagraph(memoryRaw.body),
         }
       : undefined;
+  const heartbeat = cleanHeartbeat(record.heartbeat);
   const skill =
     skillRaw && cleanParagraph(skillRaw.body) && cleanLine(skillRaw.skillName)
       ? {
@@ -526,6 +568,7 @@ function normalizeClassification(raw: unknown): ConsolidationClassification {
     correction: cleanCorrection(record.correction),
     precedent: cleanPrecedent(record.precedent),
     memory,
+    heartbeat,
     skill,
   };
 }
@@ -635,6 +678,18 @@ async function applySkillWrite(params: {
   });
 }
 
+async function applyHeartbeatWrite(params: {
+  workspaceDir: string;
+  heartbeat: NonNullable<ConsolidationClassification["heartbeat"]>;
+}) {
+  await appendMarkdownSection({
+    filePath: path.join(params.workspaceDir, DEFAULT_HEARTBEAT_FILENAME),
+    title: params.heartbeat.heading,
+    body: params.heartbeat.body,
+    preamble: "# HEARTBEAT.md",
+  });
+}
+
 async function appendRetrievalEntry(params: {
   agentDir: string;
   sessionId: string;
@@ -691,7 +746,7 @@ async function classifyConsolidation(params: {
     "",
     "Return exactly one JSON object with this shape:",
     `{
-  "layer": "none" | "memory" | "skill" | "retrieval_only",
+  "layer": "none" | "memory" | "skill" | "retrieval_only" | "heartbeat",
   "reason": string,
   "confidence": number,
   "repeatedTask": boolean,
@@ -711,6 +766,7 @@ async function classifyConsolidation(params: {
     "rule": string
   } | null,
   "memory": { "target": "memory_md" | "daily_log", "heading": string, "body": string } | null,
+  "heartbeat": { "heading": string, "body": string } | null,
   "skill": { "skillName": string, "description": string, "body": string } | null
 }`,
     "",
@@ -797,6 +853,11 @@ export function enforceRuntimeRouting(params: {
   const writeSkill =
     params.classification.skill && hasProcedureSignal ? params.classification.skill : undefined;
   const writeMemory = params.classification.memory;
+  const writeHeartbeat =
+    params.classification.heartbeat ??
+    (repeatedTask || params.classification.layer === "heartbeat" || Boolean(writeSkill)
+      ? deriveHeartbeatWriteFromSummary(params.classification.summary)
+      : undefined);
   const writeRetrieval = Boolean(
     params.classification.correction ||
       params.classification.precedent ||
@@ -823,6 +884,13 @@ export function enforceRuntimeRouting(params: {
     }
   }
 
+  if (writeHeartbeat && primaryLayer === "none") {
+    primaryLayer = "heartbeat";
+    if (!reason || reason === "unspecified") {
+      reason = "runtime_preserved_heartbeat_goal";
+    }
+  }
+
   if (writeRetrieval) {
     retrievalReason = params.classification.correction
       ? "runtime_preserved_correction_precedent"
@@ -846,6 +914,7 @@ export function enforceRuntimeRouting(params: {
     confidence,
     repeatedTask,
     writeMemory,
+    writeHeartbeat,
     writeSkill,
     writeRetrieval,
     retrievalReason,
@@ -986,10 +1055,12 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
 
   const workspaceDir = params.followupRun.run.workspaceDir;
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
+  const heartbeatFile = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
   const dailyMemoryFile = path.join(workspaceDir, "memory");
   const skillsDir = path.join(workspaceDir, "skills");
   const experienceFile = path.join(params.followupRun.run.agentDir, "experience", "entries.jsonl");
   const beforeMemoryMtime = await statMtimeMs(memoryFile);
+  const beforeHeartbeatMtime = await statMtimeMs(heartbeatFile);
   const beforeDailyDirMtime = await statMtimeMs(dailyMemoryFile);
   const beforeSkillsDirMtime = await statMtimeMs(skillsDir);
   const beforeExperienceMtime = await statMtimeMs(experienceFile);
@@ -1038,6 +1109,12 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
       await applySkillWrite({
         workspaceDir,
         skill: routed.writeSkill,
+      });
+    }
+    if (routed.writeHeartbeat) {
+      await applyHeartbeatWrite({
+        workspaceDir,
+        heartbeat: routed.writeHeartbeat,
       });
     }
     if (routed.writeRetrieval) {
@@ -1113,11 +1190,14 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
   }
 
   const afterMemoryMtime = await statMtimeMs(memoryFile);
+  const afterHeartbeatMtime = await statMtimeMs(heartbeatFile);
   const afterDailyDirMtime = await statMtimeMs(dailyMemoryFile);
   const afterSkillsDirMtime = await statMtimeMs(skillsDir);
   const afterExperienceMtime = await statMtimeMs(experienceFile);
   const changedMemory =
-    beforeMemoryMtime !== afterMemoryMtime || beforeDailyDirMtime !== afterDailyDirMtime;
+    beforeMemoryMtime !== afterMemoryMtime ||
+    beforeHeartbeatMtime !== afterHeartbeatMtime ||
+    beforeDailyDirMtime !== afterDailyDirMtime;
   const changedSkills = beforeSkillsDirMtime !== afterSkillsDirMtime;
   const changedRetrieval = beforeExperienceMtime !== afterExperienceMtime;
 

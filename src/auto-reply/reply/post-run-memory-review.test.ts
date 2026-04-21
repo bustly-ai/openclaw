@@ -192,4 +192,77 @@ describe("enforceRuntimeRouting", () => {
     expect(routed.writeMemory?.heading).toBe("Shopify Pagination Constraint");
     expect(routed.writeRetrieval).toBe(true);
   });
+
+  it("routes explicit heartbeat goals to HEARTBEAT.md writes", () => {
+    const settings = resolvePostRunMemoryReviewSettings({
+      agents: {
+        defaults: {
+          selfEvolution: {
+            enabled: true,
+            minToolCalls: DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS,
+          },
+        },
+      },
+    });
+    expect(settings).not.toBeNull();
+    if (!settings) {
+      throw new Error("missing settings");
+    }
+
+    const routed = enforceRuntimeRouting({
+      classification: {
+        layer: "heartbeat",
+        reason: "long_term_goal_detected",
+        confidence: 0.86,
+        repeatedTask: false,
+        summary: "Customer repeatedly asks for weekly churn tracking and proactive alerts.",
+        heartbeat: {
+          heading: "Weekly churn tracking",
+          body: "Track churn weekly and notify when churn accelerates for two consecutive weeks.",
+        },
+      },
+      matchedPriorSessions: 0,
+      toolCallCount: 1,
+      settings,
+    });
+
+    expect(routed.primaryLayer).toBe("heartbeat");
+    expect(routed.writeHeartbeat).toEqual({
+      heading: "Weekly churn tracking",
+      body: "Track churn weekly and notify when churn accelerates for two consecutive weeks.",
+    });
+  });
+
+  it("auto-derives heartbeat goals for repeated tasks", () => {
+    const settings = resolvePostRunMemoryReviewSettings({
+      agents: {
+        defaults: {
+          selfEvolution: {
+            enabled: true,
+            minToolCalls: DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS,
+          },
+        },
+      },
+    });
+    expect(settings).not.toBeNull();
+    if (!settings) {
+      throw new Error("missing settings");
+    }
+
+    const routed = enforceRuntimeRouting({
+      classification: {
+        layer: "none",
+        reason: "repeated_workflow",
+        confidence: 0.91,
+        repeatedTask: true,
+        summary: "Run inventory reconciliation every Monday and escalate if delta exceeds 2%.",
+      },
+      matchedPriorSessions: 0,
+      toolCallCount: 0,
+      settings,
+    });
+
+    expect(routed.writeHeartbeat?.heading).toContain("Run inventory reconciliation every Monday");
+    expect(routed.writeHeartbeat?.body).toContain("delta exceeds 2%");
+  });
 });

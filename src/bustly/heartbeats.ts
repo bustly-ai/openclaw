@@ -191,17 +191,14 @@ export function buildBustlyHeartbeatSystemPrompt(): string {
   ].join("\n");
 }
 
-function buildHeartbeatDigestSearchPrompt(
+function buildHeartbeatRunPromptLines(
   digestWindow?: BustlyHeartbeatDigestWindow,
 ): string[] {
-  const from = digestWindow?.from?.trim();
-  const to = digestWindow?.to?.trim();
   return [
-    "Read `heartbeat.md` (the long-term goals provided by the user), then, use the corresponding skills to identify recent business issues.",
-    "Call `heartbeat_digest_search` (Use digest results to understand what the user recently asked.) to understand what matters most to the user at this time.",
-    `{"from":"${from}","to":"${to}"}`,
-    "Then, share with the user your key findings regarding the business.",
-    "You need to retrieve the data again to understand the current situation, rather than simply replying directly.",
+    `You now need to proactively identify any issues that have arisen in our operations recently and remind me.`,
+    "1.Read `heartbeat.md` (Your long-term goals)",
+    "2.Use the skills to understand what has happened in the business recently.",
+    "Then, share with your key findings regarding the business. Replies must follow these requirements",
     "Output rules:",
     "- When you discover an issue, do not take direct action on my behalf; you must notify me instead.",
     "- Do not repeat issues that have already been reported.",
@@ -220,7 +217,7 @@ function buildHeartbeatDigestSearchPrompt(
 export function buildBustlyHeartbeatRunPrompt(options?: {
   digestWindow?: BustlyHeartbeatDigestWindow;
 }): string {
-  return buildHeartbeatDigestSearchPrompt(options?.digestWindow).join("\n");
+  return buildHeartbeatRunPromptLines(options?.digestWindow).join("\n");
 }
 
 export function buildBustlyHeartbeatPrompt(options?: {
@@ -444,15 +441,10 @@ export function reconcileBustlyHeartbeatState(params: {
     if (nextFingerprints.has(fingerprint)) {
       continue;
     }
-    nextEvents.push(
-      existing.status === "open"
-        ? {
-            ...existing,
-            status: "resolved",
-            updatedAt: params.scannedAt,
-          }
-        : existing,
-    );
+    // Keep unmatched historical events as-is. "Open" means the user has not
+    // handled it yet, so it should not auto-resolve just because the current
+    // digest window moved forward.
+    nextEvents.push(existing);
   }
 
   return {
