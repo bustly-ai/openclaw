@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../protocol/index.js";
+import { DEFAULT_BUSTLY_HEARTBEAT_EVERY } from "../../bustly/heartbeats.js";
 
 const mocks = vi.hoisted(() => ({
   readBustlyOAuthStateEnsuringFreshToken: vi.fn(),
@@ -180,6 +181,10 @@ describe("gateway bustly agent/session handlers", () => {
       agentName: "growth",
       displayName: "growth",
       icon: "TrendUp",
+      heartbeat: {
+        every: DEFAULT_BUSTLY_HEARTBEAT_EVERY,
+        target: "none",
+      },
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -211,6 +216,10 @@ describe("gateway bustly agent/session handlers", () => {
       description: "Run growth reporting.",
       skills: ["ads", "reporting"],
       icon: undefined,
+      heartbeat: {
+        every: DEFAULT_BUSTLY_HEARTBEAT_EVERY,
+        target: "none",
+      },
     });
   });
 

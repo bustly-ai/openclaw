@@ -5,7 +5,7 @@ import { DEFAULT_AGENTS_FILENAME } from "../../agents/workspace.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../test-helpers/workspace.js";
 
 describe("resolveCommandsSystemPromptBundle", () => {
-  it("keeps bootstrap files out of the system prompt", async () => {
+  it("injects bootstrap context files into the system prompt", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-commands-system-prompt-");
     await writeWorkspaceFile({
       dir: workspaceDir,
@@ -31,9 +31,9 @@ describe("resolveCommandsSystemPromptBundle", () => {
     } as unknown as HandleCommandsParams);
 
     expect(bundle.bootstrapFiles.some((file) => file.name === DEFAULT_AGENTS_FILENAME)).toBe(true);
-    expect(bundle.injectedFiles).toEqual([]);
-    expect(bundle.systemPrompt).not.toContain("## Workspace Files (injected)");
-    expect(bundle.systemPrompt).not.toContain("# Project Context");
-    expect(bundle.systemPrompt).not.toContain("Bootstrap instructions");
+    expect(bundle.injectedFiles.length).toBeGreaterThan(0);
+    expect(bundle.systemPrompt).toContain("## Workspace Files (injected)");
+    expect(bundle.systemPrompt).toContain("# Project Context");
+    expect(bundle.systemPrompt).toContain("Bootstrap instructions");
   });
 });

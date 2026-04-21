@@ -1,5 +1,6 @@
 import { readBustlyOAuthStateEnsuringFreshToken } from "../../bustly-oauth.js";
 import { loadBustlyRemoteAgentMetadata } from "../../bustly/agent-presets.js";
+import { DEFAULT_BUSTLY_HEARTBEAT_EVERY } from "../../bustly/heartbeats.js";
 import { scheduleBustlySessionTitleGeneration } from "../../bustly/session-title.js";
 import { normalizeBustlyAgentName } from "../../bustly/workspace-agent.js";
 import { getBustlySupabaseAuthConfigEnsuringFreshToken } from "../../bustly/supabase.js";
@@ -117,6 +118,10 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         displayName: name,
         description,
         icon: icon || undefined,
+        heartbeat: {
+          every: DEFAULT_BUSTLY_HEARTBEAT_EVERY,
+          target: "none",
+        },
         ...(skills !== undefined ? { skills } : {}),
       });
       respond(

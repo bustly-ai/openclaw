@@ -18,6 +18,7 @@ const BUSTLY_AGENT_PREFIX = "bustly-";
 const BUSTLY_WORKSPACES_DIRNAME = "workspaces";
 const BUSTLY_AGENTS_DIRNAME = "agents";
 const DEFAULT_BUSTLY_AGENT_NAME = "overview";
+const NON_ASCII_AGENT_PREFIX = "agent-";
 const UUID_PREFIX_RE = /^([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
@@ -135,6 +136,27 @@ function normalizeBustlyToken(value: string | undefined): string {
   return trimmed.replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
 }
 
+function hashBustlyTokenToHex(value: string): string {
+  let hash = 0x811c9dc5;
+  for (const char of value) {
+    hash ^= char.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+function normalizeBustlyAgentNameToken(value: string | undefined): string {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) {
+    return DEFAULT_BUSTLY_AGENT_NAME;
+  }
+  const normalized = normalizeBustlyToken(trimmed);
+  if (normalized) {
+    return normalized;
+  }
+  return `${NON_ASCII_AGENT_PREFIX}${hashBustlyTokenToHex(trimmed)}`;
+}
+
 function normalizeBustlyWorkspaceId(value: string | undefined): string {
   const normalized = normalizeBustlyToken(value);
   if (!normalized) {
@@ -156,7 +178,7 @@ function buildBustlyWorkspaceAgentId(
   if (!normalizedWorkspaceId) {
     return null;
   }
-  const normalizedAgentName = normalizeBustlyToken(agentName) || DEFAULT_BUSTLY_AGENT_NAME;
+  const normalizedAgentName = normalizeBustlyAgentNameToken(agentName);
   return normalizeAgentId(`${BUSTLY_AGENT_PREFIX}${normalizedWorkspaceId}-${normalizedAgentName}`);
 }
 
