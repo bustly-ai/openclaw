@@ -18,6 +18,7 @@ const BUSTLY_METHODS = [
   "bustly.runtime.report-issue",
   "bustly.runtime.bootstrap",
   "bustly.runtime.manifest.apply",
+  "bustly.tasks.status",
   "bustly.workspace.get-active",
   "bustly.workspace.set-active",
 ] as const;

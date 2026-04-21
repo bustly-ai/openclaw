@@ -115,6 +115,7 @@ const BASE_METHODS = [
   "bustly.runtime.report-issue",
   "bustly.runtime.bootstrap",
   "bustly.runtime.manifest.apply",
+  "bustly.tasks.status",
   "bustly.workspace.get-active",
   "bustly.workspace.set-active",
   // WebChat WebSocket-native chat methods

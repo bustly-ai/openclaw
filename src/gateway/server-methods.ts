@@ -13,6 +13,7 @@ import { bustlyLinksHandlers } from "./server-methods/bustly-links.js";
 import { bustlyPathHandlers } from "./server-methods/bustly-path.js";
 import { bustlyPathImportHandlers } from "./server-methods/bustly-path-import.js";
 import { bustlyRuntimeHandlers } from "./server-methods/bustly-runtime.js";
+import { bustlyTasksHandlers } from "./server-methods/bustly-tasks.js";
 import { bustlyWorkspaceHandlers } from "./server-methods/bustly-workspace.js";
 import { channelsHandlers } from "./server-methods/channels.js";
 import { chatHandlers } from "./server-methods/chat.js";
@@ -105,6 +106,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...bustlyPathHandlers,
   ...bustlyPathImportHandlers,
   ...bustlyRuntimeHandlers,
+  ...bustlyTasksHandlers,
   ...bustlyWorkspaceHandlers,
 };
 

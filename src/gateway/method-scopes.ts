@@ -64,6 +64,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "bustly.links.resolve",
     "bustly.path.resolve",
     "bustly.runtime.health",
+    "bustly.tasks.status",
     "bustly.workspace.get-active",
     "skills.status",
     "skills.catalog.list",
