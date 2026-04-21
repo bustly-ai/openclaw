@@ -15,23 +15,23 @@ export type HeartbeatDigestEntry = {
   createdAtMs: number;
   sessionId: string;
   sessionKey?: string;
-  reviewRunId?: string;
   query: string;
-  userIssue: {
-    title: string;
-    message: string;
+  userQuestion: {
+    summary: string;
+    detail?: string;
   };
-  taskResult: {
+  agentAction: {
+    summary: string;
+  };
+  outcome: {
     status: HeartbeatDigestResultStatus;
     summary: string;
-    toolCallCount: number;
-    layer?: "none" | "memory" | "skill" | "retrieval_only";
-    reason?: string;
-    confidence?: number;
   };
-  snippet?: string;
   keywords?: string[];
-  reviewError?: string;
+  followUp?: {
+    risk?: string;
+    unresolvedItems?: string[];
+  };
 };
 
 const MAX_DIGEST_LINE_CHARS = 2000;
@@ -67,19 +67,6 @@ function normalizeStatus(value: unknown): HeartbeatDigestResultStatus {
   return "unknown";
 }
 
-function normalizeLayer(value: unknown): "none" | "memory" | "skill" | "retrieval_only" | undefined {
-  const normalized = cleanLine(value).toLowerCase();
-  if (
-    normalized === "none" ||
-    normalized === "memory" ||
-    normalized === "skill" ||
-    normalized === "retrieval_only"
-  ) {
-    return normalized;
-  }
-  return undefined;
-}
-
 function normalizeEntry(raw: unknown): HeartbeatDigestEntry | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return null;
@@ -92,32 +79,42 @@ function normalizeEntry(raw: unknown): HeartbeatDigestEntry | null {
       : Number.NaN;
   const sessionId = cleanLine(record.sessionId);
   const query = cleanLine(record.query);
-  const issueRaw =
-    record.userIssue && typeof record.userIssue === "object" && !Array.isArray(record.userIssue)
-      ? (record.userIssue as Record<string, unknown>)
+  const questionRaw =
+    record.userQuestion && typeof record.userQuestion === "object" && !Array.isArray(record.userQuestion)
+      ? (record.userQuestion as Record<string, unknown>)
       : {};
-  const resultRaw =
-    record.taskResult && typeof record.taskResult === "object" && !Array.isArray(record.taskResult)
-      ? (record.taskResult as Record<string, unknown>)
+  const actionRaw =
+    record.agentAction && typeof record.agentAction === "object" && !Array.isArray(record.agentAction)
+      ? (record.agentAction as Record<string, unknown>)
+      : {};
+  const outcomeRaw =
+    record.outcome && typeof record.outcome === "object" && !Array.isArray(record.outcome)
+      ? (record.outcome as Record<string, unknown>)
+      : {};
+  const followUpRaw =
+    record.followUp && typeof record.followUp === "object" && !Array.isArray(record.followUp)
+      ? (record.followUp as Record<string, unknown>)
       : {};
 
-  const issueTitle = cleanLine(issueRaw.title);
-  const issueMessage = cleanLine(issueRaw.message);
-  const resultSummary = cleanLine(resultRaw.summary);
-  const toolCallCount =
-    typeof resultRaw.toolCallCount === "number" && Number.isFinite(resultRaw.toolCallCount)
-      ? Math.max(0, Math.floor(resultRaw.toolCallCount))
-      : 0;
+  const questionSummary = cleanLine(questionRaw.summary);
+  const questionDetail = cleanLine(questionRaw.detail);
+  const actionSummary = cleanLine(actionRaw.summary);
+  const outcomeSummary = cleanLine(outcomeRaw.summary);
 
-  if (!createdAt || !Number.isFinite(createdAtMs) || !sessionId || !issueTitle || !resultSummary) {
+  if (!createdAt || !Number.isFinite(createdAtMs) || !sessionId || !questionSummary || !actionSummary || !outcomeSummary) {
     return null;
   }
 
   const id = cleanLine(record.id) || crypto.randomUUID();
   const sessionKey = cleanLine(record.sessionKey);
-  const reviewRunId = cleanLine(record.reviewRunId);
-  const snippet = cleanLine(record.snippet);
-  const reviewError = cleanLine(record.reviewError);
+  const risk = cleanLine(followUpRaw.risk);
+  const unresolvedItemsRaw = Array.isArray(followUpRaw.unresolvedItems)
+    ? followUpRaw.unresolvedItems
+    : [];
+  const unresolvedItems = unresolvedItemsRaw
+    .map((item) => cleanLine(item))
+    .filter(Boolean)
+    .slice(0, 8);
 
   return {
     id,
@@ -125,25 +122,27 @@ function normalizeEntry(raw: unknown): HeartbeatDigestEntry | null {
     createdAtMs,
     sessionId,
     ...(sessionKey ? { sessionKey } : {}),
-    ...(reviewRunId ? { reviewRunId } : {}),
     query,
-    userIssue: {
-      title: issueTitle,
-      message: issueMessage,
+    userQuestion: {
+      summary: questionSummary,
+      ...(questionDetail && questionDetail !== questionSummary ? { detail: questionDetail } : {}),
     },
-    taskResult: {
-      status: normalizeStatus(resultRaw.status),
-      summary: resultSummary,
-      toolCallCount,
-      ...(normalizeLayer(resultRaw.layer) ? { layer: normalizeLayer(resultRaw.layer) } : {}),
-      ...(cleanLine(resultRaw.reason) ? { reason: cleanLine(resultRaw.reason) } : {}),
-      ...((typeof resultRaw.confidence === "number" && Number.isFinite(resultRaw.confidence))
-        ? { confidence: Math.max(0, Math.min(1, resultRaw.confidence)) }
-        : {}),
+    agentAction: {
+      summary: actionSummary,
     },
-    ...(snippet ? { snippet } : {}),
+    outcome: {
+      status: normalizeStatus(outcomeRaw.status),
+      summary: outcomeSummary,
+    },
     ...(cleanKeywords(record.keywords) ? { keywords: cleanKeywords(record.keywords) } : {}),
-    ...(reviewError ? { reviewError } : {}),
+    ...((risk || unresolvedItems.length > 0)
+      ? {
+          followUp: {
+            ...(risk ? { risk } : {}),
+            ...(unresolvedItems.length > 0 ? { unresolvedItems } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -154,11 +153,12 @@ function scoreEntryForQuery(entry: HeartbeatDigestEntry, query: string): number 
   }
   const haystack = [
     entry.query,
-    entry.userIssue.title,
-    entry.userIssue.message,
-    entry.taskResult.summary,
-    entry.taskResult.reason ?? "",
-    entry.snippet ?? "",
+    entry.userQuestion.summary,
+    entry.userQuestion.detail ?? "",
+    entry.agentAction.summary,
+    entry.outcome.summary,
+    entry.followUp?.risk ?? "",
+    ...(entry.followUp?.unresolvedItems ?? []),
     ...(entry.keywords ?? []),
   ]
     .join("\n")
@@ -254,4 +254,3 @@ export async function searchHeartbeatDigestEntries(params: {
     entries: filtered,
   };
 }
-

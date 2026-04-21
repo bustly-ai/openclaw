@@ -8,9 +8,11 @@ import { createHeartbeatDigestSearchTool } from "./heartbeat-digest-search-tool.
 function createDigestEntry(params: {
   timestampMs: number;
   query: string;
-  issueTitle: string;
-  issueMessage: string;
-  summary: string;
+  questionSummary: string;
+  questionDetail?: string;
+  actionSummary: string;
+  outcomeSummary: string;
+  risk?: string;
 }) {
   return {
     id: `digest-${params.timestampMs}`,
@@ -18,22 +20,27 @@ function createDigestEntry(params: {
     createdAtMs: params.timestampMs,
     sessionId: "session-1",
     sessionKey: "agent:main:main",
-    reviewRunId: "review-1",
     query: params.query,
-    userIssue: {
-      title: params.issueTitle,
-      message: params.issueMessage,
+    userQuestion: {
+      summary: params.questionSummary,
+      ...(params.questionDetail ? { detail: params.questionDetail } : {}),
     },
-    taskResult: {
+    agentAction: {
+      summary: params.actionSummary,
+    },
+    outcome: {
       status: "completed" as const,
-      summary: params.summary,
-      toolCallCount: 2,
-      layer: "memory" as const,
-      reason: "ok",
-      confidence: 0.9,
+      summary: params.outcomeSummary,
     },
-    snippet: "assistant: done",
     keywords: ["orders", "pending"],
+    ...(params.risk
+      ? {
+          followUp: {
+            risk: params.risk,
+            unresolvedItems: [params.risk],
+          },
+        }
+      : {}),
   };
 }
 
@@ -50,9 +57,10 @@ describe("heartbeat_digest_search tool", () => {
       entry: createDigestEntry({
         timestampMs: outOfRangeTs,
         query: "old issue",
-        issueTitle: "旧问题",
-        issueMessage: "已过窗口",
-        summary: "older summary",
+        questionSummary: "旧问题",
+        questionDetail: "已过窗口",
+        actionSummary: "Reviewed an older issue.",
+        outcomeSummary: "older summary",
       }),
     });
     await appendHeartbeatDigestEntry({
@@ -60,9 +68,10 @@ describe("heartbeat_digest_search tool", () => {
       entry: createDigestEntry({
         timestampMs: inRangeTs,
         query: "pending order",
-        issueTitle: "待支付订单",
-        issueMessage: "订单仍未付款",
-        summary: "checked pending order status",
+        questionSummary: "待支付订单",
+        questionDetail: "订单仍未付款",
+        actionSummary: "Checked the pending order status.",
+        outcomeSummary: "checked pending order status",
       }),
     });
 
@@ -78,11 +87,11 @@ describe("heartbeat_digest_search tool", () => {
     const details = result.details as {
       searched?: number;
       returned?: number;
-      entries?: Array<{ userIssue?: { title?: string } }>;
+      entries?: Array<{ userQuestion?: { summary?: string } }>;
     };
     expect(details.searched).toBe(1);
     expect(details.returned).toBe(1);
-    expect(details.entries?.[0]?.userIssue?.title).toBe("待支付订单");
+    expect(details.entries?.[0]?.userQuestion?.summary).toBe("待支付订单");
   });
 
   it("rejects invalid timestamp ranges", async () => {
@@ -105,5 +114,38 @@ describe("heartbeat_digest_search tool", () => {
   it("returns null when agentDir is missing", async () => {
     expect(createHeartbeatDigestSearchTool({ agentDir: "" })).toBeNull();
     expect(createHeartbeatDigestSearchTool()).toBeNull();
+  });
+
+  it("can search follow-up risks and unresolved items", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "heartbeat-digest-followup-"));
+    const agentDir = path.join(root, "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await appendHeartbeatDigestEntry({
+      agentDir,
+      entry: createDigestEntry({
+        timestampMs: Date.now(),
+        query: "klaviyo open rate",
+        questionSummary: "打开率可以看到吗",
+        questionDetail: "想看 open rate 和 click rate",
+        actionSummary: "Checked Klaviyo campaign analytics availability.",
+        outcomeSummary: "Could not retrieve Klaviyo open rate from the current API.",
+        risk: "api limitation",
+      }),
+    });
+
+    const tool = createHeartbeatDigestSearchTool({ agentDir });
+    const result = await tool!.execute("call-followup", {
+      from: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+      to: new Date().toISOString(),
+      query: "api limitation",
+      limit: 10,
+    });
+
+    const details = result.details as {
+      returned?: number;
+      entries?: Array<{ followUp?: { risk?: string } }>;
+    };
+    expect(details.returned).toBe(1);
+    expect(details.entries?.[0]?.followUp?.risk).toBe("api limitation");
   });
 });
