@@ -105,6 +105,8 @@ const BASE_METHODS = [
   "bustly.heartbeats.toggle",
   "bustly.heartbeats.delete",
   "bustly.heartbeats.events.list",
+  "bustly.heartbeats.running",
+  "bustly.heartbeats.events.update-status",
   "bustly.heartbeats.scan",
   "bustly.sessions.list",
   "bustly.sessions.create",

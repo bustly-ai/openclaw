@@ -9,6 +9,7 @@ const BUSTLY_METHODS = [
   "bustly.agents.create",
   "bustly.agents.update",
   "bustly.agents.delete",
+  "bustly.heartbeats.running",
   "bustly.sessions.list",
   "bustly.sessions.create",
   "bustly.links.resolve",

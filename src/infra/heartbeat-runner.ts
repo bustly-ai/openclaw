@@ -85,9 +85,32 @@ export type HeartbeatDeps = OutboundSendDeps &
 
 const log = createSubsystemLogger("gateway/heartbeat");
 let heartbeatsEnabled = true;
+const activeHeartbeatRuns = new Map<
+  string,
+  {
+    agentId: string;
+    sessionKey: string;
+    startedAt: number;
+    reason: string | null;
+  }
+>();
 
 export function setHeartbeatsEnabled(enabled: boolean) {
   heartbeatsEnabled = enabled;
+}
+
+export function listActiveHeartbeatRuns(): Array<{
+  agentId: string;
+  sessionKey: string;
+  startedAt: number;
+  reason: string | null;
+}> {
+  return [...activeHeartbeatRuns.values()].map((entry) => ({
+    agentId: entry.agentId,
+    sessionKey: entry.sessionKey,
+    startedAt: entry.startedAt,
+    reason: entry.reason,
+  }));
 }
 
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
@@ -853,63 +876,74 @@ export async function runHeartbeatOnce(opts: {
     return true;
   };
 
+  const activeRunToken = `${agentId}:${sessionKey}:${startedAt}:${Math.random()
+    .toString(36)
+    .slice(2, 9)}`;
+  activeHeartbeatRuns.set(activeRunToken, {
+    agentId,
+    sessionKey,
+    startedAt,
+    reason: opts.reason?.trim() || null,
+  });
+
   try {
-    // Capture transcript state before the heartbeat run so we can prune if HEARTBEAT_OK
-    const transcriptState = await captureTranscriptState({
-      storePath,
-      sessionKey,
-      agentId,
-    });
-
-    const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
-    const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
-    const replyOpts = heartbeatModelOverride
-      ? {
-          isHeartbeat: true,
-          heartbeatModelOverride,
-          suppressToolErrorWarnings,
-        }
-      : {
-          isHeartbeat: true,
-          suppressToolErrorWarnings,
-        };
-    const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
-    const replyPayload = resolveHeartbeatReplyPayload(replyResult);
-    const includeReasoning = heartbeat?.includeReasoning === true;
-    const reasoningPayloads = includeReasoning
-      ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
-      : [];
-
-    if (
-      !replyPayload ||
-      (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
-    ) {
-      persistBustlyHeartbeatState({
-        workspaceId: bustlyWorkspaceId,
-        agentId,
-        startedAt,
-        events: [],
-        payloadText: "",
-      });
-      await restoreHeartbeatUpdatedAt({
+    try {
+      // Capture transcript state before the heartbeat run so we can prune if HEARTBEAT_OK
+      const transcriptState = await captureTranscriptState({
         storePath,
         sessionKey,
-        updatedAt: previousUpdatedAt,
+        agentId,
       });
-      // Prune the transcript to remove HEARTBEAT_OK turns
-      await pruneHeartbeatTranscript(transcriptState);
-      const okSent = await maybeSendHeartbeatOk();
-      emitHeartbeatEvent({
-        status: "ok-empty",
-        reason: opts.reason,
-        durationMs: Date.now() - startedAt,
-        channel: delivery.channel !== "none" ? delivery.channel : undefined,
-        accountId: delivery.accountId,
-        silent: !okSent,
-        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
-      });
-      return { status: "ran", durationMs: Date.now() - startedAt };
-    }
+
+      const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
+      const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
+      const replyOpts = heartbeatModelOverride
+        ? {
+            isHeartbeat: true,
+            heartbeatModelOverride,
+            suppressToolErrorWarnings,
+          }
+        : {
+            isHeartbeat: true,
+            suppressToolErrorWarnings,
+          };
+      const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
+      const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+      const includeReasoning = heartbeat?.includeReasoning === true;
+      const reasoningPayloads = includeReasoning
+        ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
+        : [];
+
+      if (
+        !replyPayload ||
+        (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
+      ) {
+        persistBustlyHeartbeatState({
+          workspaceId: bustlyWorkspaceId,
+          agentId,
+          startedAt,
+          events: [],
+          payloadText: "",
+        });
+        await restoreHeartbeatUpdatedAt({
+          storePath,
+          sessionKey,
+          updatedAt: previousUpdatedAt,
+        });
+        // Prune the transcript to remove HEARTBEAT_OK turns
+        await pruneHeartbeatTranscript(transcriptState);
+        const okSent = await maybeSendHeartbeatOk();
+        emitHeartbeatEvent({
+          status: "ok-empty",
+          reason: opts.reason,
+          durationMs: Date.now() - startedAt,
+          channel: delivery.channel !== "none" ? delivery.channel : undefined,
+          accountId: delivery.accountId,
+          silent: !okSent,
+          indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
+        });
+        return { status: "ran", durationMs: Date.now() - startedAt };
+      }
 
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
     const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars);
@@ -1126,19 +1160,22 @@ export async function runHeartbeatOnce(opts: {
       accountId: delivery.accountId,
       indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
-    return { status: "ran", durationMs: Date.now() - startedAt };
-  } catch (err) {
-    const reason = formatErrorMessage(err);
-    emitHeartbeatEvent({
-      status: "failed",
-      reason,
-      durationMs: Date.now() - startedAt,
-      channel: delivery.channel !== "none" ? delivery.channel : undefined,
-      accountId: delivery.accountId,
-      indicatorType: visibility.useIndicator ? resolveIndicatorType("failed") : undefined,
-    });
-    log.error(`heartbeat failed: ${reason}`, { error: reason });
-    return { status: "failed", reason };
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    } catch (err) {
+      const reason = formatErrorMessage(err);
+      emitHeartbeatEvent({
+        status: "failed",
+        reason,
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("failed") : undefined,
+      });
+      log.error(`heartbeat failed: ${reason}`, { error: reason });
+      return { status: "failed", reason };
+    }
+  } finally {
+    activeHeartbeatRuns.delete(activeRunToken);
   }
 }
 

@@ -10,13 +10,19 @@ import {
   resolveBustlyHeartbeatStatePath,
   resolveBustlyHeartbeatHealthSummary,
   saveBustlyHeartbeatState,
+  updateBustlyHeartbeatEventStatus as applyHeartbeatEventStatusUpdate,
   type BustlyHeartbeatEventRecord,
+  type BustlyHeartbeatStatus,
 } from "../../bustly/heartbeats.js";
 import { readBustlyOAuthState } from "../../bustly-oauth.js";
 import { findAgentEntryIndex, listAgentEntries } from "../../commands/agents.config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { runHeartbeatOnce, setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
+import {
+  listActiveHeartbeatRuns,
+  runHeartbeatOnce,
+  setHeartbeatsEnabled,
+} from "../../infra/heartbeat-runner.js";
 import { listBustlyWorkspaceAgents } from "../../bustly/workspace-agents.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -213,6 +219,22 @@ function listWorkspaceHeartbeatTimelineEvents(params: {
   return events.sort(sortHeartbeatTimelineEvents);
 }
 
+function listWorkspaceRunningHeartbeats(workspaceId: string) {
+  const workspaceAgentIds = new Set(
+    listBustlyWorkspaceAgents({ workspaceId })
+      .filter((agent) => !agent.isMain)
+      .map((agent) => normalizeAgentId(agent.agentId)),
+  );
+  const runs = listActiveHeartbeatRuns()
+    .filter((run) => workspaceAgentIds.has(normalizeAgentId(run.agentId)))
+    .sort((left, right) => left.startedAt - right.startedAt);
+  return {
+    workspaceId,
+    hasRunningHeartbeats: runs.length > 0,
+    runs,
+  };
+}
+
 function updateAgentHeartbeatConfig(params: {
   cfg: ReturnType<typeof loadConfig>;
   agentId: string;
@@ -255,6 +277,10 @@ function resolveHeartbeatAgent(workspaceId: string, agentId: string): HeartbeatA
       (agent) => !agent.isMain && normalizeAgentId(agent.agentId) === normalizedAgentId,
     ) ?? null
   );
+}
+
+function isHeartbeatStatus(status: unknown): status is BustlyHeartbeatStatus {
+  return status === "open" || status === "seen" || status === "actioned";
 }
 
 async function saveHeartbeatFile(params: {
@@ -341,6 +367,39 @@ async function deleteHeartbeatDefinition(params: {
     ok: true,
     workspaceId: params.workspaceId,
     agentId: agent.agentId,
+  };
+}
+
+function updateHeartbeatEventStatus(params: {
+  workspaceId: string;
+  agentId: string;
+  eventId: string;
+  status: BustlyHeartbeatStatus;
+}) {
+  const agent = resolveHeartbeatAgent(params.workspaceId, params.agentId);
+  if (!agent) {
+    throw new Error(`workspace heartbeat agent "${params.agentId}" not found`);
+  }
+  const currentState = loadBustlyHeartbeatState({
+    workspaceId: params.workspaceId,
+    agentId: agent.agentId,
+  });
+  const { state: nextState, event } = applyHeartbeatEventStatusUpdate({
+    state: currentState,
+    eventId: params.eventId,
+    status: params.status,
+  });
+  if (!event) {
+    return null;
+  }
+  saveBustlyHeartbeatState({
+    workspaceId: params.workspaceId,
+    agentId: agent.agentId,
+    state: nextState,
+  });
+  return {
+    ...event,
+    agentName: agent.name,
   };
 }
 
@@ -498,6 +557,78 @@ export const bustlyHeartbeatHandlers: GatewayRequestHandlers = {
       const agentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
       const events = listWorkspaceHeartbeatTimelineEvents({ workspaceId, agentId });
       respond(true, { workspaceId, events }, undefined);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
+      );
+    }
+  },
+  "bustly.heartbeats.running": async ({ params, respond }) => {
+    try {
+      const workspaceId = resolveWorkspaceIdParam(params);
+      if (!workspaceId) {
+        respond(
+          true,
+          { workspaceId: "", hasRunningHeartbeats: false, runs: [] },
+          undefined,
+        );
+        return;
+      }
+      respond(true, listWorkspaceRunningHeartbeats(workspaceId), undefined);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          err instanceof Error ? err.message : String(err),
+        ),
+      );
+    }
+  },
+  "bustly.heartbeats.events.update-status": async ({ params, respond }) => {
+    try {
+      const workspaceId = resolveWorkspaceIdParam(params);
+      const agentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
+      const eventId = typeof params.eventId === "string" ? params.eventId.trim() : "";
+      const status = params.status;
+      if (!workspaceId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "workspaceId is required"),
+        );
+        return;
+      }
+      if (!agentId) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agentId is required"));
+        return;
+      }
+      if (!eventId) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "eventId is required"));
+        return;
+      }
+      if (!isHeartbeatStatus(status)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "status must be one of: open, seen, actioned"),
+        );
+        return;
+      }
+      const updatedEvent = updateHeartbeatEventStatus({
+        workspaceId,
+        agentId,
+        eventId,
+        status,
+      });
+      if (!updatedEvent) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "heartbeat event not found"));
+        return;
+      }
+      respond(true, { workspaceId, event: updatedEvent }, undefined);
     } catch (err) {
       respond(
         false,

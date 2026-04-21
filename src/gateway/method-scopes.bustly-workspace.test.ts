@@ -53,6 +53,7 @@ describe("bustly workspace method scopes", () => {
     for (const method of [
       "bustly.agents.get-config",
       "bustly.agents.list",
+      "bustly.heartbeats.running",
       "bustly.sessions.list",
       "bustly.supabase.get-config",
       "bustly.links.resolve",
@@ -72,6 +73,7 @@ describe("bustly workspace method scopes", () => {
       "bustly.agents.create",
       "bustly.agents.update",
       "bustly.agents.delete",
+      "bustly.heartbeats.events.update-status",
       "bustly.sessions.create",
       "bustly.runtime.report-issue",
       "bustly.runtime.bootstrap",
