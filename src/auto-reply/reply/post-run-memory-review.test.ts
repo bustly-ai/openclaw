@@ -66,9 +66,10 @@ describe("enforceRuntimeRouting", () => {
       settings,
     });
 
-    expect(routed.layer).toBe("skill");
+    expect(routed.primaryLayer).toBe("skill");
     expect(routed.repeatedTask).toBe(true);
     expect(routed.reason).toBe("runtime_promoted_repeated_procedure");
+    expect(routed.writeSkill?.skillName).toBe("monthly-report-workflow");
   });
 
   it("keeps first-seen retrieval precedents instead of dropping them", () => {
@@ -100,8 +101,168 @@ describe("enforceRuntimeRouting", () => {
       settings,
     });
 
-    expect(routed.layer).toBe("retrieval_only");
+    expect(routed.primaryLayer).toBe("retrieval_only");
     expect(routed.reason).toBe("first_seen_correction_precedent");
     expect(routed.repeatedTask).toBe(false);
+    expect(routed.writeRetrieval).toBe(true);
+  });
+
+  it("preserves explicit correction episodes even when the model returns none", () => {
+    const settings = resolvePostRunMemoryReviewSettings({
+      agents: {
+        defaults: {
+          selfEvolution: {
+            enabled: true,
+            minToolCalls: DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS,
+          },
+        },
+      },
+    });
+    expect(settings).not.toBeNull();
+    if (!settings) {
+      throw new Error("missing settings");
+    }
+
+    const routed = enforceRuntimeRouting({
+      classification: {
+        layer: "none",
+        reason: "transient_business_analysis",
+        confidence: 0.91,
+        repeatedTask: false,
+        summary: "The agent corrected the original mistaken conclusion after user feedback.",
+        correction: {
+          wrongAssumption: "The agent assumed the first 250 orders represented the full result set.",
+          userCorrection: "The user asked why there were only 250 orders and whether pagination was used.",
+          verifiedFix: "The agent checked the count endpoint and paginated to retrieve the full order set.",
+          actionableRule: "When Shopify returns 250 orders, verify count and paginate before concluding totals.",
+          scope: "Shopify order analysis",
+        },
+      },
+      matchedPriorSessions: 0,
+      toolCallCount: 3,
+      settings,
+    });
+
+    expect(routed.primaryLayer).toBe("retrieval_only");
+    expect(routed.reason).toBe("runtime_preserved_correction_precedent");
+    expect(routed.writeRetrieval).toBe(true);
+  });
+
+  it("writes retrieval alongside memory when both durable memory and precedent are extracted", () => {
+    const settings = resolvePostRunMemoryReviewSettings({
+      agents: {
+        defaults: {
+          selfEvolution: {
+            enabled: true,
+            minToolCalls: DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS,
+          },
+        },
+      },
+    });
+    expect(settings).not.toBeNull();
+    if (!settings) {
+      throw new Error("missing settings");
+    }
+
+    const routed = enforceRuntimeRouting({
+      classification: {
+        layer: "memory",
+        reason: "durable_constraint_with_example",
+        confidence: 0.9,
+        repeatedTask: false,
+        summary: "The user corrected an assumption about Shopify order pagination.",
+        correction: {
+          wrongAssumption: "The first page represented the whole order history.",
+          userCorrection: "The user asked why there were only 250 orders.",
+          verifiedFix: "The agent paginated and retrieved the full set.",
+          actionableRule: "Always verify Shopify count and paginate past 250.",
+        },
+        memory: {
+          target: "memory_md",
+          heading: "Shopify Pagination Constraint",
+          body: "Shopify orders require pagination beyond the 250 item limit.",
+        },
+      },
+      matchedPriorSessions: 0,
+      toolCallCount: 4,
+      settings,
+    });
+
+    expect(routed.primaryLayer).toBe("memory");
+    expect(routed.writeMemory?.heading).toBe("Shopify Pagination Constraint");
+    expect(routed.writeRetrieval).toBe(true);
+  });
+
+  it("routes explicit heartbeat goals to HEARTBEAT.md writes", () => {
+    const settings = resolvePostRunMemoryReviewSettings({
+      agents: {
+        defaults: {
+          selfEvolution: {
+            enabled: true,
+            minToolCalls: DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS,
+          },
+        },
+      },
+    });
+    expect(settings).not.toBeNull();
+    if (!settings) {
+      throw new Error("missing settings");
+    }
+
+    const routed = enforceRuntimeRouting({
+      classification: {
+        layer: "heartbeat",
+        reason: "long_term_goal_detected",
+        confidence: 0.86,
+        repeatedTask: false,
+        summary: "Customer repeatedly asks for weekly churn tracking and proactive alerts.",
+        heartbeat: {
+          heading: "Weekly churn tracking",
+          body: "Track churn weekly and notify when churn accelerates for two consecutive weeks.",
+        },
+      },
+      matchedPriorSessions: 0,
+      toolCallCount: 1,
+      settings,
+    });
+
+    expect(routed.primaryLayer).toBe("heartbeat");
+    expect(routed.writeHeartbeat).toEqual({
+      heading: "Weekly churn tracking",
+      body: "Track churn weekly and notify when churn accelerates for two consecutive weeks.",
+    });
+  });
+
+  it("auto-derives heartbeat goals for repeated tasks", () => {
+    const settings = resolvePostRunMemoryReviewSettings({
+      agents: {
+        defaults: {
+          selfEvolution: {
+            enabled: true,
+            minToolCalls: DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS,
+          },
+        },
+      },
+    });
+    expect(settings).not.toBeNull();
+    if (!settings) {
+      throw new Error("missing settings");
+    }
+
+    const routed = enforceRuntimeRouting({
+      classification: {
+        layer: "none",
+        reason: "repeated_workflow",
+        confidence: 0.91,
+        repeatedTask: true,
+        summary: "Run inventory reconciliation every Monday and escalate if delta exceeds 2%.",
+      },
+      matchedPriorSessions: 0,
+      toolCallCount: 0,
+      settings,
+    });
+
+    expect(routed.writeHeartbeat?.heading).toContain("Run inventory reconciliation every Monday");
+    expect(routed.writeHeartbeat?.body).toContain("delta exceeds 2%");
   });
 });

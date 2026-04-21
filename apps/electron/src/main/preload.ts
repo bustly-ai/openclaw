@@ -90,6 +90,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   bustlyOpenSettings: () => ipcRenderer.invoke("bustly-open-settings"),
   bustlyOpenWorkspaceSettings: (workspaceId: string) =>
     ipcRenderer.invoke("bustly-open-workspace-settings", workspaceId),
+  bustlyOpenWorkspaceIntegrations: (workspaceId: string) =>
+    ipcRenderer.invoke("bustly-open-workspace-integrations", workspaceId),
   bustlyOpenWorkspaceInvite: (workspaceId: string) =>
     ipcRenderer.invoke("bustly-open-workspace-invite", workspaceId),
   bustlyOpenWorkspaceManage: (workspaceId: string) =>

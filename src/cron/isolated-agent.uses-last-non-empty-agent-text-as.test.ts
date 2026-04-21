@@ -73,12 +73,27 @@ type RunCronTurnOptions = {
   cfgOverrides?: Parameters<typeof makeCfg>[2];
   deps?: CliDeps;
   jobPayload?: CronJob["payload"];
+  jobOverrides?: Partial<CronJob>;
   message?: string;
   mockTexts?: string[] | null;
   sessionKey?: string;
   storeEntries?: Record<string, Record<string, unknown>>;
   storePath?: string;
 };
+
+async function withFastTestEnvDisabled<T>(fn: () => Promise<T>) {
+  const previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
+  delete process.env.OPENCLAW_TEST_FAST;
+  try {
+    return await fn();
+  } finally {
+    if (previousFastTestEnv === undefined) {
+      delete process.env.OPENCLAW_TEST_FAST;
+    } else {
+      process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+    }
+  }
+}
 
 async function runCronTurn(home: string, options: RunCronTurnOptions = {}) {
   const storePath =
@@ -100,10 +115,15 @@ async function runCronTurn(home: string, options: RunCronTurnOptions = {}) {
   }
 
   const jobPayload = options.jobPayload ?? DEFAULT_AGENT_TURN_PAYLOAD;
+  const job = {
+    ...makeJob(jobPayload),
+    ...options.jobOverrides,
+    payload: jobPayload,
+  };
   const res = await runCronIsolatedAgentTurn({
     cfg: makeCfg(home, storePath, options.cfgOverrides),
     deps,
-    job: makeJob(jobPayload),
+    job,
     message:
       options.message ?? (jobPayload.kind === "agentTurn" ? jobPayload.message : DEFAULT_MESSAGE),
     sessionKey: options.sessionKey ?? DEFAULT_SESSION_KEY,
@@ -512,7 +532,43 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("preserves an existing cron session label", async () => {
+  it("reuses the bound session when reuseSession is enabled", async () => {
+    await withFastTestEnvDisabled(async () => {
+      await withTempHome(async (home) => {
+        const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+        const deps = makeDeps();
+
+        const first = (
+          await runCronTurn(home, {
+            deps,
+            jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
+            jobOverrides: { reuseSession: true },
+            message: "ping",
+            mockTexts: ["ok"],
+            storePath,
+          })
+        ).res;
+
+        const second = (
+          await runCronTurn(home, {
+            deps,
+            jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
+            jobOverrides: { reuseSession: true },
+            message: "ping",
+            mockTexts: ["ok"],
+            storePath,
+          })
+        ).res;
+
+        expect(first.sessionId).toBeDefined();
+        expect(second.sessionId).toBe(first.sessionId);
+        expect(first.sessionKey).toBe(second.sessionKey);
+        expect(second.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+      });
+    });
+  });
+
+  it("preserves an existing custom cron session label", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const raw = await fs.readFile(storePath, "utf-8");
@@ -532,6 +588,32 @@ describe("runCronIsolatedAgentTurn", () => {
       const entry = await readSessionEntry(storePath, "agent:main:cron:job-1");
 
       expect(entry?.label).toBe("Nightly digest");
+    });
+  });
+
+  it("rewrites legacy Cron-prefixed session labels to the job name", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const raw = await fs.readFile(storePath, "utf-8");
+      const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      store["agent:main:cron:job-1"] = {
+        sessionId: "old",
+        updatedAt: Date.now(),
+        label: "Cron: Morning Briefing",
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+      await withFastTestEnvDisabled(async () => {
+        await runCronTurn(home, {
+          jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
+          jobOverrides: { name: "Morning Briefing" },
+          message: "ping",
+          storePath,
+        });
+      });
+      const entry = await readSessionEntry(storePath, "agent:main:cron:job-1");
+
+      expect(entry?.label).toBe("Morning Briefing");
     });
   });
 });

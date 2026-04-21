@@ -29,7 +29,6 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveAgentSkillsFilter, resolveSessionAgentIds } from "../agent-scope.js";
-import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
@@ -119,12 +118,14 @@ export type CompactEmbeddedPiSessionParams = {
   bashElevated?: ExecElevatedDefaults;
   customInstructions?: string;
   trigger?: "overflow" | "manual";
+  isHeartbeat?: boolean;
   diagId?: string;
   attempt?: number;
   maxAttempts?: number;
   lane?: string;
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
+  heartbeatPrompt?: string;
   ownerNumbers?: string[];
 };
 
@@ -358,14 +359,6 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const skillsPrompt = skillContext.prompt.trim();
 
-    const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { contextFiles } = await resolveBootstrapContextForRun({
-      workspaceDir: effectiveWorkspace,
-      config: params.config,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
-    });
     const runAbortController = new AbortController();
     const toolsRaw = createOpenClawCodingTools({
       exec: {
@@ -498,8 +491,11 @@ export async function compactEmbeddedPiSessionDirect(
       ownerDisplay: ownerDisplay.ownerDisplay,
       ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
       reasoningTagHint,
-      heartbeatPrompt: isDefaultAgent
-        ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
+      heartbeatPrompt: params.isHeartbeat
+        ? (params.heartbeatPrompt ??
+          (isDefaultAgent
+            ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
+            : undefined))
         : undefined,
       skillsPrompt,
       docsPath: docsPath ?? undefined,
@@ -514,7 +510,6 @@ export async function compactEmbeddedPiSessionDirect(
       userTimezone,
       userTime,
       userTimeFormat,
-      contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);

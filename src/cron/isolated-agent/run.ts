@@ -204,8 +204,10 @@ export async function runCronIsolatedAgentTurn(params: {
     sessionKey: agentSessionKey,
     agentId,
     nowMs: now,
-    // Isolated cron runs must not carry prior turn context across executions.
-    forceNew: params.job.sessionTarget === "isolated",
+    // Overview scheduled tasks opt into a sticky isolated session so each job
+    // can keep a dedicated transcript instead of forking a new run session
+    // every time. Existing cron jobs stay fresh-by-default.
+    forceNew: params.job.sessionTarget === "isolated" && params.job.reuseSession !== true,
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
   const runSessionKey = baseSessionKey.startsWith("cron:")
@@ -233,12 +235,16 @@ export async function runCronIsolatedAgentTurn(params: {
     sessionId: runSessionId,
     sessionKey: runSessionKey,
   });
-  if (!cronSession.sessionEntry.label?.trim() && baseSessionKey.startsWith("cron:")) {
+  if (baseSessionKey.startsWith("cron:")) {
     const labelSuffix =
       typeof params.job.name === "string" && params.job.name.trim()
         ? params.job.name.trim()
         : params.job.id;
-    cronSession.sessionEntry.label = `Cron: ${labelSuffix}`;
+    const existingLabel = cronSession.sessionEntry.label?.trim();
+    // Rewrite legacy "Cron: ..." labels, but keep explicit custom labels intact.
+    if (!existingLabel || existingLabel.startsWith("Cron:")) {
+      cronSession.sessionEntry.label = labelSuffix;
+    }
   }
 
   // Respect session model override — check session.modelOverride before falling

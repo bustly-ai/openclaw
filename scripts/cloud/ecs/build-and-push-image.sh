@@ -13,6 +13,7 @@ Usage:
     [--control-plane-environment test] \
     [--requested-by-user-id fiona] \
     [--image-tag <tag>] \
+    [--bustly-skills-git-url <git_url>] \
     [--platform linux/amd64] \
     [--install-browser 1]
 USAGE
@@ -36,6 +37,7 @@ REQUESTED_BY_USER_ID="${REQUESTED_BY_USER_ID:-}"
 IMAGE_TAG="$(git rev-parse --short HEAD 2>/dev/null || echo dev)"
 INSTALL_BROWSER="1"
 IMAGE_PLATFORM="${IMAGE_PLATFORM:-linux/amd64}"
+BUSTLY_SKILLS_GIT_URL="${BUSTLY_SKILLS_GIT_URL:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -71,6 +73,10 @@ while [[ $# -gt 0 ]]; do
       IMAGE_TAG="${2:-}"
       shift 2
       ;;
+    --bustly-skills-git-url)
+      BUSTLY_SKILLS_GIT_URL="${2:-}"
+      shift 2
+      ;;
     --install-browser)
       INSTALL_BROWSER="${2:-}"
       shift 2
@@ -93,8 +99,34 @@ done
 
 require_cmd aws
 require_cmd docker
+require_cmd git
 
 export AWS_PROFILE="$AWS_PROFILE_NAME"
+
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if [[ -n "$BUSTLY_SKILLS_GIT_URL" ]]; then
+    git submodule set-url bustly-skills "$BUSTLY_SKILLS_GIT_URL" >/dev/null
+    git submodule sync -- bustly-skills >/dev/null
+  fi
+
+  SUBMODULE_UPDATE_OUTPUT=""
+  if ! SUBMODULE_UPDATE_OUTPUT="$(git submodule update --init --recursive bustly-skills 2>&1)"; then
+    echo "$SUBMODULE_UPDATE_OUTPUT" >&2
+    echo "failed to fetch required submodule bustly-skills (hard requirement for cloud image build)." >&2
+    echo "ensure repo access is configured (SSH key), or pass --bustly-skills-git-url with an accessible URL." >&2
+    exit 1
+  fi
+fi
+
+if [[ ! -f "bustly-skills/skills/.bustly-default-enabled.json" ]]; then
+  echo "missing bustly-skills/skills/.bustly-default-enabled.json; run 'git submodule update --init --recursive bustly-skills'" >&2
+  exit 1
+fi
+
+if [[ ! -f "bustly-skills/scripts/bustly-ops.js" ]]; then
+  echo "missing bustly-skills/scripts/bustly-ops.js; bustly runtime wrapper cannot be packaged" >&2
+  exit 1
+fi
 
 if [[ -z "$AWS_REGION" || -z "$ECR_URL" ]]; then
   require_cmd terraform

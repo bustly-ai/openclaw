@@ -8,6 +8,11 @@ import { isCliProvider, resolveModelRefFromString } from "../../agents/model-sel
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
+import {
+  appendHeartbeatDigestEntry,
+  type HeartbeatDigestResultStatus,
+} from "../../agents/heartbeat-digest-store.js";
+import { DEFAULT_HEARTBEAT_FILENAME } from "../../agents/workspace.js";
 import { createSkillManageTool } from "../../agents/tools/skill-manage-tool.js";
 import { searchSessionTranscripts } from "../../agents/tools/session-search-tool.js";
 import type { TemplateContext } from "../templating.js";
@@ -29,20 +34,22 @@ export const DEFAULT_POST_RUN_MEMORY_REVIEW_MAX_RECENT_MESSAGES = 120;
 export const DEFAULT_POST_RUN_MEMORY_REVIEW_MODEL = "bustly/chat.standard";
 
 export const DEFAULT_POST_RUN_MEMORY_REVIEW_PROMPT = [
-  "You are the consolidation classifier for a completed agent session.",
+  "You are the consolidation extractor for a completed agent session.",
   "Return JSON only.",
-  "Classify the completed work into exactly one layer: none, memory, skill, or retrieval_only.",
+  "Extract durable facts, reusable procedures, correction episodes, and searchable precedents from the completed work.",
+  "The runtime decides final storage and promotion. Your layer field is advisory only.",
   "Use memory for durable facts, decisions, and preferences.",
   "Use skill for stable reusable procedures, SOPs, or repeatable playbooks.",
-  "Use retrieval_only when the work should remain searchable precedent but should not yet become memory or skill.",
-  "Promote to skill when the task is demonstrably repeated or when the work is clearly reusable procedural knowledge.",
+  "Use heartbeat for durable long-term goals that should be tracked in HEARTBEAT.md.",
+  "Use retrieval_only when there is a correction or precedent worth preserving even if it should not yet become memory or skill.",
+  "Correction episodes should capture what was wrong, how the user corrected it, how it was verified, and the actionable rule that should persist.",
   "Do not write files yourself. Do not emit prose outside JSON.",
 ].join(" ");
 
 export const DEFAULT_POST_RUN_MEMORY_REVIEW_SYSTEM_PROMPT = [
   "Silent consolidation stage after a completed agent run.",
   "This stage is runtime-controlled, not user-visible.",
-  "Your job is classification only: decide what should be stored and in which layer.",
+  "Your job is extraction only: surface facts, procedures, corrections, and precedents so runtime can route them.",
   "Return one JSON object and nothing else.",
 ].join(" ");
 
@@ -64,7 +71,7 @@ type ReviewDecision = {
   toolCallCount: number;
 };
 
-type ConsolidationLayer = "none" | "memory" | "skill" | "retrieval_only";
+type ConsolidationLayer = "none" | "memory" | "skill" | "retrieval_only" | "heartbeat";
 
 type ConsolidationClassification = {
   layer: ConsolidationLayer;
@@ -72,8 +79,26 @@ type ConsolidationClassification = {
   confidence: number;
   repeatedTask: boolean;
   summary: string;
+  keywords?: string[];
+  correction?: {
+    wrongAssumption: string;
+    userCorrection: string;
+    verifiedFix: string;
+    actionableRule: string;
+    scope?: string;
+  };
+  precedent?: {
+    title: string;
+    problem: string;
+    resolution: string;
+    rule: string;
+  };
   memory?: {
     target: "memory_md" | "daily_log";
+    heading: string;
+    body: string;
+  };
+  heartbeat?: {
     heading: string;
     body: string;
   };
@@ -90,6 +115,34 @@ type ConsolidationOutcome = {
   confidence: number;
   matchedPriorSessions: number;
   repeatedTask: boolean;
+};
+
+type RetrievalEntry = {
+  timestamp: string;
+  layer: "retrieval_only";
+  summary: string;
+  reason: string;
+  confidence: number;
+  query: string;
+  sourceSessionId: string;
+  sourceSessionKey?: string;
+  reviewRunId: string;
+  snippet: string;
+  keywords: string[];
+  correction?: ConsolidationClassification["correction"];
+  precedent?: ConsolidationClassification["precedent"];
+};
+
+type ConsolidationRoutingResult = {
+  primaryLayer: ConsolidationLayer;
+  reason: string;
+  confidence: number;
+  repeatedTask: boolean;
+  writeMemory?: NonNullable<ConsolidationClassification["memory"]>;
+  writeHeartbeat?: NonNullable<ConsolidationClassification["heartbeat"]>;
+  writeSkill?: NonNullable<ConsolidationClassification["skill"]>;
+  writeRetrieval: boolean;
+  retrievalReason?: string;
 };
 
 function ensureNoReplyHint(text: string): string {
@@ -132,6 +185,84 @@ function cleanParagraph(value: unknown): string {
     .map((line) => line.trimEnd())
     .join("\n")
     .trim();
+}
+
+function cleanKeywords(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => cleanLine(item))
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function cleanCorrection(value: unknown): ConsolidationClassification["correction"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const wrongAssumption = cleanParagraph(record.wrongAssumption);
+  const userCorrection = cleanParagraph(record.userCorrection);
+  const verifiedFix = cleanParagraph(record.verifiedFix);
+  const actionableRule = cleanParagraph(record.actionableRule);
+  const scope = cleanLine(record.scope);
+  if (!wrongAssumption || !userCorrection || !verifiedFix || !actionableRule) {
+    return undefined;
+  }
+  return {
+    wrongAssumption,
+    userCorrection,
+    verifiedFix,
+    actionableRule,
+    ...(scope ? { scope } : {}),
+  };
+}
+
+function cleanPrecedent(value: unknown): ConsolidationClassification["precedent"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const title = cleanLine(record.title);
+  const problem = cleanParagraph(record.problem);
+  const resolution = cleanParagraph(record.resolution);
+  const rule = cleanParagraph(record.rule);
+  if (!title || !problem || !resolution || !rule) {
+    return undefined;
+  }
+  return { title, problem, resolution, rule };
+}
+
+function cleanHeartbeat(value: unknown): ConsolidationClassification["heartbeat"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const heading = cleanLine(record.heading);
+  const body = cleanParagraph(record.body);
+  if (!heading || !body) {
+    return undefined;
+  }
+  return { heading, body };
+}
+
+function deriveHeartbeatWriteFromSummary(
+  summary: string,
+): NonNullable<ConsolidationClassification["heartbeat"]> | undefined {
+  const cleanSummary = cleanParagraph(summary);
+  if (!cleanSummary) {
+    return undefined;
+  }
+  const firstLine = cleanLine(cleanSummary.split("\n")[0] ?? cleanSummary) || "Long-term Goal";
+  const heading = firstLine.slice(0, 80);
+  if (!heading) {
+    return undefined;
+  }
+  return {
+    heading,
+    body: cleanSummary,
+  };
 }
 
 export function resolvePostRunMemoryReviewSettings(
@@ -223,6 +354,146 @@ function buildSearchQuery(messages: TranscriptMessage[]): string {
   return query.trim();
 }
 
+function truncateForDigest(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function buildDigestUserIssue(params: {
+  currentTurn: TranscriptMessage[];
+  commandBody: string;
+  searchQuery: string;
+}): { summary: string; detail?: string } {
+  const userMessages = params.currentTurn
+    .filter((message) => message.role === "user")
+    .map((message) => extractMessageText(message))
+    .filter(Boolean);
+  const latestUserText =
+    userMessages[userMessages.length - 1] ||
+    params.commandBody.trim() ||
+    params.searchQuery ||
+    "User request";
+  const firstLine = latestUserText.split(/\r?\n/)[0] ?? latestUserText;
+  return {
+    summary: truncateForDigest(cleanLine(firstLine) || "User request", 160),
+    ...(cleanLine(latestUserText) && cleanLine(latestUserText) !== cleanLine(firstLine)
+      ? { detail: truncateForDigest(cleanLine(latestUserText), 320) }
+      : {}),
+  };
+}
+
+function buildDigestOutcomeSummary(params: {
+  currentTurn: TranscriptMessage[];
+  preferredSummary?: string;
+}): string {
+  const assistantMessages = params.currentTurn
+    .filter((message) => message.role === "assistant")
+    .map((message) => extractMessageText(message))
+    .filter(Boolean);
+  const latestAssistantText = assistantMessages[assistantMessages.length - 1] ?? "";
+  const summary =
+    cleanParagraph(params.preferredSummary) ||
+    cleanParagraph(latestAssistantText) ||
+    cleanLine(summarizeMessages(params.currentTurn, 1200)) ||
+    "Task finished without a summary.";
+  return truncateForDigest(summary, 800);
+}
+
+function buildDigestAgentActionSummary(params: {
+  currentTurn: TranscriptMessage[];
+  searchQuery: string;
+  toolCallCount: number;
+}): string {
+  const topic = truncateForDigest(cleanLine(params.searchQuery) || "the request", 220);
+  if (params.toolCallCount > 0) {
+    return truncateForDigest(
+      `Used ${params.toolCallCount} tool call${params.toolCallCount === 1 ? "" : "s"} to work on ${topic}.`,
+      240,
+    );
+  }
+  const assistantMessages = params.currentTurn
+    .filter((message) => message.role === "assistant")
+    .map((message) => extractMessageText(message))
+    .filter(Boolean);
+  const latestAssistantText = cleanLine(assistantMessages[assistantMessages.length - 1] ?? "");
+  if (latestAssistantText) {
+    return truncateForDigest(`Answered directly about ${topic}. ${latestAssistantText}`, 240);
+  }
+  return truncateForDigest(`Worked on ${topic}.`, 240);
+}
+
+function buildDigestFollowUp(params: {
+  status: HeartbeatDigestResultStatus;
+  reason?: string;
+  reviewError?: string;
+  preferredRisk?: string;
+}): { risk?: string; unresolvedItems?: string[] } | undefined {
+  const risk =
+    truncateForDigest(
+      cleanLine(params.preferredRisk) || cleanLine(params.reviewError) || cleanLine(params.reason),
+      240,
+    ) || "";
+  const unresolvedItems: string[] = [];
+  if (params.status === "failed") {
+    unresolvedItems.push(risk || "Task failed and likely needs another attempt.");
+  } else if (params.status === "blocked") {
+    unresolvedItems.push(risk || "Task is blocked and still needs follow-up.");
+  } else if (params.status === "partial") {
+    unresolvedItems.push(risk || "Task only partially resolved the request.");
+  }
+  if (!risk && unresolvedItems.length === 0) {
+    return undefined;
+  }
+  return {
+    ...(risk ? { risk } : {}),
+    ...(unresolvedItems.length > 0 ? { unresolvedItems } : {}),
+  };
+}
+
+async function appendHeartbeatTaskDigest(params: {
+  agentDir: string;
+  sessionId: string;
+  sessionKey?: string;
+  searchQuery: string;
+  userQuestion: { summary: string; detail?: string };
+  status: HeartbeatDigestResultStatus;
+  agentActionSummary: string;
+  outcomeSummary: string;
+  keywords?: string[];
+  followUp?: {
+    risk?: string;
+    unresolvedItems?: string[];
+  };
+}) {
+  const nowMs = Date.now();
+  await appendHeartbeatDigestEntry({
+    agentDir: params.agentDir,
+    entry: {
+      id: crypto.randomUUID(),
+      createdAt: new Date(nowMs).toISOString(),
+      createdAtMs: nowMs,
+      sessionId: params.sessionId,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      query: truncateForDigest(cleanLine(params.searchQuery), 240),
+      userQuestion: {
+        summary: params.userQuestion.summary,
+        ...(params.userQuestion.detail ? { detail: params.userQuestion.detail } : {}),
+      },
+      agentAction: {
+        summary: truncateForDigest(cleanLine(params.agentActionSummary), 240),
+      },
+      outcome: {
+        status: params.status,
+        summary: truncateForDigest(cleanLine(params.outcomeSummary), 800),
+      },
+      ...(params.keywords && params.keywords.length > 0 ? { keywords: params.keywords } : {}),
+      ...(params.followUp ? { followUp: params.followUp } : {}),
+    },
+  });
+}
+
 export function decidePostRunMemoryReview(params: {
   transcriptMessages: TranscriptMessage[];
 }): ReviewDecision {
@@ -252,7 +523,10 @@ function normalizeClassification(raw: unknown): ConsolidationClassification {
     raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const layerRaw = cleanLine(record.layer).toLowerCase();
   const layer: ConsolidationLayer =
-    layerRaw === "memory" || layerRaw === "skill" || layerRaw === "retrieval_only"
+    layerRaw === "memory" ||
+    layerRaw === "skill" ||
+    layerRaw === "retrieval_only" ||
+    layerRaw === "heartbeat"
       ? layerRaw
       : "none";
   const memoryRaw =
@@ -274,6 +548,7 @@ function normalizeClassification(raw: unknown): ConsolidationClassification {
           body: cleanParagraph(memoryRaw.body),
         }
       : undefined;
+  const heartbeat = cleanHeartbeat(record.heartbeat);
   const skill =
     skillRaw && cleanParagraph(skillRaw.body) && cleanLine(skillRaw.skillName)
       ? {
@@ -289,7 +564,11 @@ function normalizeClassification(raw: unknown): ConsolidationClassification {
     confidence: clampConfidence(record.confidence),
     repeatedTask: record.repeatedTask === true,
     summary: cleanParagraph(record.summary) || "No summary provided.",
+    keywords: cleanKeywords(record.keywords),
+    correction: cleanCorrection(record.correction),
+    precedent: cleanPrecedent(record.precedent),
     memory,
+    heartbeat,
     skill,
   };
 }
@@ -302,6 +581,7 @@ async function appendReviewLedger(params: {
   toolCallCount: number;
   changedMemory: boolean;
   changedSkills: boolean;
+  changedRetrieval?: boolean;
   reviewRunId: string;
   skipped?: string;
   outcome?: ConsolidationOutcome;
@@ -318,6 +598,7 @@ async function appendReviewLedger(params: {
     toolCallCount: params.toolCallCount,
     changedMemory: params.changedMemory,
     changedSkills: params.changedSkills,
+    changedRetrieval: params.changedRetrieval ?? false,
     skipped: params.skipped,
     outcome: params.outcome,
   };
@@ -397,6 +678,49 @@ async function applySkillWrite(params: {
   });
 }
 
+async function applyHeartbeatWrite(params: {
+  workspaceDir: string;
+  heartbeat: NonNullable<ConsolidationClassification["heartbeat"]>;
+}) {
+  await appendMarkdownSection({
+    filePath: path.join(params.workspaceDir, DEFAULT_HEARTBEAT_FILENAME),
+    title: params.heartbeat.heading,
+    body: params.heartbeat.body,
+    preamble: "# HEARTBEAT.md",
+  });
+}
+
+async function appendRetrievalEntry(params: {
+  agentDir: string;
+  sessionId: string;
+  sessionKey?: string;
+  reviewRunId: string;
+  searchQuery: string;
+  summary: string;
+  snippet: string;
+  classification: ConsolidationClassification;
+}) {
+  const dir = path.join(params.agentDir, "experience");
+  const file = path.join(dir, "entries.jsonl");
+  await fs.mkdir(dir, { recursive: true });
+  const row: RetrievalEntry = {
+    timestamp: new Date().toISOString(),
+    layer: "retrieval_only",
+    summary: params.summary,
+    reason: params.classification.reason,
+    confidence: params.classification.confidence,
+    query: params.searchQuery,
+    sourceSessionId: params.sessionId,
+    sourceSessionKey: params.sessionKey,
+    reviewRunId: params.reviewRunId,
+    snippet: params.snippet,
+    keywords: params.classification.keywords ?? [],
+    correction: params.classification.correction,
+    precedent: params.classification.precedent,
+  };
+  await fs.appendFile(file, `${JSON.stringify(row)}\n`, "utf-8");
+}
+
 async function classifyConsolidation(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
@@ -422,12 +746,27 @@ async function classifyConsolidation(params: {
     "",
     "Return exactly one JSON object with this shape:",
     `{
-  "layer": "none" | "memory" | "skill" | "retrieval_only",
+  "layer": "none" | "memory" | "skill" | "retrieval_only" | "heartbeat",
   "reason": string,
   "confidence": number,
   "repeatedTask": boolean,
   "summary": string,
+  "keywords": string[] | null,
+  "correction": {
+    "wrongAssumption": string,
+    "userCorrection": string,
+    "verifiedFix": string,
+    "actionableRule": string,
+    "scope": string
+  } | null,
+  "precedent": {
+    "title": string,
+    "problem": string,
+    "resolution": string,
+    "rule": string
+  } | null,
   "memory": { "target": "memory_md" | "daily_log", "heading": string, "body": string } | null,
+  "heartbeat": { "heading": string, "body": string } | null,
   "skill": { "skillName": string, "description": string, "body": string } | null
 }`,
     "",
@@ -495,55 +834,90 @@ export function enforceRuntimeRouting(params: {
   matchedPriorSessions: number;
   toolCallCount: number;
   settings: PostRunMemoryReviewSettings;
-}): ConsolidationClassification {
+}): ConsolidationRoutingResult {
   const repeatedTask =
     params.classification.repeatedTask || params.matchedPriorSessions > 0;
   const confidence = params.classification.confidence;
 
   if (confidence < 0.55) {
     return {
-      ...params.classification,
-      layer: "none",
+      primaryLayer: "none",
       reason: "low_confidence",
+      confidence,
+      repeatedTask,
+      writeRetrieval: false,
     };
   }
 
-  if (params.classification.layer === "skill") {
-    const hasProcedureSignal =
-      repeatedTask || params.toolCallCount >= params.settings.minToolCalls;
-    if (!hasProcedureSignal || !params.classification.skill) {
-      return {
-        ...params.classification,
-        layer: params.classification.memory ? "memory" : "none",
-        reason: hasProcedureSignal ? "missing_skill_payload" : "insufficient_procedure_signal",
-      };
+  const hasProcedureSignal = repeatedTask || params.toolCallCount >= params.settings.minToolCalls;
+  const writeSkill =
+    params.classification.skill && hasProcedureSignal ? params.classification.skill : undefined;
+  const writeMemory = params.classification.memory;
+  const writeHeartbeat =
+    params.classification.heartbeat ??
+    (repeatedTask || params.classification.layer === "heartbeat" || Boolean(writeSkill)
+      ? deriveHeartbeatWriteFromSummary(params.classification.summary)
+      : undefined);
+  const writeRetrieval = Boolean(
+    params.classification.correction ||
+      params.classification.precedent ||
+      params.classification.layer === "retrieval_only",
+  );
+
+  let primaryLayer: ConsolidationLayer = "none";
+  let reason = params.classification.reason;
+  let retrievalReason: string | undefined;
+
+  if (writeSkill) {
+    primaryLayer = "skill";
+    if (params.classification.memory && repeatedTask) {
+      reason = "runtime_promoted_repeated_procedure";
+    }
+  } else if (params.classification.skill && !hasProcedureSignal) {
+    reason = "insufficient_procedure_signal";
+  }
+
+  if (writeMemory && primaryLayer === "none") {
+    primaryLayer = "memory";
+    if (!reason || reason === "unspecified") {
+      reason = "runtime_preserved_memory";
     }
   }
 
-  if (
-    params.classification.layer === "memory" &&
-    repeatedTask &&
-    params.classification.skill
-  ) {
-    return {
-      ...params.classification,
-      layer: "skill",
-      repeatedTask,
-      reason: "runtime_promoted_repeated_procedure",
-    };
+  if (writeHeartbeat && primaryLayer === "none") {
+    primaryLayer = "heartbeat";
+    if (!reason || reason === "unspecified") {
+      reason = "runtime_preserved_heartbeat_goal";
+    }
   }
 
-  if (params.classification.layer === "memory" && !params.classification.memory) {
-    return {
-      ...params.classification,
-      layer: "none",
-      reason: "missing_memory_payload",
-    };
+  if (writeRetrieval) {
+    retrievalReason = params.classification.correction
+      ? "runtime_preserved_correction_precedent"
+      : "runtime_preserved_precedent";
+    if (primaryLayer === "none") {
+      primaryLayer = "retrieval_only";
+      reason =
+        params.classification.layer === "retrieval_only"
+          ? params.classification.reason
+          : retrievalReason;
+    }
+  }
+
+  if (!writeMemory && params.classification.layer === "memory") {
+    reason = "missing_memory_payload";
   }
 
   return {
-    ...params.classification,
+    primaryLayer,
+    reason,
+    confidence,
     repeatedTask,
+    writeMemory,
+    writeHeartbeat,
+    writeSkill,
+    writeRetrieval,
+    retrievalReason,
   };
 }
 
@@ -558,18 +932,74 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
   sessionKey?: string;
   isHeartbeat: boolean;
 }): Promise<void> {
-  const settings = resolvePostRunMemoryReviewSettings(params.cfg);
-  if (!settings) {
-    return;
-  }
   if (params.isHeartbeat) {
     return;
   }
   if (isCliProvider(params.followupRun.run.provider, params.cfg)) {
     return;
   }
+  const settings = resolvePostRunMemoryReviewSettings(params.cfg);
+  const reviewRunId = crypto.randomUUID();
+  const transcriptMessages = readSessionMessages(
+    params.followupRun.run.sessionFile,
+    settings?.maxRecentMessages ?? DEFAULT_POST_RUN_MEMORY_REVIEW_MAX_RECENT_MESSAGES,
+  );
+  const decision = decidePostRunMemoryReview({
+    transcriptMessages,
+  });
+  const currentTurn = extractCurrentTurnMessages(transcriptMessages);
+  const currentTurnSummary = summarizeMessages(currentTurn, 5000);
+  const searchQuery = buildSearchQuery(currentTurn);
+  const digestUserIssue = buildDigestUserIssue({
+    currentTurn,
+    commandBody: params.commandBody,
+    searchQuery,
+  });
+  const appendDigest = async (options: {
+    status: HeartbeatDigestResultStatus;
+    outcomeSummary: string;
+    keywords?: string[];
+    followUp?: {
+      risk?: string;
+      unresolvedItems?: string[];
+    };
+  }) => {
+    try {
+      await appendHeartbeatTaskDigest({
+        agentDir: params.followupRun.run.agentDir,
+        sessionId: params.followupRun.run.sessionId,
+        sessionKey: params.sessionKey,
+        searchQuery,
+        userQuestion: digestUserIssue,
+        status: options.status,
+        agentActionSummary: buildDigestAgentActionSummary({
+          currentTurn,
+          searchQuery,
+          toolCallCount: decision.toolCallCount,
+        }),
+        outcomeSummary: options.outcomeSummary,
+        keywords: options.keywords,
+        followUp: options.followUp,
+      });
+    } catch (err) {
+      logVerbose(`failed to persist heartbeat digest: ${String(err)}`);
+    }
+  };
+
+  if (!settings) {
+    await appendDigest({
+      status: "completed",
+      outcomeSummary: buildDigestOutcomeSummary({ currentTurn }),
+    });
+    return;
+  }
+
   const chatType = params.sessionCtx.ChatType?.trim().toLowerCase();
   if (!settings.allowInGroupChats && chatType && chatType !== "direct") {
+    await appendDigest({
+      status: "completed",
+      outcomeSummary: buildDigestOutcomeSummary({ currentTurn }),
+    });
     return;
   }
 
@@ -588,22 +1018,20 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
     return sandboxCfg.workspaceAccess === "rw";
   })();
   if (!reviewWritable) {
+    await appendDigest({
+      status: "completed",
+      outcomeSummary: buildDigestOutcomeSummary({ currentTurn }),
+    });
     return;
   }
-
-  const transcriptMessages = readSessionMessages(
-    params.followupRun.run.sessionFile,
-    settings.maxRecentMessages,
-  );
-  const decision = decidePostRunMemoryReview({
-    transcriptMessages,
-  });
   if (!decision.shouldRun) {
+    await appendDigest({
+      status: "completed",
+      outcomeSummary: buildDigestOutcomeSummary({ currentTurn }),
+    });
     return;
   }
 
-  const currentTurn = extractCurrentTurnMessages(transcriptMessages);
-  const searchQuery = buildSearchQuery(currentTurn);
   const priorSessions = searchQuery
     ? searchSessionTranscripts({
         query: searchQuery,
@@ -616,7 +1044,6 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
   const matchedSessionKeys = new Set(priorSessions.results.map((item) => item.sessionKey));
   const matchedPriorSessions = matchedSessionKeys.size;
 
-  const reviewRunId = crypto.randomUUID();
   if (params.sessionKey) {
     registerAgentRunContext(reviewRunId, {
       sessionKey: params.sessionKey,
@@ -628,11 +1055,15 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
 
   const workspaceDir = params.followupRun.run.workspaceDir;
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
+  const heartbeatFile = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
   const dailyMemoryFile = path.join(workspaceDir, "memory");
   const skillsDir = path.join(workspaceDir, "skills");
+  const experienceFile = path.join(params.followupRun.run.agentDir, "experience", "entries.jsonl");
   const beforeMemoryMtime = await statMtimeMs(memoryFile);
+  const beforeHeartbeatMtime = await statMtimeMs(heartbeatFile);
   const beforeDailyDirMtime = await statMtimeMs(dailyMemoryFile);
   const beforeSkillsDirMtime = await statMtimeMs(skillsDir);
+  const beforeExperienceMtime = await statMtimeMs(experienceFile);
   const reviewSessionId = buildIsolatedInternalSessionId(
     params.followupRun.run.sessionId,
     "post-run-review",
@@ -652,7 +1083,7 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
       defaultModel: params.defaultModel,
       settings,
       currentTurn,
-      currentTurnSummary: summarizeMessages(currentTurn, 5000),
+      currentTurnSummary,
       recentSessionSummary: priorSessions.results
         .map(
           (item, index) =>
@@ -668,27 +1099,76 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
       settings,
     });
 
-    if (routed.layer === "memory" && routed.memory) {
+    if (routed.writeMemory) {
       await applyMemoryWrite({
         workspaceDir,
-        memory: routed.memory,
+        memory: routed.writeMemory,
       });
-    } else if (routed.layer === "skill" && routed.skill) {
+    }
+    if (routed.writeSkill) {
       await applySkillWrite({
         workspaceDir,
-        skill: routed.skill,
+        skill: routed.writeSkill,
+      });
+    }
+    if (routed.writeHeartbeat) {
+      await applyHeartbeatWrite({
+        workspaceDir,
+        heartbeat: routed.writeHeartbeat,
+      });
+    }
+    if (routed.writeRetrieval) {
+      await appendRetrievalEntry({
+        agentDir: params.followupRun.run.agentDir,
+        sessionId: params.followupRun.run.sessionId,
+        sessionKey: params.sessionKey,
+        reviewRunId,
+        searchQuery,
+        summary: classification.summary,
+        snippet: currentTurnSummary,
+        classification: {
+          ...classification,
+          reason: routed.retrievalReason ?? routed.reason,
+          repeatedTask: routed.repeatedTask,
+          confidence: routed.confidence,
+        },
       });
     }
 
     outcome = {
-      layer: routed.layer,
+      layer: routed.primaryLayer,
       reason: routed.reason,
       confidence: routed.confidence,
       matchedPriorSessions,
       repeatedTask: routed.repeatedTask,
     };
+    await appendDigest({
+      status: routed.reason === "low_confidence" ? "partial" : "completed",
+      outcomeSummary: buildDigestOutcomeSummary({
+        currentTurn,
+        preferredSummary: classification.summary,
+      }),
+      keywords: classification.keywords,
+      followUp: buildDigestFollowUp({
+        status: routed.reason === "low_confidence" ? "partial" : "completed",
+        reason: routed.reason,
+        preferredRisk: routed.reason === "low_confidence" ? classification.summary : "",
+      }),
+    });
   } catch (err) {
     logVerbose(`post-run consolidation failed: ${String(err)}`);
+    await appendDigest({
+      status: "failed",
+      outcomeSummary: buildDigestOutcomeSummary({
+        currentTurn,
+        preferredSummary: "Post-run review failed after task completion.",
+      }),
+      followUp: buildDigestFollowUp({
+        status: "failed",
+        reason: "post_run_review_failed",
+        reviewError: String(err),
+      }),
+    });
     try {
       await appendReviewLedger({
         agentDir: params.followupRun.run.agentDir,
@@ -698,6 +1178,7 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
         toolCallCount: decision.toolCallCount,
         changedMemory: false,
         changedSkills: false,
+        changedRetrieval: false,
         reviewRunId,
         skipped: String(err),
         outcome,
@@ -709,11 +1190,16 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
   }
 
   const afterMemoryMtime = await statMtimeMs(memoryFile);
+  const afterHeartbeatMtime = await statMtimeMs(heartbeatFile);
   const afterDailyDirMtime = await statMtimeMs(dailyMemoryFile);
   const afterSkillsDirMtime = await statMtimeMs(skillsDir);
+  const afterExperienceMtime = await statMtimeMs(experienceFile);
   const changedMemory =
-    beforeMemoryMtime !== afterMemoryMtime || beforeDailyDirMtime !== afterDailyDirMtime;
+    beforeMemoryMtime !== afterMemoryMtime ||
+    beforeHeartbeatMtime !== afterHeartbeatMtime ||
+    beforeDailyDirMtime !== afterDailyDirMtime;
   const changedSkills = beforeSkillsDirMtime !== afterSkillsDirMtime;
+  const changedRetrieval = beforeExperienceMtime !== afterExperienceMtime;
 
   try {
     await appendReviewLedger({
@@ -724,6 +1210,7 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
       toolCallCount: decision.toolCallCount,
       changedMemory,
       changedSkills,
+      changedRetrieval,
       reviewRunId,
       outcome,
     });

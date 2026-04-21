@@ -24,7 +24,9 @@ import {
   buildBustlyWorkspaceAgentId,
   buildBustlyWorkspaceAgentPrefix,
   DEFAULT_BUSTLY_AGENT_NAME,
+  isAgentMainSessionKey,
   isBustlyAgentConversationSessionKey,
+  isBustlyAgentScheduledSessionKey,
   normalizeBustlyAgentName,
   normalizeBustlyWorkspaceId,
 } from "./workspace-agent.js";
@@ -32,9 +34,17 @@ import {
   initializeBustlyWorkspaceBootstrap,
   loadEnabledBustlyWorkspaceBootstrapAgents,
 } from "./workspace-bootstrap.js";
+import { DEFAULT_BUSTLY_HEARTBEAT_EVERY } from "./heartbeats.js";
 import { resolveBustlyWorkspaceAgentWorkspaceDir } from "./workspace-runtime.js";
 
 type OpenClawAgentListEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+const DEFAULT_PRESET_HEARTBEAT: NonNullable<OpenClawAgentListEntry["heartbeat"]> = {
+  every: DEFAULT_BUSTLY_HEARTBEAT_EVERY,
+  target: "none",
+};
+// Preset workspace agents created before this timestamp will be force-refreshed
+// so prompt/template updates can overwrite legacy bootstrap files once.
+export const BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE = Date.UTC(2026, 4, 17, 0, 0, 0, 0);
 
 export type BustlyWorkspaceAgentSummary = {
   agentId: string;
@@ -52,6 +62,7 @@ export type BustlyWorkspaceAgentSummary = {
 export type BustlyWorkspaceAgentSessionSummary = {
   agentId: string;
   sessionKey: string;
+  kind: "conversation" | "scheduled" | "heartbeat";
   name: string;
   icon?: string;
   updatedAt: number | null;
@@ -284,16 +295,51 @@ function listBustlyWorkspaceAgentIds(cfg: OpenClawConfig, workspaceId: string): 
     .map((entry) => entry.id);
 }
 
-function listBustlyAgentConversationSessions(
+function isBustlyAgentHeartbeatSession(
+  sessionKey: string,
+  entry: {
+    origin?: { provider?: string; label?: string; from?: string; to?: string };
+    deliveryContext?: { to?: string };
+    lastTo?: string;
+  } | undefined,
   agentId: string,
-): BustlyWorkspaceAgentSessionSummary[] {
+): boolean {
+  if (!isAgentMainSessionKey(sessionKey, agentId)) {
+    return false;
+  }
+  const markers = [
+    entry?.origin?.provider,
+    entry?.origin?.label,
+    entry?.origin?.from,
+    entry?.origin?.to,
+    entry?.deliveryContext?.to,
+    entry?.lastTo,
+  ]
+    .map((value) => value?.trim().toLowerCase())
+    .filter(Boolean);
+  return markers.includes("heartbeat");
+}
+
+function listBustlyAgentVisibleSessions(agentId: string): BustlyWorkspaceAgentSessionSummary[] {
   const store = loadSessionStore(resolveDefaultSessionStorePath(agentId));
   return Object.entries(store)
-    .filter(([sessionKey]) => isBustlyAgentConversationSessionKey(sessionKey, agentId))
+    .filter(
+      ([sessionKey, entry]) =>
+        isBustlyAgentConversationSessionKey(sessionKey, agentId) ||
+        isBustlyAgentScheduledSessionKey(sessionKey, agentId) ||
+        isBustlyAgentHeartbeatSession(sessionKey, entry, agentId),
+    )
     .map(([sessionKey, entry]) => ({
       agentId,
       sessionKey,
-      name: entry.label?.trim() || "New conversation",
+      kind: isBustlyAgentHeartbeatSession(sessionKey, entry, agentId)
+        ? "heartbeat"
+        : isBustlyAgentScheduledSessionKey(sessionKey, agentId)
+          ? "scheduled"
+          : "conversation",
+      name: isBustlyAgentHeartbeatSession(sessionKey, entry, agentId)
+        ? entry.label?.trim() || "Heartbeat"
+        : entry.label?.trim() || "New conversation",
       icon: entry.icon?.trim() || undefined,
       updatedAt: entry.updatedAt ?? null,
     }))
@@ -368,7 +414,7 @@ export function listBustlyWorkspaceAgents(params: {
         entry.workspace?.trim() ||
         resolveBustlyWorkspaceAgentWorkspaceDir(normalizedWorkspaceId, agentName, params.env);
       const metadata = loadBustlyAgentMetadata(workspaceDir);
-      const sessions = listBustlyAgentConversationSessions(agentId);
+      const sessions = listBustlyAgentVisibleSessions(agentId);
       const displayName = entry.name?.trim() || agentName;
       const identityMarkdown = loadBustlyAgentIdentityContent(workspaceDir);
       const description = loadBustlyAgentDescription(workspaceDir);
@@ -412,6 +458,7 @@ export function listBustlyWorkspaceAgents(params: {
 export function listBustlyWorkspaceAgentSessions(params: {
   workspaceId: string;
   agentId: string;
+  includeHeartbeatMainSessions?: boolean;
 }): BustlyWorkspaceAgentSessionSummary[] {
   const normalizedWorkspaceId = normalizeBustlyWorkspaceId(params.workspaceId);
   if (!normalizedWorkspaceId) {
@@ -423,7 +470,10 @@ export function listBustlyWorkspaceAgentSessions(params: {
   if (!agentId.startsWith(prefix) && agentId !== legacyMainAgentId) {
     return [];
   }
-  return listBustlyAgentConversationSessions(agentId);
+  if (params.includeHeartbeatMainSessions !== true) {
+    return listBustlyAgentVisibleSessions(agentId).filter((session) => session.kind !== "heartbeat");
+  }
+  return listBustlyAgentVisibleSessions(agentId);
 }
 
 export async function createBustlyWorkspaceAgent(params: {
@@ -432,7 +482,9 @@ export async function createBustlyWorkspaceAgent(params: {
   agentName: string;
   displayName?: string;
   description?: string;
+  preserveTemplateIdentityName?: boolean;
   icon?: string;
+  heartbeat?: OpenClawAgentListEntry["heartbeat"];
   skills?: string[] | null;
   bootstrapMetadata?: BustlyAgentMetadata;
   requireBootstrapMetadata?: boolean;
@@ -472,6 +524,18 @@ export async function createBustlyWorkspaceAgent(params: {
     name: displayName,
     workspace: workspaceDir,
   });
+  const nextList = stripPerAgentSkipBootstrap(updated.agents?.list)?.map((entry) => {
+    if (normalizeAgentId(entry.id) !== normalizeAgentId(agentId)) {
+      return entry;
+    }
+    if (params.heartbeat === undefined) {
+      return entry;
+    }
+    return {
+      ...entry,
+      heartbeat: { ...params.heartbeat },
+    };
+  });
   const nextConfig: OpenClawConfig = {
     ...updated,
     agents: {
@@ -480,7 +544,7 @@ export async function createBustlyWorkspaceAgent(params: {
         ...updated.agents?.defaults,
         skipBootstrap: true,
       },
-      list: stripPerAgentSkipBootstrap(updated.agents?.list),
+      list: nextList,
     },
   };
 
@@ -499,11 +563,15 @@ export async function createBustlyWorkspaceAgent(params: {
     });
   }
   if (!params.skipBootstrap) {
-    syncBustlyAgentIdentityFields({
-      workspaceDir,
-      name: displayName,
-      description: params.description,
-    });
+    const shouldSyncIdentityName = !params.preserveTemplateIdentityName;
+    const shouldSyncIdentityDescription = Boolean(params.description?.trim());
+    if (shouldSyncIdentityName || shouldSyncIdentityDescription) {
+      syncBustlyAgentIdentityFields({
+        workspaceDir,
+        ...(shouldSyncIdentityName ? { name: displayName } : {}),
+        ...(shouldSyncIdentityDescription ? { description: params.description } : {}),
+      });
+    }
   }
   if (!params.skipBootstrap || icon || params.skills !== undefined) {
     setBustlyAgentMetadata({
@@ -549,6 +617,7 @@ export async function createBustlyWorkspaceAgentSession(params: {
   return {
     agentId,
     sessionKey,
+    kind: "conversation",
     sessionId,
     name: label,
     updatedAt,
@@ -712,6 +781,14 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
       existingEntry?.workspace?.trim() ||
       resolveBustlyWorkspaceAgentWorkspaceDir(normalizedWorkspaceId, preset.slug, params.env);
     const workspaceExists = existsSync(workspaceDir);
+    const workspaceMetadata = workspaceExists ? loadBustlyAgentMetadata(workspaceDir) : {};
+    const workspaceCreatedAt = workspaceExists
+      ? resolveBustlyAgentCreatedAt(workspaceDir, workspaceMetadata)
+      : null;
+    const shouldRefreshBootstrapTemplate =
+      workspaceExists &&
+      (workspaceCreatedAt === null ||
+        workspaceCreatedAt < BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE);
     if (!workspaceAgentIds.has(agentId)) {
       await createBustlyWorkspaceAgent({
         // Keep the full workspace UUID for bootstrap/Supabase lookups.
@@ -719,7 +796,9 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
         workspaceName: params.workspaceName,
         agentName: preset.slug,
         displayName: preset.label,
+        preserveTemplateIdentityName: true,
         ...(workspaceExists ? {} : { icon: preset.icon }),
+        heartbeat: DEFAULT_PRESET_HEARTBEAT,
         ...(preset.bootstrapMetadata ? { bootstrapMetadata: preset.bootstrapMetadata } : {}),
         requireBootstrapMetadata: !workspaceExists,
         skipBootstrap: workspaceExists,
@@ -730,10 +809,13 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
       workspaceAgentIds.add(agentId);
       if (!workspaceExists) {
         bootstrappedCount += 1;
+        continue;
       }
-      continue;
+      if (!shouldRefreshBootstrapTemplate) {
+        continue;
+      }
     }
-    if (!workspaceExists) {
+    if (!workspaceExists || shouldRefreshBootstrapTemplate) {
       await initializeBustlyWorkspaceBootstrap({
         workspaceDir,
         workspaceId: params.workspaceId,
@@ -741,6 +823,10 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
         agentName: preset.slug,
         ...(preset.bootstrapMetadata ? { metadata: preset.bootstrapMetadata } : {}),
         requireAgentMetadata: true,
+      });
+      setBustlyAgentMetadata({
+        workspaceDir,
+        createdAt: Date.now(),
       });
       bootstrappedCount += 1;
     }

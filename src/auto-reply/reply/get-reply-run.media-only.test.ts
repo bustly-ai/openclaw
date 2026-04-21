@@ -29,6 +29,7 @@ vi.mock("../../process/command-queue.js", () => ({
 }));
 
 vi.mock("../../routing/session-key.js", () => ({
+  normalizeAgentId: vi.fn((value?: string) => value?.trim() || ""),
   normalizeMainKey: vi.fn().mockReturnValue("main"),
 }));
 
@@ -67,6 +68,10 @@ vi.mock("./route-reply.js", () => ({
 }));
 
 vi.mock("./session-updates.js", () => ({
+  ensureSessionSystemSent: vi.fn().mockImplementation(async ({ sessionEntry, systemSent }) => ({
+    sessionEntry,
+    systemSent,
+  })),
   ensureSkillSnapshot: vi.fn().mockImplementation(async ({ sessionEntry, systemSent }) => ({
     sessionEntry,
     systemSent,

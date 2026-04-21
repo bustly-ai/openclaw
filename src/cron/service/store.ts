@@ -274,6 +274,22 @@ export async function ensureLoaded(
       }
     }
 
+    if ("reuseSession" in raw && typeof raw.reuseSession !== "boolean") {
+      if (typeof raw.reuseSession === "string") {
+        const trimmed = raw.reuseSession.trim().toLowerCase();
+        if (trimmed === "true" || trimmed === "false") {
+          raw.reuseSession = trimmed === "true";
+          mutated = true;
+        } else {
+          delete raw.reuseSession;
+          mutated = true;
+        }
+      } else {
+        delete raw.reuseSession;
+        mutated = true;
+      }
+    }
+
     if (typeof raw.enabled !== "boolean") {
       raw.enabled = true;
       mutated = true;

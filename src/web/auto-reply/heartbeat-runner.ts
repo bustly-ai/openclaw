@@ -173,7 +173,10 @@ export async function runWebHeartbeatOnce(opts: {
         To: to,
         MessageSid: sessionId ?? sessionSnapshot.entry?.sessionId,
       },
-      { isHeartbeat: true },
+      {
+        isHeartbeat: true,
+        heartbeatPrompt: resolveHeartbeatPrompt(cfg.agents?.defaults?.heartbeat?.prompt),
+      },
       cfg,
     );
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);

@@ -58,6 +58,8 @@ export type RunEmbeddedPiAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** If true, run is a heartbeat cycle and can enable heartbeat-only tools. */
+  isHeartbeat?: boolean;
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
@@ -106,6 +108,7 @@ export type RunEmbeddedPiAgentParams = {
   lane?: string;
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
+  heartbeatPrompt?: string;
   inputProvenance?: InputProvenance;
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];

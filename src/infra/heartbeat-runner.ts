@@ -23,6 +23,16 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import {
+  buildBustlyHeartbeatPrompt,
+  loadBustlyHeartbeatState,
+  parseBustlyHeartbeatEventsJson,
+  parseBustlyHeartbeatMarkdown,
+  reconcileBustlyHeartbeatState,
+  resolveBustlyHeartbeatWorkspaceContext,
+  saveBustlyHeartbeatState,
+  type BustlyHeartbeatStructuredEvent,
+} from "../bustly/heartbeats.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadConfig } from "../config/config.js";
@@ -74,9 +84,7 @@ export type HeartbeatDeps = OutboundSendDeps &
   };
 
 const log = createSubsystemLogger("gateway/heartbeat");
-// SET HEARTBEAT false
-let heartbeatsEnabled = false;
-// let heartbeatsEnabled = true;
+let heartbeatsEnabled = true;
 
 export function setHeartbeatsEnabled(enabled: boolean) {
   heartbeatsEnabled = enabled;
@@ -559,14 +567,44 @@ type HeartbeatPromptResolution = {
   prompt: string;
   hasExecCompletion: boolean;
   hasCronEvents: boolean;
+  bustlyWorkspaceId: string | null;
 };
 
-function resolveHeartbeatRunPrompt(params: {
+function resolveHeartbeatDigestWindow(params: {
   cfg: OpenClawConfig;
+  heartbeat?: HeartbeatConfig;
+  workspaceId: string;
+  agentId: string;
+  startedAt: number;
+}): { from: string; to: string } {
+  const previous = loadBustlyHeartbeatState({
+    workspaceId: params.workspaceId,
+    agentId: params.agentId,
+  });
+  const intervalMs = resolveHeartbeatIntervalMs(params.cfg, undefined, params.heartbeat) ?? 30 * 60 * 1000;
+  const fallbackFromMs = params.startedAt - intervalMs;
+  const previousScanAt =
+    typeof previous.lastScanAt === "number" && Number.isFinite(previous.lastScanAt)
+      ? previous.lastScanAt
+      : null;
+  const fromMs = Math.max(
+    0,
+    Math.min(params.startedAt, previousScanAt !== null ? previousScanAt + 1 : fallbackFromMs),
+  );
+  return {
+    from: new Date(fromMs).toISOString(),
+    to: new Date(params.startedAt).toISOString(),
+  };
+}
+
+async function resolveHeartbeatRunPrompt(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;
-}): HeartbeatPromptResolution {
+  startedAt: number;
+}): Promise<HeartbeatPromptResolution> {
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const pendingEvents = params.preflight.shouldInspectPendingEvents
     ? pendingEventEntries.map((event) => event.text)
@@ -580,13 +618,92 @@ function resolveHeartbeatRunPrompt(params: {
     .map((event) => event.text);
   const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
   const hasCronEvents = cronEvents.length > 0;
-  const prompt = hasExecCompletion
+  let bustlyWorkspaceId: string | null = null;
+  let prompt = resolveHeartbeatPrompt(params.cfg, params.heartbeat);
+  if (!hasExecCompletion && !hasCronEvents) {
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    const bustlyContext = resolveBustlyHeartbeatWorkspaceContext({ workspaceDir });
+    if (bustlyContext) {
+      try {
+        const heartbeatContent = await fs.readFile(
+          path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME),
+          "utf-8",
+        );
+        if (parseBustlyHeartbeatMarkdown(heartbeatContent)) {
+          prompt = buildBustlyHeartbeatPrompt({
+            digestWindow: resolveHeartbeatDigestWindow({
+              cfg: params.cfg,
+              heartbeat: params.heartbeat,
+              workspaceId: bustlyContext.workspaceId,
+              agentId: params.agentId,
+              startedAt: params.startedAt,
+            }),
+          });
+          bustlyWorkspaceId = bustlyContext.workspaceId;
+        }
+      } catch {
+        // Fall back to the default heartbeat prompt when the Bustly heartbeat file
+        // is missing or unreadable.
+      }
+    }
+  }
+  prompt = hasExecCompletion
     ? buildExecEventPrompt({ deliverToUser: params.canRelayToUser })
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
-      : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
+      : prompt;
 
-  return { prompt, hasExecCompletion, hasCronEvents };
+  return { prompt, hasExecCompletion, hasCronEvents, bustlyWorkspaceId };
+}
+
+function resolveHeartbeatDuplicateWindowMs() {
+  return 24 * 60 * 60 * 1000;
+}
+
+function buildBustlyHeartbeatPreviewText(
+  events: Array<{ title: string; message: string }>,
+): string {
+  const first = events[0];
+  if (!first) {
+    return "";
+  }
+  return `${first.title}: ${first.message}`.slice(0, 200);
+}
+
+function persistBustlyHeartbeatState(params: {
+  workspaceId: string | null;
+  agentId: string;
+  startedAt: number;
+  events: BustlyHeartbeatStructuredEvent[];
+  payloadText: string;
+}) {
+  if (!params.workspaceId) {
+    return null;
+  }
+  const previous = loadBustlyHeartbeatState({
+    workspaceId: params.workspaceId,
+    agentId: params.agentId,
+  });
+  const next = reconcileBustlyHeartbeatState({
+    agentId: params.agentId,
+    previous,
+    events: params.events,
+    scannedAt: params.startedAt,
+    payloadText: params.payloadText,
+  });
+  const saved = saveBustlyHeartbeatState({
+    workspaceId: params.workspaceId,
+    agentId: params.agentId,
+    state: next,
+  });
+  const payloadText = params.payloadText.trim();
+  const previousPayloadText = previous.lastPayloadText.trim();
+  const isDuplicate =
+    Boolean(payloadText) &&
+    typeof previous.lastPayloadAt === "number" &&
+    previousPayloadText === payloadText &&
+    params.startedAt - previous.lastPayloadAt < resolveHeartbeatDuplicateWindowMs();
+  return { previous, saved, isDuplicate };
 }
 
 export async function runHeartbeatOnce(opts: {
@@ -595,29 +712,33 @@ export async function runHeartbeatOnce(opts: {
   sessionKey?: string;
   heartbeat?: HeartbeatConfig;
   reason?: string;
+  force?: boolean;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? loadConfig();
   const agentId = normalizeAgentId(opts.agentId ?? resolveDefaultAgentId(cfg));
   const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
-  if (!heartbeatsEnabled) {
+  const forceRun = opts.force === true;
+  if (!forceRun && !heartbeatsEnabled) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+  if (!forceRun && !isHeartbeatEnabledForAgent(cfg, agentId)) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+  if (!forceRun && !resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
     return { status: "skipped", reason: "disabled" };
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
+  if (!forceRun && !isWithinActiveHours(cfg, heartbeat, startedAt)) {
     return { status: "skipped", reason: "quiet-hours" };
   }
 
-  const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
-  if (queueSize > 0) {
-    return { status: "skipped", reason: "requests-in-flight" };
+  if (!forceRun) {
+    const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
+    if (queueSize > 0) {
+      return { status: "skipped", reason: "requests-in-flight" };
+    }
   }
 
   // Preflight centralizes trigger classification, event inspection, and HEARTBEAT.md gating.
@@ -669,12 +790,15 @@ export async function runHeartbeatOnce(opts: {
   const canRelayToUser = Boolean(
     delivery.channel !== "none" && delivery.to && visibility.showAlerts,
   );
-  const { prompt, hasExecCompletion, hasCronEvents } = resolveHeartbeatRunPrompt({
-    cfg,
-    heartbeat,
-    preflight,
-    canRelayToUser,
-  });
+  const { prompt, hasExecCompletion, hasCronEvents, bustlyWorkspaceId } =
+    await resolveHeartbeatRunPrompt({
+      cfg,
+      agentId,
+      heartbeat,
+      preflight,
+      canRelayToUser,
+      startedAt,
+    });
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
@@ -740,8 +864,15 @@ export async function runHeartbeatOnce(opts: {
     const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const replyOpts = heartbeatModelOverride
-      ? { isHeartbeat: true, heartbeatModelOverride, suppressToolErrorWarnings }
-      : { isHeartbeat: true, suppressToolErrorWarnings };
+      ? {
+          isHeartbeat: true,
+          heartbeatModelOverride,
+          suppressToolErrorWarnings,
+        }
+      : {
+          isHeartbeat: true,
+          suppressToolErrorWarnings,
+        };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
@@ -753,6 +884,13 @@ export async function runHeartbeatOnce(opts: {
       !replyPayload ||
       (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
     ) {
+      persistBustlyHeartbeatState({
+        workspaceId: bustlyWorkspaceId,
+        agentId,
+        startedAt,
+        events: [],
+        payloadText: "",
+      });
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -789,6 +927,13 @@ export async function runHeartbeatOnce(opts: {
     }
     const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
+      persistBustlyHeartbeatState({
+        workspaceId: bustlyWorkspaceId,
+        agentId,
+        startedAt,
+        events: [],
+        payloadText: "",
+      });
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -811,6 +956,28 @@ export async function runHeartbeatOnce(opts: {
 
     const mediaUrls =
       replyPayload.mediaUrls ?? (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
+    const structuredEvents =
+      bustlyWorkspaceId && !hasExecCompletion && !shouldSkipMain && !mediaUrls.length
+        ? parseBustlyHeartbeatEventsJson(normalized.text)
+        : null;
+    const structuredPayloadText = structuredEvents ? JSON.stringify(structuredEvents) : "";
+    const structuredPersistence = structuredEvents
+      ? persistBustlyHeartbeatState({
+          workspaceId: bustlyWorkspaceId,
+          agentId,
+          startedAt,
+          events: structuredEvents,
+          payloadText: structuredPayloadText,
+        })
+      : null;
+    if (structuredEvents) {
+      normalized.text = structuredPayloadText;
+    } else if (bustlyWorkspaceId && !shouldSkipMain && normalized.text.trim()) {
+      log.warn("heartbeat: bustly structured output parse failed", {
+        agentId,
+        preview: normalized.text.slice(0, 200),
+      });
+    }
 
     // Suppress duplicate heartbeats (same payload) within a short window.
     // This prevents "nagging" when nothing changed but the model repeats the same items.
@@ -819,12 +986,13 @@ export async function runHeartbeatOnce(opts: {
     const prevHeartbeatAt =
       typeof entry?.lastHeartbeatSentAt === "number" ? entry.lastHeartbeatSentAt : undefined;
     const isDuplicateMain =
-      !shouldSkipMain &&
-      !mediaUrls.length &&
-      Boolean(prevHeartbeatText.trim()) &&
-      normalized.text.trim() === prevHeartbeatText.trim() &&
-      typeof prevHeartbeatAt === "number" &&
-      startedAt - prevHeartbeatAt < 24 * 60 * 60 * 1000;
+      structuredPersistence?.isDuplicate ??
+      (!shouldSkipMain &&
+        !mediaUrls.length &&
+        Boolean(prevHeartbeatText.trim()) &&
+        normalized.text.trim() === prevHeartbeatText.trim() &&
+        typeof prevHeartbeatAt === "number" &&
+        startedAt - prevHeartbeatAt < resolveHeartbeatDuplicateWindowMs());
 
     if (isDuplicateMain) {
       await restoreHeartbeatUpdatedAt({
@@ -852,7 +1020,9 @@ export async function runHeartbeatOnce(opts: {
           .map((payload) => payload.text)
           .filter((text): text is string => Boolean(text?.trim()))
           .join("\n")
-      : normalized.text;
+      : structuredEvents
+        ? buildBustlyHeartbeatPreviewText(structuredEvents)
+        : normalized.text;
 
     if (delivery.channel === "none" || !delivery.to) {
       emitHeartbeatEvent({
@@ -933,7 +1103,7 @@ export async function runHeartbeatOnce(opts: {
     });
 
     // Record last delivered heartbeat payload for dedupe.
-    if (!shouldSkipMain && normalized.text.trim()) {
+    if (!structuredPersistence && !shouldSkipMain && normalized.text.trim()) {
       const store = loadSessionStore(storePath);
       const current = store[sessionKey];
       if (current) {
@@ -1080,6 +1250,12 @@ export function startHeartbeatRunner(opts: {
     scheduleNext();
   };
 
+  const refreshAgentsFromLatestConfig = () => {
+    const latestConfig = loadConfig();
+    updateConfig(latestConfig);
+    return latestConfig;
+  };
+
   const run: HeartbeatWakeHandler = async (params) => {
     if (state.stopped) {
       return {
@@ -1093,24 +1269,34 @@ export function startHeartbeatRunner(opts: {
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-    if (state.agents.size === 0) {
+    const reason = params?.reason;
+    const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
+    const requestedSessionKey = params?.sessionKey?.trim() || undefined;
+    const skipAgentIds = new Set(
+      (params?.skipAgentIds ?? [])
+        .map((agentId) => agentId.trim())
+        .filter((agentId) => agentId.length > 0)
+        .map((agentId) => normalizeAgentId(agentId)),
+    );
+    const hasTargetedRequest = Boolean(requestedSessionKey || requestedAgentId);
+    if (!hasTargetedRequest && state.agents.size === 0) {
       return {
         status: "skipped",
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-
-    const reason = params?.reason;
-    const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const requestedSessionKey = params?.sessionKey?.trim() || undefined;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
     let ran = false;
 
-    if (requestedSessionKey || requestedAgentId) {
+    if (hasTargetedRequest) {
       const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
-      const targetAgent = state.agents.get(targetAgentId);
+      let targetAgent = state.agents.get(targetAgentId);
+      if (!targetAgent) {
+        refreshAgentsFromLatestConfig();
+        targetAgent = state.agents.get(targetAgentId);
+      }
       if (!targetAgent) {
         scheduleNext();
         return { status: "skipped", reason: "disabled" };
@@ -1140,42 +1326,52 @@ export function startHeartbeatRunner(opts: {
       }
     }
 
-    for (const agent of state.agents.values()) {
-      if (isInterval && now < agent.nextDueMs) {
-        continue;
-      }
+    const dueAgents = Array.from(state.agents.values()).filter(
+      (agent) => (!isInterval || now >= agent.nextDueMs) && !skipAgentIds.has(agent.agentId),
+    );
+    const results = await Promise.all(
+      dueAgents.map(async (agent) => {
+        try {
+          const res = await runOnce({
+            cfg: state.cfg,
+            agentId: agent.agentId,
+            heartbeat: agent.heartbeat,
+            reason,
+            deps: { runtime: state.runtime },
+          });
+          return { agent, res } as const;
+        } catch (err) {
+          return { agent, error: formatErrorMessage(err) } as const;
+        }
+      }),
+    );
 
-      let res: HeartbeatRunResult;
-      try {
-        res = await runOnce({
-          cfg: state.cfg,
-          agentId: agent.agentId,
-          heartbeat: agent.heartbeat,
-          reason,
-          deps: { runtime: state.runtime },
-        });
-      } catch (err) {
+    let sawRequestsInFlight = false;
+    for (const result of results) {
+      if ("error" in result) {
         // If runOnce throws (e.g. during session compaction), we must still
         // advance the timer and call scheduleNext so heartbeats keep firing.
-        const errMsg = formatErrorMessage(err);
-        log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
-        advanceAgentSchedule(agent, now);
+        log.error(`heartbeat runner: runOnce threw unexpectedly: ${result.error}`, {
+          error: result.error,
+        });
+        advanceAgentSchedule(result.agent, now);
         continue;
       }
-      if (res.status === "skipped" && res.reason === "requests-in-flight") {
-        advanceAgentSchedule(agent, now);
-        scheduleNext();
-        return res;
+      if (result.res.status === "skipped" && result.res.reason === "requests-in-flight") {
+        sawRequestsInFlight = true;
       }
-      if (res.status !== "skipped" || res.reason !== "disabled") {
-        advanceAgentSchedule(agent, now);
+      if (result.res.status !== "skipped" || result.res.reason !== "disabled") {
+        advanceAgentSchedule(result.agent, now);
       }
-      if (res.status === "ran") {
+      if (result.res.status === "ran") {
         ran = true;
       }
     }
 
     scheduleNext();
+    if (sawRequestsInFlight) {
+      return { status: "skipped", reason: "requests-in-flight" };
+    }
     if (ran) {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
@@ -1187,6 +1383,7 @@ export function startHeartbeatRunner(opts: {
       reason: params.reason,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      skipAgentIds: params.skipAgentIds,
     });
   const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
   updateConfig(state.cfg);

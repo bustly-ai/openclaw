@@ -62,6 +62,16 @@
 - Desktop login/logout can remain Electron-specific when the cloud login model differs.
 - Avoid duplicating the renderer into separate Electron-only and cloud-only apps unless a hard product fork is explicitly intended.
 
+### Shared Renderer Data Access
+
+- `www.salerio/packages/client-app` should be host-agnostic for shared business data reads.
+- Default pattern for Bustly business tables is:
+  - gateway exposes shared auth/config only when needed (example: `bustly.supabase.get-config`)
+  - `client-app` creates and reuses the Supabase client in `www.salerio/packages/client-app/src/lib/bustly-supabase.ts`
+  - renderer queries Bustly Supabase tables from that shared data layer
+- Do not add a new gateway method for every Supabase table/query by default. Only add gateway methods when the operation needs local runtime state, privileged local filesystem/runtime access, broadcast side effects, or other gateway-owned behavior.
+- Do not put shared business data fetching into the renderer host adapter. Host adapters are for host-specific capabilities such as opening settings/integrations pages, file pickers, deep links, and other Electron/cloud shell integrations.
+
 ## Electron Client Override
 
 - For all work under `apps/electron/**`, the Electron client product/design rules take precedence over legacy OpenClaw repo conventions when they conflict.

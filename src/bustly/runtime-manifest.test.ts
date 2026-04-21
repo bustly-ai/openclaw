@@ -1,26 +1,30 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BustlyOAuthState } from "../config/types.base.js";
 import {
   applyBustlyRuntimeManifest,
   bootstrapBustlyRuntime,
   getBustlyRuntimeHealthSnapshot,
+  getBustlyRuntimeHealthSnapshotEnsuringFreshToken,
 } from "./runtime-manifest.js";
 
 const {
   oauthStateRef,
+  oauthFreshStateRef,
+  readBustlyOAuthStateEnsuringFreshTokenMock,
   setActiveBustlyWorkspaceMock,
   resolveActiveBustlyWorkspaceBindingMock,
   ensureBustlyWorkspacePresetAgentsMock,
+  requestHeartbeatNowMock,
 } = vi.hoisted(() => {
   return {
     oauthStateRef: { current: null as BustlyOAuthState | null },
-    setActiveBustlyWorkspaceMock: vi.fn<
-      (params: unknown) => Promise<{
-        workspaceId: string;
-        agentId: string;
-        workspaceDir: string;
-      }>
-    >(async () => ({
+    oauthFreshStateRef: { current: null as BustlyOAuthState | null },
+    readBustlyOAuthStateEnsuringFreshTokenMock:
+      vi.fn<(options?: { forceRefresh?: boolean }) => Promise<BustlyOAuthState | null>>(),
+    setActiveBustlyWorkspaceMock: vi.fn(async () => ({
       workspaceId: "workspace-1",
       agentId: "bustly-workspace-1-overview",
       workspaceDir: "/tmp/workspaces/workspace-1/agents/overview",
@@ -39,11 +43,14 @@ const {
     ensureBustlyWorkspacePresetAgentsMock: vi.fn<(params: unknown) => Promise<number>>(
       async () => 0,
     ),
+    requestHeartbeatNowMock: vi.fn(),
   };
 });
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => oauthStateRef.current),
+  readBustlyOAuthStateEnsuringFreshToken: (options?: { forceRefresh?: boolean }) =>
+    readBustlyOAuthStateEnsuringFreshTokenMock(options),
   getBustlyAccessToken: (
     state: { user?: { supabaseAccessToken?: string; userAccessToken?: string } } | null | undefined,
   ) => state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "",
@@ -59,9 +66,27 @@ vi.mock("./workspace-agents.js", () => ({
     ensureBustlyWorkspacePresetAgentsMock(params),
 }));
 
+vi.mock("../infra/heartbeat-wake.js", () => ({
+  requestHeartbeatNow: (params: unknown) => requestHeartbeatNowMock(params),
+}));
+
 describe("bustly runtime manifest", () => {
+  let tempDir: string;
+  let previousStateDir: string | undefined;
+  let previousConfigPath: string | undefined;
+
   beforeEach(() => {
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-bustly-runtime-manifest-"));
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    process.env.OPENCLAW_STATE_DIR = path.join(tempDir, "state");
+    process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, "state", "openclaw.json");
     oauthStateRef.current = null;
+    oauthFreshStateRef.current = null;
+    readBustlyOAuthStateEnsuringFreshTokenMock.mockReset();
+    readBustlyOAuthStateEnsuringFreshTokenMock.mockImplementation(async () => {
+      return oauthFreshStateRef.current ?? oauthStateRef.current;
+    });
     setActiveBustlyWorkspaceMock.mockReset();
     setActiveBustlyWorkspaceMock.mockResolvedValue({
       workspaceId: "workspace-1",
@@ -76,6 +101,21 @@ describe("bustly runtime manifest", () => {
     });
     ensureBustlyWorkspacePresetAgentsMock.mockReset();
     ensureBustlyWorkspacePresetAgentsMock.mockResolvedValue(0);
+    requestHeartbeatNowMock.mockReset();
+  });
+
+  afterEach(() => {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    if (previousConfigPath === undefined) {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    } else {
+      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("returns runtime health snapshot", () => {
@@ -130,9 +170,71 @@ describe("bustly runtime manifest", () => {
     expect(health.loggedIn).toBe(true);
   });
 
+  it("returns runtime health snapshot from refreshed oauth state", async () => {
+    oauthStateRef.current = {
+      deviceId: "device-1",
+      callbackPort: 17900,
+      user: {
+        userId: "u-1",
+        userName: "Tester",
+        userEmail: "tester@example.com",
+        workspaceId: "workspace-1",
+        skills: [],
+      },
+      supabase: {
+        url: "https://example.supabase.co",
+        anonKey: "anon-key",
+      },
+    };
+    oauthFreshStateRef.current = {
+      ...oauthStateRef.current,
+      user: {
+        ...oauthStateRef.current.user!,
+        supabaseAccessToken: "fresh-jwt-token",
+        userAccessToken: "fresh-jwt-token",
+      },
+    };
+
+    const health = await getBustlyRuntimeHealthSnapshotEnsuringFreshToken();
+
+    expect(readBustlyOAuthStateEnsuringFreshTokenMock).toHaveBeenCalledTimes(1);
+    expect(health.loggedIn).toBe(true);
+    expect(health.workspaceId).toBe("workspace-1");
+  });
+
   it("applies runtime manifest and forwards preset agents", async () => {
     oauthStateRef.current = null;
     ensureBustlyWorkspacePresetAgentsMock.mockResolvedValueOnce(1);
+    mkdirSync(path.dirname(process.env.OPENCLAW_CONFIG_PATH!), { recursive: true });
+    writeFileSync(
+      process.env.OPENCLAW_CONFIG_PATH!,
+      JSON.stringify(
+        {
+          agents: {
+            defaults: {},
+            list: [
+              {
+                id: "bustly-workspace-1-overview",
+                workspace: path.join(process.env.OPENCLAW_STATE_DIR!, "workspaces", "workspace-1", "agents", "overview"),
+              },
+              {
+                id: "bustly-workspace-1-store-ops",
+                workspace: path.join(process.env.OPENCLAW_STATE_DIR!, "workspaces", "workspace-1", "agents", "store-ops"),
+                heartbeat: { every: "30m", target: "none" },
+              },
+              {
+                id: "bustly-workspace-1-finance",
+                workspace: path.join(process.env.OPENCLAW_STATE_DIR!, "workspaces", "workspace-1", "agents", "finance"),
+                heartbeat: { every: "30m", target: "none" },
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
     const applied = await applyBustlyRuntimeManifest({
       workspaceId: "workspace-1",
       workspaceName: "Workspace One",
@@ -162,6 +264,10 @@ describe("bustly runtime manifest", () => {
       agentId: "bustly-workspace-1-overview",
       presetAgentsApplied: 1,
     });
+    expect(requestHeartbeatNowMock.mock.calls).toEqual([
+      [{ reason: "wake", coalesceMs: 0, agentId: "bustly-workspace-1-store-ops" }],
+      [{ reason: "wake", coalesceMs: 0, agentId: "bustly-workspace-1-finance" }],
+    ]);
   });
 
   it("bootstraps runtime with shared remote presets when none are provided", async () => {
@@ -228,5 +334,48 @@ describe("bustly runtime manifest", () => {
         selectedModelInput: "bustly/chat.ultra",
       }),
     ).rejects.toThrow("workspaceId is required");
+  });
+
+  it("does not queue first-entry heartbeats once workspace heartbeat state exists", async () => {
+    mkdirSync(path.dirname(process.env.OPENCLAW_CONFIG_PATH!), { recursive: true });
+    writeFileSync(
+      process.env.OPENCLAW_CONFIG_PATH!,
+      JSON.stringify(
+        {
+          agents: {
+            defaults: {},
+            list: [
+              {
+                id: "bustly-workspace-1-store-ops",
+                workspace: path.join(process.env.OPENCLAW_STATE_DIR!, "workspaces", "workspace-1", "agents", "store-ops"),
+                heartbeat: { every: "30m", target: "none" },
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const heartbeatStateDir = path.join(
+      process.env.OPENCLAW_STATE_DIR!,
+      "workspaces",
+      "workspace-1",
+      "heartbeats",
+    );
+    mkdirSync(heartbeatStateDir, { recursive: true });
+    writeFileSync(
+      path.join(heartbeatStateDir, "bustly-workspace-1-store-ops.json"),
+      "{}\n",
+      "utf-8",
+    );
+
+    await applyBustlyRuntimeManifest({
+      workspaceId: "workspace-1",
+      workspaceName: "Workspace One",
+    });
+
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 });

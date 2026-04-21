@@ -6,6 +6,7 @@ import {
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveBustlyDefaultInstalledSkillTokens } from "../../bustly/skill-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
   ParsedSkillFrontmatter,
@@ -118,6 +119,46 @@ function filterSkillEntries(
     );
   }
   return filtered;
+}
+
+function normalizeBundledSkillToken(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[\"'’]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-+/g, "-");
+}
+
+function shouldEnforceSkillOpsBundledPolicy(bundledSkillsDir: string | undefined): boolean {
+  if (!bundledSkillsDir) {
+    return false;
+  }
+  const normalized = bundledSkillsDir.replaceAll("\\", "/").toLowerCase();
+  return normalized.endsWith("/bustly-skills/skills") || normalized.includes("/bustly-skills/skills/");
+}
+
+function filterBundledSkillsByDefaultInstalled(
+  bundledSkills: Skill[],
+  bundledSkillsDir: string | undefined,
+): Skill[] {
+  if (!shouldEnforceSkillOpsBundledPolicy(bundledSkillsDir)) {
+    return bundledSkills;
+  }
+  const defaultTokens = resolveBustlyDefaultInstalledSkillTokens();
+  if (defaultTokens.size === 0) {
+    return [];
+  }
+  return bundledSkills.filter((skill) => {
+    const nameToken = normalizeBundledSkillToken(skill.name);
+    const dirToken = normalizeBundledSkillToken(path.basename(skill.baseDir));
+    return Boolean(
+      (nameToken && defaultTokens.has(nameToken))
+      || (dirToken && defaultTokens.has(dirToken)),
+    );
+  });
 }
 
 const SKILL_COMMAND_MAX_LENGTH = 32;
@@ -377,6 +418,7 @@ function loadSkillEntries(
         source: "openclaw-bundled",
       })
     : [];
+  const filteredBundledSkills = filterBundledSkillsByDefaultInstalled(bundledSkills, bundledSkillsDir);
   const extraSkills = mergedExtraDirs.flatMap((dir) => {
     const resolved = resolveUserPath(dir);
     return loadSkills({
@@ -412,7 +454,7 @@ function loadSkillEntries(
   for (const skill of extraSkills) {
     merged.set(skill.name, skill);
   }
-  for (const skill of bundledSkills) {
+  for (const skill of filteredBundledSkills) {
     merged.set(skill.name, skill);
   }
   for (const skill of managedSkills) {

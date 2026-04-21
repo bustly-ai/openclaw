@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE,
   createBustlyWorkspaceAgent,
   createBustlyWorkspaceAgentSession,
   deleteBustlyWorkspaceAgent,
@@ -170,10 +171,123 @@ describe("workspace-agents", () => {
     const sessions = listBustlyWorkspaceAgentSessions({
       workspaceId: "workspace-1",
       agentId: "bustly-workspace-1-overview",
+      includeHeartbeatMainSessions: true,
     });
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.sessionKey).toBe(created.sessionKey);
+    expect(sessions[0]?.kind).toBe("conversation");
     expect(sessions[0]?.name).toBe("Daily pulse");
+  });
+
+  it("lists scheduled sessions and hides cron run aliases", () => {
+    const sessionsDir = path.join(stateDir, "agents", "bustly-workspace-1-overview", "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify(
+        {
+          "agent:bustly-workspace-1-overview:cron:drink-water": {
+            sessionId: "cron-session",
+            updatedAt: 300,
+            label: "提醒喝水",
+          },
+          "agent:bustly-workspace-1-overview:cron:drink-water:run:cron-session": {
+            sessionId: "cron-session",
+            updatedAt: 300,
+            label: "提醒喝水",
+          },
+          "agent:bustly-workspace-1-overview:conversation:daily-pulse": {
+            sessionId: "conversation-session",
+            updatedAt: 200,
+            label: "Daily pulse",
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const hiddenByDefault = listBustlyWorkspaceAgentSessions({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+    });
+    expect(hiddenByDefault).toEqual([]);
+
+    const sessions = listBustlyWorkspaceAgentSessions({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+      includeHeartbeatMainSessions: true,
+    });
+
+    expect(sessions).toEqual([
+      {
+        agentId: "bustly-workspace-1-overview",
+        sessionKey: "agent:bustly-workspace-1-overview:cron:drink-water",
+        kind: "scheduled",
+        name: "提醒喝水",
+        icon: undefined,
+        updatedAt: 300,
+      },
+      {
+        agentId: "bustly-workspace-1-overview",
+        sessionKey: "agent:bustly-workspace-1-overview:conversation:daily-pulse",
+        kind: "conversation",
+        name: "Daily pulse",
+        icon: undefined,
+        updatedAt: 200,
+      },
+    ]);
+  });
+
+  it("lists heartbeat main sessions in the agent session list", () => {
+    const sessionsDir = path.join(stateDir, "agents", "bustly-workspace-1-overview", "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify(
+        {
+          "agent:bustly-workspace-1-overview:main": {
+            sessionId: "heartbeat-session",
+            updatedAt: 400,
+            lastTo: "heartbeat",
+            origin: {
+              provider: "heartbeat",
+              label: "heartbeat",
+              from: "heartbeat",
+              to: "heartbeat",
+            },
+            deliveryContext: {
+              to: "heartbeat",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const hiddenByDefault = listBustlyWorkspaceAgentSessions({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+    });
+    expect(hiddenByDefault).toEqual([]);
+
+    const sessions = listBustlyWorkspaceAgentSessions({
+      workspaceId: "workspace-1",
+      agentId: "bustly-workspace-1-overview",
+      includeHeartbeatMainSessions: true,
+    });
+
+    expect(sessions).toEqual([
+      {
+        agentId: "bustly-workspace-1-overview",
+        sessionKey: "agent:bustly-workspace-1-overview:main",
+        kind: "heartbeat",
+        name: "Heartbeat",
+        icon: undefined,
+        updatedAt: 400,
+      },
+    ]);
   });
 
   it("deletes a non-main workspace agent and removes directories", async () => {
@@ -260,6 +374,14 @@ describe("workspace-agents", () => {
         requireAgentMetadata: true,
       }),
     );
+    const nextConfig = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+    const marketingEntry = nextConfig.agents?.list?.find(
+      (entry) => entry.id === `bustly-${normalizedWorkspaceId}-marketing`,
+    );
+    expect(marketingEntry?.heartbeat).toMatchObject({
+      every: "30m",
+      target: "none",
+    });
   });
 
   it("loads preset agents from bootstrap config when presets are omitted", async () => {
@@ -283,11 +405,30 @@ describe("workspace-agents", () => {
         requireAgentMetadata: true,
       }),
     );
+    const nextConfig = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+    const financeEntry = nextConfig.agents?.list?.find(
+      (entry) => entry.id === "bustly-workspace-1-finance",
+    );
+    expect(financeEntry?.heartbeat).toMatchObject({
+      every: "30m",
+      target: "none",
+    });
   });
 
   it("skips bootstrap when the preset agent already exists on disk", async () => {
     const existingDir = path.join(stateDir, "workspaces", "workspace-1", "agents", "marketing");
     mkdirSync(existingDir, { recursive: true });
+    writeFileSync(
+      path.join(existingDir, ".bustly-agent.json"),
+      JSON.stringify(
+        {
+          createdAt: BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE + 60_000,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
 
     const bootstrapped = await ensureBustlyWorkspacePresetAgents({
       workspaceId: "workspace-1",
@@ -299,11 +440,175 @@ describe("workspace-agents", () => {
 
     expect(bootstrapped).toBe(0);
     expect(bootstrapMock).not.toHaveBeenCalled();
-    expect(existsSync(path.join(existingDir, ".bustly-agent.json"))).toBe(false);
+    const metadata = JSON.parse(
+      readFileSync(path.join(existingDir, ".bustly-agent.json"), "utf-8"),
+    ) as { createdAt?: number };
+    expect(metadata.createdAt).toBe(BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE + 60_000);
 
     const nextConfig = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
     expect(
       nextConfig.agents?.list?.some((entry) => entry.id === "bustly-workspace-1-marketing"),
     ).toBe(true);
+  });
+
+  it("force-refreshes legacy preset agents created before the cutoff", async () => {
+    const existingDir = path.join(stateDir, "workspaces", "workspace-1", "agents", "marketing");
+    mkdirSync(existingDir, { recursive: true });
+    const legacyCreatedAt = BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE - 60_000;
+    writeFileSync(
+      path.join(existingDir, ".bustly-agent.json"),
+      JSON.stringify(
+        {
+          createdAt: legacyCreatedAt,
+          icon: "OldIcon",
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+    config.agents = {
+      ...config.agents,
+      list: [
+        ...(config.agents?.list ?? []),
+        {
+          id: "bustly-workspace-1-marketing",
+          name: "Marketing",
+          workspace: existingDir,
+        },
+      ],
+    };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const bootstrapped = await ensureBustlyWorkspacePresetAgents({
+      workspaceId: "workspace-1",
+      workspaceName: "Workspace One",
+      presets: [{ slug: "marketing", label: "Marketing", icon: "TrendUp", isMain: false }],
+      configPath,
+      env: process.env,
+    });
+
+    expect(bootstrapped).toBe(1);
+    expect(bootstrapMock).toHaveBeenCalledTimes(1);
+    const metadata = JSON.parse(
+      readFileSync(path.join(existingDir, ".bustly-agent.json"), "utf-8"),
+    ) as { createdAt?: number; icon?: string };
+    expect(typeof metadata.createdAt).toBe("number");
+    expect((metadata.createdAt ?? 0) > legacyCreatedAt).toBe(true);
+    expect(metadata.icon).toBe("OldIcon");
+  });
+
+  it("preserves template-provided IDENTITY name for preset agents", async () => {
+    bootstrapMock.mockImplementationOnce(async (params: unknown) => {
+      const typed = params as { workspaceDir: string };
+      mkdirSync(typed.workspaceDir, { recursive: true });
+      writeFileSync(
+        path.join(typed.workspaceDir, "IDENTITY.md"),
+        [
+          "<!-- Managed by Bustly bootstrap. Edit with care. -->",
+          "# IDENTITY.md - Agent Identity",
+          "",
+          "- **Name:** Bustly Store Ops",
+          "- **Role:** Store Operations Operator",
+          "",
+          "## Mission",
+          "",
+          "Keep {{WORKSPACE_NAME}} operationally healthy.",
+          "",
+        ].join("\n"),
+      );
+    });
+
+    const created = await createBustlyWorkspaceAgent({
+      workspaceId: "workspace-1",
+      agentName: "store-ops",
+      displayName: "Store Ops",
+      preserveTemplateIdentityName: true,
+      configPath,
+      env: process.env,
+    });
+
+    const identity = readFileSync(path.join(created.workspaceDir, "IDENTITY.md"), "utf-8");
+    expect(identity).toContain("- **Name:** Bustly Store Ops");
+    expect(identity).not.toContain("- Name: Store Ops");
+  });
+
+  it("refreshes existing preset agent templates during ensure", async () => {
+    const fullWorkspaceId = "412d0ede-8926-4f70-a611-b3b466596399";
+    const normalizedWorkspaceId = "412d0ede";
+    const marketingWorkspaceDir = path.join(
+      stateDir,
+      "workspaces",
+      normalizedWorkspaceId,
+      "agents",
+      "marketing",
+    );
+    mkdirSync(marketingWorkspaceDir, { recursive: true });
+    writeFileSync(path.join(marketingWorkspaceDir, "IDENTITY.md"), "stale identity\n");
+
+    const seedConfig: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: `bustly-${normalizedWorkspaceId}-overview`,
+            name: "Overview",
+            workspace: path.join(stateDir, "workspaces", normalizedWorkspaceId, "agents", "overview"),
+            default: true,
+          },
+          {
+            id: `bustly-${normalizedWorkspaceId}-marketing`,
+            name: "Marketing",
+            workspace: marketingWorkspaceDir,
+          },
+        ],
+      },
+    };
+    writeFileSync(configPath, JSON.stringify(seedConfig, null, 2));
+
+    bootstrapMock.mockImplementation(async (params: unknown) => {
+      const typed = params as { workspaceDir: string; agentName?: string };
+      if (typed.agentName === "marketing") {
+        mkdirSync(typed.workspaceDir, { recursive: true });
+        writeFileSync(
+          path.join(typed.workspaceDir, "IDENTITY.md"),
+          [
+            "<!-- Managed by Bustly bootstrap. Edit with care. -->",
+            "# IDENTITY.md - Agent Identity",
+            "",
+            "- **Name:** Bustly Marketing",
+            "- **Role:** Growth and Paid Acquisition Operator",
+            "",
+            "## Mission",
+            "",
+            "Protect growth.",
+            "",
+          ].join("\n"),
+        );
+      }
+    });
+
+    await ensureBustlyWorkspacePresetAgents({
+      workspaceId: fullWorkspaceId,
+      workspaceName: "Workspace One",
+      presets: [
+        { slug: "overview", label: "Overview", isMain: true },
+        { slug: "marketing", label: "Marketing", icon: "TrendUp" },
+      ],
+      configPath,
+      env: process.env,
+    });
+
+    expect(bootstrapMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: fullWorkspaceId,
+        workspaceDir: marketingWorkspaceDir,
+        agentName: "marketing",
+      }),
+    );
+    const identity = readFileSync(path.join(marketingWorkspaceDir, "IDENTITY.md"), "utf-8");
+    expect(identity).toContain("Bustly Marketing");
+    expect(identity).not.toContain("stale identity");
   });
 });

@@ -13,6 +13,7 @@ export type HeartbeatWakeHandler = (opts: {
   reason?: string;
   agentId?: string;
   sessionKey?: string;
+  skipAgentIds?: string[];
 }) => Promise<HeartbeatRunResult>;
 
 type WakeTimerKind = "normal" | "retry";
@@ -142,26 +143,71 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
       return;
     }
 
-    const pendingBatch = Array.from(pendingWakes.values());
+    const pendingBatch = Array.from(pendingWakes.values()).sort((left, right) => {
+      if (left.priority !== right.priority) {
+        return right.priority - left.priority;
+      }
+      return left.requestedAt - right.requestedAt;
+    });
     pendingWakes.clear();
     running = true;
     try {
-      for (const pendingWake of pendingBatch) {
-        const wakeOpts = {
-          reason: pendingWake.reason ?? undefined,
-          ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
-          ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
-        };
-        const res = await active(wakeOpts);
-        if (res.status === "skipped" && res.reason === "requests-in-flight") {
+      let shouldRetry = false;
+      const targetedAgentIds = Array.from(
+        new Set(
+          pendingBatch
+            .map((pendingWake) => pendingWake.agentId?.trim())
+            .filter((agentId): agentId is string => Boolean(agentId)),
+        ),
+      );
+      const pendingResults = await Promise.all(
+        pendingBatch.map(async (pendingWake) => {
+          const wakeOpts: Parameters<HeartbeatWakeHandler>[0] = {
+            reason: pendingWake.reason ?? undefined,
+            ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
+            ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
+            ...(pendingWake.reason === "interval" && targetedAgentIds.length > 0
+              ? { skipAgentIds: targetedAgentIds }
+              : {}),
+          };
+          try {
+            return {
+              pendingWake,
+              wakeResult: await active(wakeOpts),
+            } as const;
+          } catch {
+            return {
+              pendingWake,
+              wakeResult: null,
+            } as const;
+          }
+        }),
+      );
+      for (const pendingResult of pendingResults) {
+        if (!pendingResult.wakeResult) {
+          queuePendingWakeReason({
+            reason: pendingResult.pendingWake.reason ?? "retry",
+            agentId: pendingResult.pendingWake.agentId,
+            sessionKey: pendingResult.pendingWake.sessionKey,
+          });
+          shouldRetry = true;
+          continue;
+        }
+        if (
+          pendingResult.wakeResult.status === "skipped" &&
+          pendingResult.wakeResult.reason === "requests-in-flight"
+        ) {
           // The main lane is busy; retry this wake target soon.
           queuePendingWakeReason({
-            reason: pendingWake.reason ?? "retry",
-            agentId: pendingWake.agentId,
-            sessionKey: pendingWake.sessionKey,
+            reason: pendingResult.pendingWake.reason ?? "retry",
+            agentId: pendingResult.pendingWake.agentId,
+            sessionKey: pendingResult.pendingWake.sessionKey,
           });
-          schedule(DEFAULT_RETRY_MS, "retry");
+          shouldRetry = true;
         }
+      }
+      if (shouldRetry) {
+        schedule(DEFAULT_RETRY_MS, "retry");
       }
     } catch {
       // Error is already logged by the heartbeat runner; schedule a retry.

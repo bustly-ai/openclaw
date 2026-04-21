@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyBustlyOnlyConfig,
+  BUSTLY_DEFAULT_HEARTBEAT_MODEL_REF,
   normalizeBustlyModelRef,
   syncBustlyConfigFile,
 } from "./runtime-config.js";
@@ -64,6 +65,7 @@ describe("applyBustlyOnlyConfig", () => {
       "User-Agent": "unit-test-agent",
       "X-Workspace-Id": "workspace-live",
     });
+    expect(next.agents?.defaults?.heartbeat?.model).toBe(BUSTLY_DEFAULT_HEARTBEAT_MODEL_REF);
   });
 });
 

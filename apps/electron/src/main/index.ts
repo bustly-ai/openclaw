@@ -1840,6 +1840,11 @@ async function startGateway(): Promise<boolean> {
     spawnEnv.ELECTRON_RUN_AS_NODE = "1";
     spawnEnv.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
     spawnEnv.OPENCLAW_ELECTRON_GATEWAY_BIND = gatewayBind;
+    if (process.env.NODE_ENV === "development") {
+      spawnEnv.OPENCLAW_ELECTRON_DEV = "1";
+    } else {
+      delete spawnEnv.OPENCLAW_ELECTRON_DEV;
+    }
     if (gatewayToken) {
       spawnEnv.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
     } else {
@@ -3110,11 +3115,14 @@ function setupIpcHandlers(): void {
 
   // Get app info
   ipcMain.handle("get-app-info", () => {
+    const environment = process.env.NODE_ENV || "production";
     return {
       version: app.getVersion(),
       name: app.getName(),
       electronVersion: process.versions.electron,
       nodeVersion: process.versions.node,
+      environment,
+      isDevelopment: environment === "development",
     };
   });
 
@@ -3326,6 +3334,23 @@ function setupIpcHandlers(): void {
       return { success: true };
     } catch (error) {
       writeMainError("[Bustly Workspace Settings] Error:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle("bustly-open-workspace-integrations", async (_event, workspaceId: string) => {
+    try {
+      const url = buildBustlyAdminUrl({
+        setting_modal: "integration",
+        workspace_id: workspaceId,
+      });
+      await shell.openExternal(url);
+      return { success: true };
+    } catch (error) {
+      writeMainError("[Bustly Workspace Integrations] Error:", error);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),

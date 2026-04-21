@@ -323,6 +323,21 @@ export function normalizeCronJobInput(
     }
   }
 
+  if ("reuseSession" in base) {
+    const reuseSession = base.reuseSession;
+    if (typeof reuseSession === "boolean") {
+      next.reuseSession = reuseSession;
+    } else if (typeof reuseSession === "string") {
+      const trimmed = reuseSession.trim().toLowerCase();
+      if (trimmed === "true") {
+        next.reuseSession = true;
+      }
+      if (trimmed === "false") {
+        next.reuseSession = false;
+      }
+    }
+  }
+
   if ("enabled" in base) {
     const enabled = base.enabled;
     if (typeof enabled === "boolean") {

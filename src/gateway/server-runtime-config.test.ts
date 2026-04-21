@@ -124,8 +124,10 @@ describe("resolveGatewayRuntimeConfig", () => {
       }
       delete process.env.BUSTLY_CONTROL_PLANE_BASE_URL;
       delete process.env.BUSTLY_RUNTIME_WORKSPACE_ID;
+      delete process.env.BUSTLY_RUNTIME_USER_ID;
       delete process.env.BUSTLY_RUNTIME_ID;
       delete process.env.BUSTLY_RUNTIME_TOKEN;
+      delete process.env.BUSTLY_GATEWAY_TOKEN_MODE;
     });
 
     it.each([
@@ -238,6 +240,7 @@ describe("resolveGatewayRuntimeConfig", () => {
     it("allows cloud runtime token mode without static token when control plane identity is present", async () => {
       process.env.BUSTLY_CONTROL_PLANE_BASE_URL = "https://cp.example.com";
       process.env.BUSTLY_RUNTIME_WORKSPACE_ID = "workspace-1";
+      process.env.BUSTLY_RUNTIME_USER_ID = "user-1";
       process.env.BUSTLY_RUNTIME_ID = "runtime-1";
       process.env.BUSTLY_RUNTIME_TOKEN = "runtime-token";
 
@@ -253,6 +256,29 @@ describe("resolveGatewayRuntimeConfig", () => {
 
       expect(result.authMode).toBe("token");
       expect(typeof result.resolvedAuth.verifier).toBe("function");
+    });
+
+    it("keeps static token auth for cloud runtime when static gateway token mode is enabled", async () => {
+      process.env.BUSTLY_CONTROL_PLANE_BASE_URL = "https://cp.example.com";
+      process.env.BUSTLY_RUNTIME_WORKSPACE_ID = "workspace-1";
+      process.env.BUSTLY_RUNTIME_USER_ID = "user-1";
+      process.env.BUSTLY_RUNTIME_ID = "runtime-1";
+      process.env.BUSTLY_RUNTIME_TOKEN = "runtime-token";
+      process.env.BUSTLY_GATEWAY_TOKEN_MODE = "static";
+
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "token", token: "static-runtime-token" },
+          },
+        },
+        port: 18789,
+      });
+
+      expect(result.authMode).toBe("token");
+      expect(result.resolvedAuth.token).toBe("static-runtime-token");
+      expect(result.resolvedAuth.verifier).toBeUndefined();
     });
   });
 

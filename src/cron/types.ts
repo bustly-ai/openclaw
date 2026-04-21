@@ -112,6 +112,8 @@ export type CronJob = {
   agentId?: string;
   /** Origin session namespace for reminder delivery and wake routing. */
   sessionKey?: string;
+  /** Reuse a dedicated isolated session instead of forcing a fresh run transcript each time. */
+  reuseSession?: boolean;
   name: string;
   description?: string;
   enabled: boolean;
