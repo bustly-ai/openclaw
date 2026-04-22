@@ -27,6 +27,7 @@
     "lint": "oxlint",
     "format": "oxfmt",
     "test-update": "node scripts/pack-run-mac.js",
+    "pack:test": "pnpm prepare:openclaw-deps && pnpm pack:dmg && pnpm upload:test",
     "pack:dmg": "CSC_IDENTITY_AUTO_DISCOVERY=false node scripts/build-release.js --platform mac --arch arm64 --target dmg --env-file .env.internal --skip-notarize --mac-identity-null",
     "pack:dmg:x64": "CSC_IDENTITY_AUTO_DISCOVERY=false node scripts/build-release.js --platform mac --arch x64 --target dmg --env-file .env.internal --skip-notarize --mac-identity-null",
     "pack:release": "node scripts/build-release.js --env-file .env.production",
@@ -127,6 +128,13 @@
       "icon": null
     },
     "extraResources": [
+      {
+        "from": "resources/bustly-skills",
+        "to": "bustly-skills",
+        "filter": [
+          "**/*"
+        ]
+      },
       {
         "from": "resources/openclaw/node_modules",
         "to": "node_modules",
