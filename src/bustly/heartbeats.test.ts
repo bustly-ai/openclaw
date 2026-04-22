@@ -7,6 +7,7 @@ import {
   parseBustlyHeartbeatMarkdown,
   reconcileBustlyHeartbeatState,
   resolveBustlyHeartbeatHealthSummary,
+  updateBustlyHeartbeatEventStatus,
 } from "./heartbeats.js";
 
 describe("parseBustlyHeartbeatEventsJson", () => {
@@ -145,7 +146,7 @@ describe("reconcileBustlyHeartbeatState", () => {
     });
   });
 
-  it("reopens previously resolved events when they reappear", () => {
+  it("reopens previously handled events when they reappear", () => {
     const previous = {
       agentId: "agent-a",
       lastScanAt: 1_000,
@@ -159,7 +160,7 @@ describe("reconcileBustlyHeartbeatState", () => {
           title: "Payment risk",
           message: "3 failed payouts in a row",
           actionPrompt: "Audit payout settings and retry.",
-          status: "resolved" as const,
+          status: "seen" as const,
           createdAt: 800,
           updatedAt: 1_000,
         },
@@ -232,7 +233,7 @@ describe("resolveBustlyHeartbeatHealthSummary", () => {
     expect(summary.status).toBe("Warning");
   });
 
-  it("ignores resolved events for status escalation", () => {
+  it("ignores seen/actioned events for status escalation", () => {
     const summary = resolveBustlyHeartbeatHealthSummary({
       lastScanAt: 3,
       events: [
@@ -243,7 +244,18 @@ describe("resolveBustlyHeartbeatHealthSummary", () => {
           title: "Resolved critical",
           message: "Resolved critical message",
           actionPrompt: "None",
-          status: "resolved",
+          status: "seen",
+          createdAt: 3,
+          updatedAt: 3,
+        },
+        {
+          id: "evt-2",
+          agentId: "agent-a",
+          severity: "warning",
+          title: "Actioned warning",
+          message: "Actioned warning message",
+          actionPrompt: "None",
+          status: "actioned",
           createdAt: 3,
           updatedAt: 3,
         },
@@ -270,5 +282,57 @@ describe("resolveBustlyHeartbeatHealthSummary", () => {
       ],
     });
     expect(summary.status).toBe("Healthy");
+  });
+});
+
+describe("updateBustlyHeartbeatEventStatus", () => {
+  it("updates status and timestamp for the matched event", () => {
+    const result = updateBustlyHeartbeatEventStatus({
+      state: {
+        agentId: "agent-a",
+        lastScanAt: 1_000,
+        lastPayloadText: "payload",
+        lastPayloadAt: 1_000,
+        events: [
+          {
+            id: "evt-1",
+            agentId: "agent-a",
+            severity: "warning",
+            title: "Inventory drift",
+            message: "Stock mismatch found",
+            actionPrompt: "Recount inventory",
+            status: "open",
+            createdAt: 100,
+            updatedAt: 200,
+          },
+        ],
+      },
+      eventId: "evt-1",
+      status: "actioned",
+      updatedAt: 2_000,
+    });
+    expect(result.event).toMatchObject({
+      id: "evt-1",
+      status: "actioned",
+      updatedAt: 2_000,
+    });
+    expect(result.state.events[0]?.status).toBe("actioned");
+  });
+
+  it("returns null event when no matching id exists", () => {
+    const state = {
+      agentId: "agent-a",
+      lastScanAt: null,
+      lastPayloadText: "",
+      lastPayloadAt: null,
+      events: [],
+    };
+    const result = updateBustlyHeartbeatEventStatus({
+      state,
+      eventId: "missing",
+      status: "seen",
+    });
+    expect(result.event).toBeNull();
+    expect(result.state).toEqual(state);
   });
 });
