@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../../agents/workspace.js";
@@ -21,10 +21,14 @@ import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   listActiveHeartbeatRuns,
+  recordExternalHeartbeatRun,
   runHeartbeatOnce,
   setHeartbeatsEnabled,
 } from "../../infra/heartbeat-runner.js";
+import { emitBustlyHeartbeatEvent } from "../../infra/bustly-heartbeat-events.js";
 import { listBustlyWorkspaceAgents } from "../../bustly/workspace-agents.js";
+import { normalizeBustlyWorkspaceId } from "../../bustly/workspace-agent.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -145,10 +149,24 @@ function buildHeartbeatListItem(params: {
 }
 
 async function listWorkspaceHeartbeats(workspaceId: string) {
+  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(workspaceId);
+  const heartbeatsDir = path.join(
+    resolveStateDir(process.env),
+    "workspaces",
+    normalizedWorkspaceId,
+    "heartbeats",
+  );
+  let heartbeatStateFiles: string[] = [];
+  try {
+    heartbeatStateFiles = readdirSync(heartbeatsDir).filter((entry) => entry.endsWith(".json"));
+  } catch {
+    heartbeatStateFiles = [];
+  }
   const agents = listBustlyWorkspaceAgents({ workspaceId }).filter((agent) => !agent.isMain);
   const cards = [];
-  let initialized = false;
+  let initialized = heartbeatStateFiles.length > 0;
   let hasEvents = false;
+  const agentStateSummary: string[] = [];
   for (const agent of agents) {
     const statePath = resolveBustlyHeartbeatStatePath({
       workspaceId,
@@ -162,6 +180,9 @@ async function listWorkspaceHeartbeats(workspaceId: string) {
       workspaceId,
       agentId: agent.agentId,
     });
+    agentStateSummary.push(
+      `${agent.agentId}|json=${hasStateJson ? "1" : "0"}|events=${heartbeatState.events.length}`,
+    );
     if (heartbeatState.events.length > 0) {
       hasEvents = true;
     }
@@ -199,6 +220,18 @@ async function listWorkspaceHeartbeats(workspaceId: string) {
         null,
       ) ?? null,
   });
+
+  console.info(
+    `[bustly.heartbeats.list] workspace=${workspaceId} normalized=${normalizedWorkspaceId} ` +
+      `heartbeatsDir=${heartbeatsDir} ` +
+      `agents=${agents.length} heartbeatJsonFiles=${heartbeatStateFiles.length} ` +
+      `initialized=${initialized} hasEvents=${hasEvents}`,
+  );
+  if (agents.length > 0) {
+    console.info(
+      `[bustly.heartbeats.list] workspace=${workspaceId} agentState=${agentStateSummary.join(";")}`,
+    );
+  }
 
   return {
     workspaceId,
@@ -248,6 +281,101 @@ function listWorkspaceRunningHeartbeats(workspaceId: string) {
     workspaceId,
     hasRunningHeartbeats: runs.length > 0,
     runs,
+  };
+}
+
+type HeartbeatScanRun = {
+  agentId: string;
+  result:
+    | { status: "ran"; durationMs: number }
+    | { status: "skipped"; reason: string }
+    | { status: "failed"; reason: string };
+};
+
+type WorkspaceHeartbeatScanResult = Awaited<ReturnType<typeof listWorkspaceHeartbeats>> & {
+  runs: HeartbeatScanRun[];
+};
+
+const workspaceHeartbeatScanInFlight = new Map<
+  string,
+  Promise<WorkspaceHeartbeatScanResult>
+>();
+
+function resolveWorkspaceScanKey(workspaceId: string): string {
+  return normalizeBustlyWorkspaceId(workspaceId) || workspaceId;
+}
+
+function getOrStartWorkspaceHeartbeatScan(params: {
+  workspaceId: string;
+  force: boolean;
+  source: string;
+}): Promise<WorkspaceHeartbeatScanResult> {
+  const scanKey = resolveWorkspaceScanKey(params.workspaceId);
+  const inFlight = workspaceHeartbeatScanInFlight.get(scanKey);
+  if (inFlight) {
+    console.info(
+      `[bustly.heartbeats.scan] workspace=${params.workspaceId} source=${params.source} force=${params.force} action=join-inflight`,
+    );
+    return inFlight;
+  }
+  const scanPromise = runWorkspaceHeartbeatScan({
+    workspaceId: params.workspaceId,
+    force: params.force,
+    source: params.source,
+  }).finally(() => {
+    workspaceHeartbeatScanInFlight.delete(scanKey);
+  });
+  workspaceHeartbeatScanInFlight.set(scanKey, scanPromise);
+  return scanPromise;
+}
+
+async function runWorkspaceHeartbeatScan(params: {
+  workspaceId: string;
+  force: boolean;
+  source: string;
+}): Promise<WorkspaceHeartbeatScanResult> {
+  const beforeScan = await listWorkspaceHeartbeats(params.workspaceId);
+  const enabledHeartbeats = beforeScan.heartbeats.filter((item) => item.enabled);
+  console.info(
+    `[bustly.heartbeats.scan] workspace=${params.workspaceId} source=${params.source} force=${params.force} ` +
+      `initializedBefore=${beforeScan.initialized} hasEventsBefore=${beforeScan.hasEvents} enabledAgents=${enabledHeartbeats.length}`,
+  );
+  if (beforeScan.initialized && !params.force) {
+    console.info(
+      `[bustly.heartbeats.scan] workspace=${params.workspaceId} source=${params.source} action=skip-initialized`,
+    );
+    return {
+      runs: [],
+      ...beforeScan,
+    };
+  }
+  setHeartbeatsEnabled(true);
+  const runs = await Promise.all(
+    enabledHeartbeats.map(async (heartbeat) => {
+      const startedAt = Date.now();
+      const result = await runHeartbeatOnce({
+        cfg: loadConfig(),
+        agentId: heartbeat.agentId,
+        reason: "wake",
+        force: true,
+      });
+      if (result.status !== "skipped" || result.reason !== "disabled") {
+        recordExternalHeartbeatRun(heartbeat.agentId, startedAt);
+      }
+      return {
+        agentId: heartbeat.agentId,
+        result,
+      };
+    }),
+  );
+  const afterScan = await listWorkspaceHeartbeats(params.workspaceId);
+  console.info(
+    `[bustly.heartbeats.scan] workspace=${params.workspaceId} source=${params.source} ` +
+      `runs=${runs.length} initializedAfter=${afterScan.initialized} hasEventsAfter=${afterScan.hasEvents}`,
+  );
+  return {
+    runs,
+    ...afterScan,
   };
 }
 
@@ -413,6 +541,12 @@ function updateHeartbeatEventStatus(params: {
     agentId: agent.agentId,
     state: nextState,
   });
+  emitBustlyHeartbeatEvent({
+    workspaceId: params.workspaceId,
+    agentId: agent.agentId,
+    action: "status-updated",
+    event,
+  });
   return {
     ...event,
     agentName: agent.name,
@@ -438,7 +572,19 @@ export const bustlyHeartbeatHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      respond(true, await listWorkspaceHeartbeats(workspaceId), undefined);
+      const result = await listWorkspaceHeartbeats(workspaceId);
+      respond(true, result, undefined);
+      if (!result.initialized && result.heartbeats.some((item) => item.enabled)) {
+        void getOrStartWorkspaceHeartbeatScan({
+          workspaceId,
+          force: false,
+          source: "gateway-list-init",
+        }).catch((err) => {
+          console.warn(
+            `[bustly.heartbeats.scan] workspace=${workspaceId} source=gateway-list-init action=background-failed error=${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      }
     } catch (err) {
       respond(
         false,
@@ -667,6 +813,11 @@ export const bustlyHeartbeatHandlers: GatewayRequestHandlers = {
   "bustly.heartbeats.scan": async ({ params, respond }) => {
     try {
       const workspaceId = resolveWorkspaceIdParam(params);
+      const source =
+        typeof params.source === "string" && params.source.trim()
+          ? params.source.trim()
+          : "unknown";
+      const force = params.force === true;
       if (!workspaceId) {
         respond(
           true,
@@ -683,28 +834,12 @@ export const bustlyHeartbeatHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      setHeartbeatsEnabled(true);
-      const heartbeats = await listWorkspaceHeartbeats(workspaceId);
-      const enabledHeartbeats = heartbeats.heartbeats.filter((item) => item.enabled);
-      const runs = await Promise.all(
-        enabledHeartbeats.map(async (heartbeat) => ({
-          agentId: heartbeat.agentId,
-          result: await runHeartbeatOnce({
-            cfg: loadConfig(),
-            agentId: heartbeat.agentId,
-            reason: "wake",
-            force: true,
-          }),
-        })),
-      );
-      respond(
-        true,
-        {
-          runs,
-          ...(await listWorkspaceHeartbeats(workspaceId)),
-        },
-        undefined,
-      );
+      const result = await getOrStartWorkspaceHeartbeatScan({
+        workspaceId,
+        force,
+        source,
+      });
+      respond(true, result, undefined);
     } catch (err) {
       respond(
         false,

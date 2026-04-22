@@ -29,6 +29,7 @@ import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
+import { onBustlyHeartbeatEvent } from "../infra/bustly-heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
@@ -522,9 +523,18 @@ export async function startGatewayServer(
 
   const heartbeatUnsub = minimalTestGateway
     ? null
-    : onHeartbeatEvent((evt) => {
-        broadcast("heartbeat", evt, { dropIfSlow: true });
-      });
+    : (() => {
+        const legacyUnsub = onHeartbeatEvent((evt) => {
+          broadcast("heartbeat", evt, { dropIfSlow: true });
+        });
+        const bustlyUnsub = onBustlyHeartbeatEvent((evt) => {
+          broadcast("heartbeat", evt, { dropIfSlow: true });
+        });
+        return () => {
+          legacyUnsub();
+          bustlyUnsub();
+        };
+      })();
 
   let heartbeatRunner: HeartbeatRunner = minimalTestGateway
     ? {

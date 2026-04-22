@@ -335,7 +335,7 @@ export type BustlyTokenApiResponse = {
  * Returns the full API response including extras field
  */
 export async function exchangeToken(code: string): Promise<BustlyTokenApiResponse> {
-  const clientId = process.env.BUSTLY_CLIENT_ID ?? "openclaw-desktop";
+  const clientId = process.env.BUSTLY_CLIENT_ID ?? "bustly-desktop";
 
   const apiBaseUrl = resolveBustlyAccountApiBaseUrl();
   const apiEndpoint = `${apiBaseUrl}/api/oauth/getToken`;

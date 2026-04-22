@@ -6,6 +6,7 @@ import {
   shell,
   powerSaveBlocker,
   dialog,
+  Notification,
   Menu,
   type MenuItemConstructorOptions,
   type OpenDialogOptions,
@@ -277,6 +278,10 @@ let gatewayLastWorkerFailure: {
   kind: "config" | "runtime";
   message: string;
 } | null = null;
+let gatewayHeartbeatNotificationWs: WebSocket | null = null;
+let gatewayHeartbeatNotificationReconnectTimer: NodeJS.Timeout | null = null;
+let gatewayHeartbeatNotificationsActive = false;
+const seenHeartbeatNotificationKeys = new Map<string, number>();
 type BustlyLoginAttemptState =
   | "pending"
   | "exchanging"
@@ -717,6 +722,11 @@ function applyInitializationResult(result: InitializationResult): void {
 const GATEWAY_HOST = "127.0.0.1";
 const GATEWAY_PROTOCOL_VERSION = 3;
 const GATEWAY_TASKS_STATUS_TIMEOUT_MS = 2_000;
+const GATEWAY_HEARTBEAT_NOTIFIER_HANDSHAKE_TIMEOUT_MS = 5_000;
+const GATEWAY_HEARTBEAT_NOTIFIER_RECONNECT_MS = 5_000;
+const HEARTBEAT_NOTIFICATION_DEDUPE_TTL_MS = 24 * 60 * 60 * 1000;
+const HEARTBEAT_NOTIFICATION_DEDUPE_MAX = 500;
+const GATEWAY_HEARTBEAT_NOTIFIER_CLIENT_ID = "gateway-client";
 const BUSTLY_LOGIN_HASH = "/bustly-login";
 const BUSTLY_RENDERER_URL = process.env.BUSTLY_RENDERER_URL?.trim() || "";
 const PRELOAD_PATH = process.env.NODE_ENV === "development"
@@ -844,7 +854,7 @@ async function initializeGatewayRuntimeForBustlyWorkspace(params: {
     workspaceId,
     workspaceName: params.workspaceName,
     allowCreateConfig: true,
-    userAgent: "openclaw-desktop",
+    userAgent: "bustly-desktop",
     env: process.env,
   });
 
@@ -1735,6 +1745,7 @@ async function startGateway(): Promise<boolean> {
   const startAt = Date.now();
   if (gatewayProcess) {
     writeMainLog("Gateway already running");
+    startGatewayHeartbeatNotifications();
     emitGatewayLifecycle("ready");
     return true;
   }
@@ -1977,6 +1988,7 @@ async function startGateway(): Promise<boolean> {
         gatewayAutoRestartAttempt = 0;
         gatewayLastWorkerFailure = null;
         snapshotGatewayLastGoodConfig();
+        startGatewayHeartbeatNotifications();
         emitGatewayLifecycle("ready");
         resolvePromise(true);
       })
@@ -2024,6 +2036,7 @@ async function startGateway(): Promise<boolean> {
  */
 function stopGateway(): Promise<boolean> {
   return new Promise((resolve) => {
+    stopGatewayHeartbeatNotifications();
     if (!gatewayProcess) {
       writeMainInfo("Gateway not running");
       resolve(true);
@@ -2111,6 +2124,24 @@ type BustlyTasksStatus = {
   runningCount: number;
 };
 
+type BustlyHeartbeatNotificationEvent = {
+  kind: "heartbeat";
+  workspaceId: string;
+  agentId: string;
+  action: "opened" | "reopened" | "status-updated";
+  event: {
+    id: string;
+    agentId: string;
+    severity: "critical" | "warning" | "suggestion";
+    title: string;
+    message: string;
+    actionPrompt: string;
+    status: "open" | "seen" | "actioned";
+    createdAt: number;
+    updatedAt: number;
+  };
+};
+
 function normalizeGatewayTasksStatus(payload: unknown): BustlyTasksStatus {
   if (!payload || typeof payload !== "object") {
     return { hasRunningTasks: false, runningCount: 0 };
@@ -2129,6 +2160,298 @@ function normalizeGatewayTasksStatus(payload: unknown): BustlyTasksStatus {
     hasRunningTasks,
     runningCount,
   };
+}
+
+function clearGatewayHeartbeatNotificationReconnectTimer() {
+  if (!gatewayHeartbeatNotificationReconnectTimer) {
+    return;
+  }
+  clearTimeout(gatewayHeartbeatNotificationReconnectTimer);
+  gatewayHeartbeatNotificationReconnectTimer = null;
+}
+
+function pruneSeenHeartbeatNotificationKeys(nowMs: number) {
+  for (const [key, seenAt] of seenHeartbeatNotificationKeys) {
+    if (nowMs - seenAt > HEARTBEAT_NOTIFICATION_DEDUPE_TTL_MS) {
+      seenHeartbeatNotificationKeys.delete(key);
+    }
+  }
+  while (seenHeartbeatNotificationKeys.size > HEARTBEAT_NOTIFICATION_DEDUPE_MAX) {
+    const oldestKey = seenHeartbeatNotificationKeys.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    seenHeartbeatNotificationKeys.delete(oldestKey);
+  }
+}
+
+function normalizeHeartbeatNotificationEvent(
+  payload: unknown,
+): BustlyHeartbeatNotificationEvent | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const rec = payload as {
+    kind?: unknown;
+    workspaceId?: unknown;
+    agentId?: unknown;
+    action?: unknown;
+    event?: unknown;
+  };
+  if (rec.kind !== "heartbeat") {
+    return null;
+  }
+  if (typeof rec.workspaceId !== "string" || !rec.workspaceId.trim()) {
+    return null;
+  }
+  if (typeof rec.agentId !== "string" || !rec.agentId.trim()) {
+    return null;
+  }
+  const action =
+    rec.action === "opened" || rec.action === "reopened" || rec.action === "status-updated"
+      ? rec.action
+      : null;
+  if (!action) {
+    return null;
+  }
+  if (!rec.event || typeof rec.event !== "object") {
+    return null;
+  }
+  const event = rec.event as {
+    id?: unknown;
+    agentId?: unknown;
+    severity?: unknown;
+    title?: unknown;
+    message?: unknown;
+    actionPrompt?: unknown;
+    status?: unknown;
+    createdAt?: unknown;
+    updatedAt?: unknown;
+  };
+  const severity =
+    event.severity === "critical" || event.severity === "warning" || event.severity === "suggestion"
+      ? event.severity
+      : null;
+  const status = event.status === "open" || event.status === "seen" || event.status === "actioned"
+    ? event.status
+    : null;
+  if (
+    !severity ||
+    !status ||
+    typeof event.id !== "string" ||
+    !event.id.trim() ||
+    typeof event.agentId !== "string" ||
+    !event.agentId.trim() ||
+    typeof event.title !== "string" ||
+    typeof event.message !== "string" ||
+    typeof event.actionPrompt !== "string" ||
+    typeof event.createdAt !== "number" ||
+    !Number.isFinite(event.createdAt) ||
+    typeof event.updatedAt !== "number" ||
+    !Number.isFinite(event.updatedAt)
+  ) {
+    return null;
+  }
+  return {
+    kind: "heartbeat",
+    workspaceId: rec.workspaceId.trim(),
+    agentId: rec.agentId.trim(),
+    action,
+    event: {
+      id: event.id.trim(),
+      agentId: event.agentId.trim(),
+      severity,
+      title: event.title.trim(),
+      message: event.message.trim(),
+      actionPrompt: event.actionPrompt.trim(),
+      status,
+      createdAt: event.createdAt,
+      updatedAt: event.updatedAt,
+    },
+  };
+}
+
+function resolveHeartbeatNotificationTitle(
+  event: BustlyHeartbeatNotificationEvent["event"],
+): string {
+  const severityLabel =
+    event.severity === "critical"
+      ? "Critical"
+      : event.severity === "warning"
+        ? "Warning"
+        : "Suggestion";
+  const baseTitle = event.title || "Heartbeat event";
+  return `[${severityLabel}] ${baseTitle}`;
+}
+
+function showHeartbeatNotification(payload: BustlyHeartbeatNotificationEvent) {
+  if (!Notification.isSupported()) {
+    return;
+  }
+  if (payload.event.status !== "open") {
+    return;
+  }
+  if (payload.action === "status-updated") {
+    return;
+  }
+  const now = Date.now();
+  pruneSeenHeartbeatNotificationKeys(now);
+  const dedupeKey = `${payload.event.id}:${payload.event.updatedAt}:${payload.action}`;
+  if (seenHeartbeatNotificationKeys.has(dedupeKey)) {
+    return;
+  }
+  seenHeartbeatNotificationKeys.set(dedupeKey, now);
+
+  const notification = new Notification({
+    title: resolveHeartbeatNotificationTitle(payload.event),
+    body: payload.event.message || payload.event.actionPrompt || "Heartbeat needs attention",
+  });
+  notification.on("click", () => {
+    focusMainWindow();
+  });
+  notification.show();
+}
+
+function scheduleGatewayHeartbeatNotificationsReconnect() {
+  if (!gatewayHeartbeatNotificationsActive || gatewayHeartbeatNotificationReconnectTimer) {
+    return;
+  }
+  gatewayHeartbeatNotificationReconnectTimer = setTimeout(() => {
+    gatewayHeartbeatNotificationReconnectTimer = null;
+    void connectGatewayHeartbeatNotifications();
+  }, GATEWAY_HEARTBEAT_NOTIFIER_RECONNECT_MS);
+}
+
+async function connectGatewayHeartbeatNotifications() {
+  if (!gatewayHeartbeatNotificationsActive) {
+    return;
+  }
+  if (
+    gatewayHeartbeatNotificationWs &&
+    (gatewayHeartbeatNotificationWs.readyState === WebSocket.CONNECTING ||
+      gatewayHeartbeatNotificationWs.readyState === WebSocket.OPEN)
+  ) {
+    return;
+  }
+
+  const token = readGatewayTokenFromConfig() ?? gatewayToken;
+  const query = token ? `?token=${encodeURIComponent(token)}` : "";
+  const gatewayUrl = `ws://${GATEWAY_HOST}:${gatewayPort}${query}`;
+
+  const connectRequestId = randomUUID();
+  let connectSent = false;
+
+  const ws = new WebSocket(gatewayUrl, {
+    handshakeTimeout: GATEWAY_HEARTBEAT_NOTIFIER_HANDSHAKE_TIMEOUT_MS,
+  });
+  gatewayHeartbeatNotificationWs = ws;
+
+  ws.on("message", (raw) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(typeof raw === "string" ? raw : raw.toString());
+    } catch {
+      return;
+    }
+    if (!parsed || typeof parsed !== "object") {
+      return;
+    }
+    const frame = parsed as {
+      type?: unknown;
+      event?: unknown;
+      payload?: unknown;
+      id?: unknown;
+      ok?: unknown;
+    };
+
+    if (frame.type === "event" && frame.event === "connect.challenge" && !connectSent) {
+      connectSent = true;
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: connectRequestId,
+          method: "connect",
+          params: {
+            minProtocol: GATEWAY_PROTOCOL_VERSION,
+            maxProtocol: GATEWAY_PROTOCOL_VERSION,
+            client: {
+              // Gateway validates client.id against a strict enum.
+              id: GATEWAY_HEARTBEAT_NOTIFIER_CLIENT_ID,
+              version: app.getVersion(),
+              platform: process.platform,
+              mode: "backend",
+            },
+            role: "operator",
+            scopes: ["operator.read"],
+            auth: token
+              ? {
+                  token,
+                  password: token,
+                }
+              : undefined,
+          },
+        }),
+      );
+      return;
+    }
+
+    if (frame.type === "res" && frame.id === connectRequestId) {
+      if (frame.ok !== true) {
+        writeMainWarn("[Gateway] Heartbeat notifier connect rejected");
+        try {
+          ws.close();
+        } catch {}
+      } else {
+        writeMainInfo("[Gateway] Heartbeat notifier connected");
+      }
+      return;
+    }
+
+    if (frame.type === "event" && frame.event === "heartbeat") {
+      const heartbeatEvent = normalizeHeartbeatNotificationEvent(frame.payload);
+      if (!heartbeatEvent) {
+        return;
+      }
+      showHeartbeatNotification(heartbeatEvent);
+    }
+  });
+
+  ws.once("error", (error) => {
+    writeMainWarn(
+      `[Gateway] Heartbeat notifier socket error: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
+
+  ws.once("close", () => {
+    if (gatewayHeartbeatNotificationWs === ws) {
+      gatewayHeartbeatNotificationWs = null;
+    }
+    if (gatewayHeartbeatNotificationsActive) {
+      scheduleGatewayHeartbeatNotificationsReconnect();
+    }
+  });
+}
+
+function startGatewayHeartbeatNotifications() {
+  if (isUpdaterHelperMode || !Notification.isSupported()) {
+    return;
+  }
+  gatewayHeartbeatNotificationsActive = true;
+  clearGatewayHeartbeatNotificationReconnectTimer();
+  void connectGatewayHeartbeatNotifications();
+}
+
+function stopGatewayHeartbeatNotifications() {
+  gatewayHeartbeatNotificationsActive = false;
+  clearGatewayHeartbeatNotificationReconnectTimer();
+  const ws = gatewayHeartbeatNotificationWs;
+  gatewayHeartbeatNotificationWs = null;
+  if (!ws) {
+    return;
+  }
+  try {
+    ws.close();
+  } catch {}
 }
 
 async function fetchGatewayBustlyTasksStatus(): Promise<BustlyTasksStatus> {
@@ -3831,6 +4154,7 @@ app.on("activate", () => {
 
 app.on("before-quit", async (event) => {
   writeMainLog("App about to quit");
+  stopGatewayHeartbeatNotifications();
 
   if (isUpdaterHelperMode) {
     isAppQuitting = true;

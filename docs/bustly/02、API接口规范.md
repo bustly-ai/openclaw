@@ -126,7 +126,7 @@ Content-Type: application/json
 ```json
 {
   "code": "auth_code_from_callback",
-  "client_id": "openclaw-desktop",
+  "client_id": "bustly-desktop",
   "grant_type": "authorization_code"
 }
 ```

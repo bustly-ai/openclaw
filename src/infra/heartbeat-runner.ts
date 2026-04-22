@@ -64,6 +64,7 @@ import {
   isExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
+import { emitBustlyHeartbeatEvent } from "./bustly-heartbeat-events.js";
 import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
@@ -88,6 +89,7 @@ export type HeartbeatDeps = OutboundSendDeps &
 
 const log = createSubsystemLogger("gateway/heartbeat");
 let heartbeatsEnabled = true;
+const externalHeartbeatRunAtByAgent = new Map<string, number>();
 const activeHeartbeatRuns = new Map<
   string,
   {
@@ -100,6 +102,16 @@ const activeHeartbeatRuns = new Map<
 
 export function setHeartbeatsEnabled(enabled: boolean) {
   heartbeatsEnabled = enabled;
+}
+
+export function recordExternalHeartbeatRun(agentId: string, runAtMs: number = Date.now()) {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const timestamp = Number.isFinite(runAtMs) ? Math.max(0, Math.floor(runAtMs)) : Date.now();
+  const previous = externalHeartbeatRunAtByAgent.get(normalizedAgentId);
+  if (typeof previous === "number" && previous >= timestamp) {
+    return;
+  }
+  externalHeartbeatRunAtByAgent.set(normalizedAgentId, timestamp);
 }
 
 export function listActiveHeartbeatRuns(): Array<{
@@ -729,6 +741,32 @@ function persistBustlyHeartbeatState(params: {
     typeof previous.lastPayloadAt === "number" &&
     previousPayloadText === payloadText &&
     params.startedAt - previous.lastPayloadAt < resolveHeartbeatDuplicateWindowMs();
+  if (!isDuplicate) {
+    const previousById = new Map(previous.events.map((event) => [event.id, event]));
+    for (const event of saved.events) {
+      if (event.status !== "open") {
+        continue;
+      }
+      const previousEvent = previousById.get(event.id);
+      if (!previousEvent) {
+        emitBustlyHeartbeatEvent({
+          workspaceId: params.workspaceId,
+          agentId: params.agentId,
+          action: "opened",
+          event,
+        });
+        continue;
+      }
+      if (previousEvent.status !== "open") {
+        emitBustlyHeartbeatEvent({
+          workspaceId: params.workspaceId,
+          agentId: params.agentId,
+          action: "reopened",
+          event,
+        });
+      }
+    }
+  }
   return { previous, saved, isDuplicate };
 }
 
@@ -1270,6 +1308,22 @@ export function startHeartbeatRunner(opts: {
     agent.nextDueMs = now + agent.intervalMs;
   };
 
+  const applyExternalHeartbeatRuns = (agents: Map<string, HeartbeatAgentState>, now: number) => {
+    for (const agent of agents.values()) {
+      const externalRunAt = externalHeartbeatRunAtByAgent.get(agent.agentId);
+      if (typeof externalRunAt !== "number") {
+        continue;
+      }
+      externalHeartbeatRunAtByAgent.delete(agent.agentId);
+      const appliedAt = Math.max(0, Math.min(now, externalRunAt));
+      if (typeof agent.lastRunMs === "number" && agent.lastRunMs >= appliedAt) {
+        continue;
+      }
+      agent.lastRunMs = appliedAt;
+      agent.nextDueMs = appliedAt + agent.intervalMs;
+    }
+  };
+
   const scheduleNext = () => {
     if (state.stopped) {
       return;
@@ -1324,6 +1378,7 @@ export function startHeartbeatRunner(opts: {
         nextDueMs,
       });
     }
+    applyExternalHeartbeatRuns(nextAgents, now);
 
     state.cfg = cfg;
     state.agents = nextAgents;
@@ -1384,6 +1439,7 @@ export function startHeartbeatRunner(opts: {
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
+    applyExternalHeartbeatRuns(state.agents, now);
     let ran = false;
 
     if (hasTargetedRequest) {

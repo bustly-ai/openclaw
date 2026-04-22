@@ -186,7 +186,7 @@ export async function initializeOpenClaw(
       gatewayPort: options.gatewayPort,
       gatewayBind: options.gatewayBind,
       nodeManager: options.nodeManager,
-      userAgent: "openclaw-desktop",
+      userAgent: "bustly-desktop",
       configPath,
       env: runtimeEnv,
     });

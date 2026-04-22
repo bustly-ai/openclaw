@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitBustlyHeartbeatEvent } from "../infra/bustly-heartbeat-events.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
@@ -91,6 +92,34 @@ describe("gateway server health/presence", () => {
     const evt = await waitHeartbeat;
     expect(evt.payload?.status).toBe("sent");
     expect(typeof evt.payload?.ts).toBe("number");
+
+    const waitBustlyHeartbeat = onceMessage<EventFrame>(
+      ws,
+      (o) =>
+        o.type === "event" &&
+        o.event === "heartbeat" &&
+        (o.payload as { kind?: unknown } | null | undefined)?.kind === "heartbeat",
+    );
+    emitBustlyHeartbeatEvent({
+      workspaceId: "workspace-1",
+      agentId: "store-ops",
+      action: "opened",
+      event: {
+        id: "event-1",
+        agentId: "store-ops",
+        severity: "warning",
+        title: "Payment pending",
+        message: "Order payment is pending.",
+        actionPrompt: "Check payment gateway.",
+        status: "open",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    });
+    const bustlyEvt = await waitBustlyHeartbeat;
+    const bustlyPayload = bustlyEvt.payload as { kind?: unknown; action?: unknown } | null;
+    expect(bustlyPayload?.kind).toBe("heartbeat");
+    expect(bustlyPayload?.action).toBe("opened");
 
     ws.send(
       JSON.stringify({
