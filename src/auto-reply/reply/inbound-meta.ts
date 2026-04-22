@@ -40,6 +40,7 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
     schema: "openclaw.inbound_meta.v1",
     chat_id: safeTrim(ctx.OriginatingTo),
     channel: channelValue,
+    user_locale: safeTrim(ctx.UserLocale),
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),

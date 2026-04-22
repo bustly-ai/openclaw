@@ -115,6 +115,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "bustly.runtime.report-issue",
     "bustly.runtime.bootstrap",
     "bustly.runtime.manifest.apply",
+    "bustly.runtime.user-language.set",
     "bustly.workspace.set-active",
     "skills.catalog.install",
     "skills.catalog.update",

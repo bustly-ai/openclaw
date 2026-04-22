@@ -118,6 +118,8 @@ export type MsgContext = {
   SenderTag?: string;
   SenderE164?: string;
   Timestamp?: number;
+  /** User-preferred locale reported by the Bustly client (for example: en-US, zh-CN). */
+  UserLocale?: string;
   /** Provider label (e.g. whatsapp, telegram). */
   Provider?: string;
   /** Provider surface label (e.g. discord, slack). Prefer this over `Provider` when available. */

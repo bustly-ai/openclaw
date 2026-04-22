@@ -6,6 +6,7 @@ import {
   getBustlyRuntimeHealthSnapshotEnsuringFreshToken,
   type BustlyRuntimePresetAgent,
 } from "../../bustly/runtime-manifest.js";
+import { setBustlyUserLanguage } from "../../bustly/user-language.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -173,6 +174,39 @@ export const bustlyRuntimeHandlers: GatewayRequestHandlers = {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+    }
+  },
+  "bustly.runtime.user-language.set": async ({ params, respond }) => {
+    try {
+      const language = typeof params.language === "string" ? params.language.trim() : "";
+      if (!language) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "language is required"),
+        );
+        return;
+      }
+      const source = typeof params.source === "string" ? params.source.trim() : undefined;
+      const saved = await setBustlyUserLanguage({
+        language,
+        source,
+      });
+      respond(
+        true,
+        {
+          ok: true,
+          language: saved.language,
+          updatedAtMs: saved.updatedAtMs,
+        },
+        undefined,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const errorCode = message.includes("locale tag")
+        ? ErrorCodes.INVALID_REQUEST
+        : ErrorCodes.UNAVAILABLE;
+      respond(false, undefined, errorShape(errorCode, message));
     }
   },
 };

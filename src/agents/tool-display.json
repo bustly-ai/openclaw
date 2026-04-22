@@ -294,11 +294,6 @@
       "title": "Memory Get",
       "detailKeys": ["path", "from", "lines"]
     },
-    "heartbeat_digest_search": {
-      "emoji": "🫀",
-      "title": "Heartbeat Digest Search",
-      "detailKeys": ["from", "to", "query", "limit"]
-    },
     "web_search": {
       "emoji": "🔎",
       "title": "Web Search",

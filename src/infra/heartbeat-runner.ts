@@ -25,7 +25,7 @@ import {
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import {
-  buildBustlyHeartbeatPrompt,
+  buildBustlyHeartbeatPromptForCurrentUser,
   loadBustlyHeartbeatState,
   parseBustlyHeartbeatEventsJson,
   parseBustlyHeartbeatMarkdown,
@@ -656,7 +656,7 @@ async function resolveHeartbeatRunPrompt(params: {
           "utf-8",
         );
         if (parseBustlyHeartbeatMarkdown(heartbeatContent)) {
-          prompt = buildBustlyHeartbeatPrompt({
+          prompt = await buildBustlyHeartbeatPromptForCurrentUser({
             digestWindow: resolveHeartbeatDigestWindow({
               cfg: params.cfg,
               heartbeat: params.heartbeat,

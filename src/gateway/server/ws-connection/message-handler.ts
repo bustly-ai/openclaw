@@ -12,6 +12,7 @@ import {
   normalizeDevicePublicKeyBase64Url,
   verifyDeviceSignature,
 } from "../../../infra/device-identity.js";
+import { setBustlyUserLanguage } from "../../../bustly/user-language.js";
 import {
   approveDevicePairing,
   ensureDeviceToken,
@@ -83,6 +84,15 @@ import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
+
+function shouldPersistConnectLocale(params: ConnectParams): boolean {
+  const clientId = params.client?.id?.trim();
+  return (
+    clientId === GATEWAY_CLIENT_IDS.CONTROL_UI ||
+    clientId === GATEWAY_CLIENT_IDS.PROBE ||
+    clientId === GATEWAY_CLIENT_IDS.WEBCHAT_UI
+  );
+}
 
 export function attachGatewayWsMessageHandler(params: {
   socket: WebSocket;
@@ -788,6 +798,19 @@ export function attachGatewayWsMessageHandler(params: {
             reason: "connect",
           });
           incrementPresenceVersion();
+        }
+
+        const connectLocale =
+          typeof connectParams.locale === "string" ? connectParams.locale.trim() : "";
+        if (connectLocale && shouldPersistConnectLocale(connectParams)) {
+          try {
+            await setBustlyUserLanguage({
+              language: connectLocale,
+              source: `gateway-connect:${connectParams.client.id}`,
+            });
+          } catch (err) {
+            logGateway.warn(`failed to persist connect locale: ${formatForLog(err)}`);
+          }
         }
 
         const snapshot = buildGatewaySnapshot();

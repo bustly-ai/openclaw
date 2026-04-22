@@ -13,6 +13,12 @@ import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.t
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
+const { getBustlyUserLanguageMock } = vi.hoisted(() => ({
+  getBustlyUserLanguageMock: vi.fn(),
+}));
+vi.mock("../bustly/user-language.js", () => ({
+  getBustlyUserLanguage: () => getBustlyUserLanguageMock(),
+}));
 
 type SeedSessionInput = {
   lastChannel: string;
@@ -44,6 +50,8 @@ async function withHeartbeatFixture(
 }
 
 beforeEach(() => {
+  getBustlyUserLanguageMock.mockReset();
+  getBustlyUserLanguageMock.mockResolvedValue(null);
   setActivePluginRegistry(
     createTestRegistry([
       { pluginId: "whatsapp", plugin: createWhatsAppTestPlugin(), source: "test" },
@@ -228,6 +236,56 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         cfg,
       );
       expect(replySpy.mock.calls[0]?.[1]).not.toHaveProperty("heartbeatPrompt");
+    });
+  });
+
+  it("does not inject user preferred locale outside bustly workspace context", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
+      getBustlyUserLanguageMock.mockResolvedValue("zh-CN");
+
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          Body: expect.stringContaining("Read HEARTBEAT.md"),
+          SessionKey: sessionKey,
+        }),
+        expect.objectContaining({
+          isHeartbeat: true,
+        }),
+        cfg,
+      );
+      expect(replySpy.mock.calls[0]?.[0]).toEqual(
+        expect.not.objectContaining({
+          UserLocale: expect.anything(),
+        }),
+      );
+      expect(replySpy.mock.calls[0]?.[0]?.Body).not.toContain("Preferred language for this heartbeat");
+      expect(getBustlyUserLanguageMock).not.toHaveBeenCalled();
     });
   });
 });

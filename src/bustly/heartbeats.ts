@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getBustlyUserLanguage } from "./user-language.js";
 import { normalizeBustlyWorkspaceId } from "./workspace-agent.js";
 
 export const DEFAULT_BUSTLY_HEARTBEAT_EVERY = "30m";
@@ -203,10 +204,19 @@ export function buildBustlyHeartbeatSystemPrompt(): string {
 }
 
 function buildHeartbeatRunPromptLines(
-  digestWindow?: BustlyHeartbeatDigestWindow,
+  preferredLanguage?: string | null,
 ): string[] {
+  const normalizedPreferredLanguage = preferredLanguage?.trim();
   return [
     `You now need to proactively identify any issues that have arisen in our operations recently and remind me.`,
+    ...(normalizedPreferredLanguage
+      ? [
+          "Language rules:",
+          `- Preferred language for this heartbeat: ${normalizedPreferredLanguage}`,
+          "- Reply in this language unless a higher-priority instruction requires a strict format.",
+          "- If you intentionally output HEARTBEAT_OK, keep that token unchanged.",
+        ]
+      : []),
     "1.Read `heartbeat.md` (Your long-term goals)",
     "2.Use the skills to understand what has happened in the business recently.",
     "Then, share with your key findings regarding the business. Replies must follow these requirements",
@@ -227,12 +237,14 @@ function buildHeartbeatRunPromptLines(
 
 export function buildBustlyHeartbeatRunPrompt(options?: {
   digestWindow?: BustlyHeartbeatDigestWindow;
+  preferredLanguage?: string | null;
 }): string {
-  return buildHeartbeatRunPromptLines(options?.digestWindow).join("\n");
+  return buildHeartbeatRunPromptLines(options?.preferredLanguage).join("\n");
 }
 
 export function buildBustlyHeartbeatPrompt(options?: {
   digestWindow?: BustlyHeartbeatDigestWindow;
+  preferredLanguage?: string | null;
 }): string {
   return [
     buildBustlyHeartbeatSystemPrompt(),
@@ -240,6 +252,16 @@ export function buildBustlyHeartbeatPrompt(options?: {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+export async function buildBustlyHeartbeatPromptForCurrentUser(options?: {
+  digestWindow?: BustlyHeartbeatDigestWindow;
+}): Promise<string> {
+  const preferredLanguage = await getBustlyUserLanguage().catch(() => null);
+  return buildBustlyHeartbeatPrompt({
+    digestWindow: options?.digestWindow,
+    preferredLanguage,
+  });
 }
 
 export function parseBustlyHeartbeatEventsJson(

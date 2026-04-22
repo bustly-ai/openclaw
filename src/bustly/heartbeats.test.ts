@@ -85,25 +85,22 @@ Notify me when any critical risk appears.
 });
 
 describe("bustly heartbeat prompts", () => {
-  it("keeps heartbeat guidance in the message prompt with the digest window", () => {
+  it("keeps heartbeat guidance in the message prompt", () => {
     const systemPrompt = buildBustlyHeartbeatSystemPrompt();
-    const runPrompt = buildBustlyHeartbeatRunPrompt({
-      digestWindow: {
-        from: "2026-04-20T08:00:00.000Z",
-        to: "2026-04-20T08:30:00.000Z",
-      },
-    });
-    const prompt = buildBustlyHeartbeatPrompt({
-      digestWindow: {
-        from: "2026-04-20T08:00:00.000Z",
-        to: "2026-04-20T08:30:00.000Z",
-      },
-    });
+    const runPrompt = buildBustlyHeartbeatRunPrompt();
+    const prompt = buildBustlyHeartbeatPrompt();
 
     expect(systemPrompt).toBe("");
-    expect(runPrompt).toContain("from 2026-04-20T08:00:00.000Z to 2026-04-20T08:30:00.000Z");
     expect(runPrompt).toContain("Output rules:");
     expect(prompt).toContain("Read `heartbeat.md`");
+  });
+
+  it("injects preferred language rules when provided", () => {
+    const runPrompt = buildBustlyHeartbeatRunPrompt({
+      preferredLanguage: "zh-CN",
+    });
+    expect(runPrompt).toContain("Language rules:");
+    expect(runPrompt).toContain("Preferred language for this heartbeat: zh-CN");
   });
 });
 

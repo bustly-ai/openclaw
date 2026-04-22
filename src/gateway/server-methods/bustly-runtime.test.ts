@@ -9,6 +9,7 @@ const {
   applyBustlyRuntimeManifestMock,
   bootstrapBustlyRuntimeMock,
   createBustlyIssueReportArchiveMock,
+  setBustlyUserLanguageMock,
 } = vi.hoisted(() => ({
   readBustlyOAuthStateEnsuringFreshTokenMock: vi.fn(),
   getBustlyRuntimeHealthSnapshotMock: vi.fn(),
@@ -16,6 +17,7 @@ const {
   applyBustlyRuntimeManifestMock: vi.fn(),
   bootstrapBustlyRuntimeMock: vi.fn(),
   createBustlyIssueReportArchiveMock: vi.fn(),
+  setBustlyUserLanguageMock: vi.fn(),
 }));
 
 vi.mock("../../bustly-oauth.js", () => ({
@@ -33,6 +35,10 @@ vi.mock("../../bustly/runtime-manifest.js", () => ({
 
 vi.mock("../../bustly/issue-report.js", () => ({
   createBustlyIssueReportArchive: (params: unknown) => createBustlyIssueReportArchiveMock(params),
+}));
+
+vi.mock("../../bustly/user-language.js", () => ({
+  setBustlyUserLanguage: (params: unknown) => setBustlyUserLanguageMock(params),
 }));
 
 async function invoke(
@@ -92,6 +98,7 @@ describe("gateway bustly.runtime methods", () => {
     applyBustlyRuntimeManifestMock.mockReset();
     bootstrapBustlyRuntimeMock.mockReset();
     createBustlyIssueReportArchiveMock.mockReset();
+    setBustlyUserLanguageMock.mockReset();
   });
 
   it("returns runtime health snapshot", async () => {
@@ -228,5 +235,42 @@ describe("gateway bustly.runtime methods", () => {
       },
       error: undefined,
     });
+  });
+
+  it("stores client-reported user language", async () => {
+    setBustlyUserLanguageMock.mockResolvedValue({
+      language: "zh-CN",
+      updatedAtMs: 1_714_245_123_000,
+    });
+    const respond = await invoke(bustlyRuntimeHandlers, "bustly.runtime.user-language.set", {
+      language: "zh-CN",
+      source: "gateway-ready",
+    });
+    expect(setBustlyUserLanguageMock).toHaveBeenCalledWith({
+      language: "zh-CN",
+      source: "gateway-ready",
+    });
+    expect(respond).toEqual({
+      ok: true,
+      result: {
+        ok: true,
+        language: "zh-CN",
+        updatedAtMs: 1_714_245_123_000,
+      },
+      error: undefined,
+    });
+  });
+
+  it("validates language when setting user language", async () => {
+    const respond = await invoke(bustlyRuntimeHandlers, "bustly.runtime.user-language.set", {});
+    expect(respond).toEqual({
+      ok: false,
+      result: undefined,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "language is required",
+      },
+    });
+    expect(setBustlyUserLanguageMock).not.toHaveBeenCalled();
   });
 });
