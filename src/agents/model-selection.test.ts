@@ -10,6 +10,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
+  resolveSubagentSpawnModelSelection,
 } from "./model-selection.js";
 
 describe("model-selection", () => {
@@ -291,6 +292,39 @@ describe("model-selection", () => {
         defaultModel: "gpt-4",
       });
       expect(result).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+  });
+
+  describe("resolveSubagentSpawnModelSelection", () => {
+    it("prefers explicit model override over inherited model selection", () => {
+      const result = resolveSubagentSpawnModelSelection({
+        cfg: {
+          agents: {
+            defaults: {
+              subagents: { model: "openrouter/google/gemini-2.5-pro" },
+            },
+          },
+        } as OpenClawConfig,
+        agentId: "research",
+        modelOverride: "openrouter/openai/gpt-5",
+        inheritedModelSelection: "openrouter/anthropic/claude-sonnet-4.6",
+      });
+      expect(result).toBe("openrouter/openai/gpt-5");
+    });
+
+    it("uses inherited model selection when explicit override is absent", () => {
+      const result = resolveSubagentSpawnModelSelection({
+        cfg: {
+          agents: {
+            defaults: {
+              subagents: { model: "openrouter/google/gemini-2.5-pro" },
+            },
+          },
+        } as OpenClawConfig,
+        agentId: "research",
+        inheritedModelSelection: "openrouter/anthropic/claude-sonnet-4.6",
+      });
+      expect(result).toBe("openrouter/anthropic/claude-sonnet-4.6");
     });
   });
 });

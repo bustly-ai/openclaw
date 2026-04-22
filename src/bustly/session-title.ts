@@ -16,7 +16,7 @@ import { normalizeBustlyWorkspaceId } from "./workspace-agent.js";
 
 const SESSION_TITLE_MAX_TOKENS = 24;
 const SESSION_TITLE_TIMEOUT_MS = 20_000;
-const SESSION_TITLE_MODEL_ID = process.env.BUSTLY_SESSION_TITLE_MODEL_ID?.trim() || "chat.advanced";
+const SESSION_TITLE_MODEL_ID = process.env.BUSTLY_SESSION_TITLE_MODEL_ID?.trim() || "chat.standard";
 const SESSION_TITLE_SYSTEM_PROMPT = [
   "Extract a concise task title from the user request text.",
   "The title must describe the user's intended task, not an assistant response.",

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
+import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -75,6 +76,78 @@ export function splitModelRef(ref?: string) {
     return { provider, model };
   }
   return { provider: undefined, model: trimmed };
+}
+
+function resolveModelRefFromSessionEntry(entry?: SessionEntry): string | undefined {
+  if (!entry) {
+    return undefined;
+  }
+
+  const overrideModel = entry.modelOverride?.trim() || "";
+  const overrideProvider = entry.providerOverride?.trim() || "";
+  if (overrideModel.includes("/")) {
+    return overrideModel;
+  }
+  if (overrideModel && overrideProvider) {
+    return `${overrideProvider}/${overrideModel}`;
+  }
+  if (overrideModel) {
+    return overrideModel;
+  }
+
+  const model = entry.model?.trim() || "";
+  const provider = entry.modelProvider?.trim() || "";
+  if (model.includes("/")) {
+    return model;
+  }
+  if (model && provider) {
+    return `${provider}/${model}`;
+  }
+  if (model) {
+    return model;
+  }
+  if (provider) {
+    return provider;
+  }
+
+  return undefined;
+}
+
+function findSessionEntry(
+  store: Record<string, SessionEntry>,
+  sessionKey: string,
+): SessionEntry | undefined {
+  const trimmed = sessionKey.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const direct = store[trimmed];
+  if (direct) {
+    return direct;
+  }
+  const normalized = trimmed.toLowerCase();
+  const normalizedDirect = store[normalized];
+  if (normalizedDirect) {
+    return normalizedDirect;
+  }
+  for (const [key, entry] of Object.entries(store)) {
+    if (key.toLowerCase() === normalized) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+function resolveRequesterInheritedModelSelection(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  requesterSessionKey: string;
+}): string | undefined {
+  const parsed = parseAgentSessionKey(params.requesterSessionKey);
+  const requesterAgentId = normalizeAgentId(parsed?.agentId);
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: requesterAgentId });
+  const store = loadSessionStore(storePath);
+  const entry = findSessionEntry(store, params.requesterSessionKey);
+  return resolveModelRefFromSessionEntry(entry);
 }
 
 function resolveSpawnMode(params: {
@@ -223,6 +296,10 @@ export async function spawnSubagentDirect(
     alias,
     mainKey,
   });
+  const inheritedModelSelection = resolveRequesterInheritedModelSelection({
+    cfg,
+    requesterSessionKey: requesterInternalKey,
+  });
 
   const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
   const maxSpawnDepth =
@@ -272,6 +349,7 @@ export async function spawnSubagentDirect(
     cfg,
     agentId: targetAgentId,
     modelOverride,
+    inheritedModelSelection,
   });
 
   const resolvedThinkingDefaultRaw =

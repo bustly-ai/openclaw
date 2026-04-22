@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
@@ -96,6 +97,12 @@ describe("session-title fallback upsert", () => {
     await waitFor(() => supabaseCallsRef.current.length > 0);
 
     expect(onLabelUpdated).not.toHaveBeenCalled();
+    expect(resolveModel).toHaveBeenCalledWith(
+      expect.any(String),
+      "chat.standard",
+      undefined,
+      expect.any(Object),
+    );
     expect(supabaseCallsRef.current).toHaveLength(1);
     const request = supabaseCallsRef.current[0];
     expect(request?.path).toContain("workspace_session_name_extracts");

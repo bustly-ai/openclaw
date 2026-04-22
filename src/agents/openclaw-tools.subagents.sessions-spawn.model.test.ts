@@ -1,5 +1,10 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { updateSessionStore } from "../config/sessions.js";
+import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import "./test-helpers/fast-core-tools.js";
 import {
   getCallGatewayMock,
@@ -243,6 +248,37 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       callId: "call-agent-primary-model",
       expectedModel: "opencode/claude",
     });
+  });
+
+  it("sessions_spawn inherits the requester session model when no override/config model is set", async () => {
+    const stateRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-inherit-model-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = path.join(stateRoot, "state");
+    try {
+      await updateSessionStore(resolveDefaultSessionStorePath("research"), (store) => {
+        store["agent:research:main"] = {
+          sessionId: "session-parent",
+          updatedAt: Date.now(),
+          modelOverride: "openrouter/anthropic/claude-sonnet-4.6",
+        };
+      });
+
+      await expectSpawnUsesConfiguredModel({
+        config: {
+          session: { mainKey: "main", scope: "per-sender" },
+        },
+        runId: "run-inherited-model",
+        callId: "call-inherited-model",
+        expectedModel: "openrouter/anthropic/claude-sonnet-4.6",
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
   });
 
   it("sessions_spawn fails when model patch is rejected", async () => {

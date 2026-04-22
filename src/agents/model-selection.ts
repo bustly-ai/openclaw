@@ -349,6 +349,7 @@ export function resolveSubagentSpawnModelSelection(params: {
   cfg: OpenClawConfig;
   agentId: string;
   modelOverride?: unknown;
+  inheritedModelSelection?: unknown;
 }): string {
   const runtimeDefault = resolveDefaultModelForAgent({
     cfg: params.cfg,
@@ -356,6 +357,7 @@ export function resolveSubagentSpawnModelSelection(params: {
   });
   return (
     normalizeModelSelection(params.modelOverride) ??
+    normalizeModelSelection(params.inheritedModelSelection) ??
     resolveSubagentConfiguredModelSelection({
       cfg: params.cfg,
       agentId: params.agentId,
