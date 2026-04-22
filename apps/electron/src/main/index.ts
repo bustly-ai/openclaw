@@ -2608,6 +2608,11 @@ function normalizeRendererHash(hash?: string): string | null {
 const REMOTE_RENDERER_FALLBACK_HASH = "/cdn-load-error";
 const LOCAL_RENDERER_ONLY_HASHES = new Set(["/update-helper"]);
 let lastRequestedRendererHash: string | undefined;
+const RENDERER_NO_CACHE_HEADERS = [
+  "Cache-Control: no-cache, no-store, must-revalidate",
+  "Pragma: no-cache",
+  "Expires: 0",
+].join("\n");
 
 function loadRendererFallbackWindow(targetWindow: BrowserWindow, options?: { hash?: string }) {
   if (process.env.NODE_ENV === "development") {
@@ -2645,6 +2650,36 @@ function resolveRemoteRendererUrl(hash?: string): string | null {
   }
 }
 
+function withRendererCacheBuster(urlValue: string): string {
+  try {
+    const url = new URL(urlValue);
+    url.searchParams.set("_bustlyNoCache", `${Date.now()}`);
+    return url.toString();
+  } catch {
+    return urlValue;
+  }
+}
+
+function resolveRendererOrigin(urlValue: string): string | null {
+  try {
+    return new URL(urlValue).origin;
+  } catch {
+    return null;
+  }
+}
+
+async function clearRendererRemoteCache(targetWindow: BrowserWindow, remoteRendererUrl: string): Promise<void> {
+  await targetWindow.webContents.session.clearCache();
+  const origin = resolveRendererOrigin(remoteRendererUrl);
+  if (!origin || origin === "null") {
+    return;
+  }
+  await targetWindow.webContents.session.clearStorageData({
+    origin,
+    storages: ["serviceworkers", "cachestorage"],
+  });
+}
+
 function loadRendererWindow(targetWindow: BrowserWindow, options?: { hash?: string }) {
   lastRequestedRendererHash = options?.hash;
   const normalizedHash = normalizeRendererHash(options?.hash);
@@ -2655,9 +2690,10 @@ function loadRendererWindow(targetWindow: BrowserWindow, options?: { hash?: stri
 
   const remoteRendererUrl = resolveRemoteRendererUrl(options?.hash);
   if (remoteRendererUrl) {
+    const loadUrl = withRendererCacheBuster(remoteRendererUrl);
     let didFallback = false;
     targetWindow.webContents.once("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-      if (!isMainFrame || validatedURL !== remoteRendererUrl || errorCode === -3 || didFallback) {
+      if (!isMainFrame || validatedURL !== loadUrl || errorCode === -3 || didFallback) {
         return;
       }
       didFallback = true;
@@ -2666,12 +2702,20 @@ function loadRendererWindow(targetWindow: BrowserWindow, options?: { hash?: stri
       );
       loadRendererFallbackWindow(targetWindow, { hash: REMOTE_RENDERER_FALLBACK_HASH });
     });
-    targetWindow.loadURL(remoteRendererUrl).catch((error) => {
-      writeMainLog(`Renderer load failed: ${error instanceof Error ? error.message : String(error)}`);
-      if (!didFallback) {
-        didFallback = true;
-        loadRendererFallbackWindow(targetWindow, { hash: REMOTE_RENDERER_FALLBACK_HASH });
-      }
+    void clearRendererRemoteCache(targetWindow, remoteRendererUrl)
+      .catch((error) => {
+        writeMainWarn(
+          `[Renderer] Failed to clear remote renderer cache before load: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      })
+      .finally(() => {
+        targetWindow.loadURL(loadUrl, { extraHeaders: RENDERER_NO_CACHE_HEADERS }).catch((error) => {
+          writeMainLog(`Renderer load failed: ${error instanceof Error ? error.message : String(error)}`);
+          if (!didFallback) {
+            didFallback = true;
+            loadRendererFallbackWindow(targetWindow, { hash: REMOTE_RENDERER_FALLBACK_HASH });
+          }
+        });
     });
     return;
   }
