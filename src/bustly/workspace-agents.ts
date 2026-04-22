@@ -18,6 +18,7 @@ import { type OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
+import { runHeartbeatOnce, setHeartbeatsEnabled } from "../infra/heartbeat-runner.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   buildBustlyAgentConversationSessionKey,
@@ -582,6 +583,24 @@ export async function createBustlyWorkspaceAgent(params: {
       ...(params.skills !== undefined ? { skills: params.skills } : {}),
     });
   }
+
+  // First heartbeat trigger belongs to backend agent initialization, not UI list/render flows.
+  const createdEntry = nextList?.find((entry) => normalizeAgentId(entry.id) === normalizeAgentId(agentId));
+  const hasHeartbeatConfig = Boolean(createdEntry?.heartbeat);
+  if (!params.skipBootstrap && hasHeartbeatConfig) {
+    setHeartbeatsEnabled(true);
+    try {
+      await runHeartbeatOnce({
+        cfg: nextConfig,
+        agentId,
+        reason: "workspace-agent-init",
+        force: true,
+      });
+    } catch {
+      // Best-effort: agent creation should not fail when initial heartbeat run fails.
+    }
+  }
+
   return { agentId, workspaceDir };
 }
 
