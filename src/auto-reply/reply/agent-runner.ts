@@ -532,6 +532,22 @@ export async function runReplyAgent(params: {
     }
 
     if (runOutcome.kind === "final") {
+      try {
+        await appendFastReplyTurnToSessionTranscript({
+          sessionFile: followupRun.run.sessionFile,
+          sessionId: followupRun.run.sessionId,
+          workspaceDir: followupRun.run.workspaceDir,
+          commandBody: gateOutcome.kind === "handoff" ? "" : commandBody,
+          payloads: [runOutcome.payload],
+          provider: followupRun.run.provider,
+          model: followupRun.run.model,
+          timeoutMs: followupRun.run.timeoutMs,
+        });
+      } catch (err) {
+        defaultRuntime.error(
+          `Failed to mirror final fallback turn into session transcript: ${String(err)}`,
+        );
+      }
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 

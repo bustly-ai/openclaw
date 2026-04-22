@@ -3,6 +3,7 @@ const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
 const LEADING_DASH_RE = /^-+/;
 const TRAILING_DASH_RE = /-+$/;
 const UUID_PREFIX_RE = /^([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const NON_ASCII_AGENT_PREFIX = "agent-";
 
 export const DEFAULT_BUSTLY_AGENT_NAME = "overview";
 
@@ -22,6 +23,15 @@ function normalizeToken(value: string | undefined | null): string {
     .slice(0, 64);
 }
 
+function hashTokenToHex(value: string): string {
+  let hash = 0x811c9dc5;
+  for (const char of value) {
+    hash ^= char.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
 export function normalizeBustlyWorkspaceId(value: string | undefined | null): string {
   const normalized = normalizeToken(value);
   if (!normalized) {
@@ -32,7 +42,15 @@ export function normalizeBustlyWorkspaceId(value: string | undefined | null): st
 }
 
 export function normalizeBustlyAgentName(value: string | undefined | null): string {
-  return normalizeToken(value) || DEFAULT_BUSTLY_AGENT_NAME;
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return DEFAULT_BUSTLY_AGENT_NAME;
+  }
+  const normalized = normalizeToken(trimmed);
+  if (normalized) {
+    return normalized;
+  }
+  return `${NON_ASCII_AGENT_PREFIX}${hashTokenToHex(trimmed)}`;
 }
 
 export function buildBustlyWorkspaceAgentPrefix(workspaceId: string | undefined | null): string {

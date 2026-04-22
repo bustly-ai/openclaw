@@ -965,10 +965,10 @@ export const chatHandlers: GatewayRequestHandlers = {
     const rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
     const hardMax = 1000;
-    const defaultLimit = 200;
-    const requested = typeof limit === "number" ? limit : defaultLimit;
-    const max = Math.min(hardMax, requested);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    const requestedLimit =
+      typeof limit === "number" && Number.isFinite(limit) ? Math.max(1, Math.trunc(limit)) : null;
+    const max = requestedLimit == null ? null : Math.min(hardMax, requestedLimit);
+    const sliced = max == null ? rawMessages : rawMessages.slice(-max);
     const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = sanitizeChatHistoryMessages(sanitized);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();

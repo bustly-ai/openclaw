@@ -9,6 +9,7 @@ const BUSTLY_METHODS = [
   "bustly.agents.create",
   "bustly.agents.update",
   "bustly.agents.delete",
+  "bustly.heartbeats.running",
   "bustly.sessions.list",
   "bustly.sessions.create",
   "bustly.links.resolve",
@@ -18,6 +19,7 @@ const BUSTLY_METHODS = [
   "bustly.runtime.report-issue",
   "bustly.runtime.bootstrap",
   "bustly.runtime.manifest.apply",
+  "bustly.tasks.status",
   "bustly.workspace.get-active",
   "bustly.workspace.set-active",
 ] as const;

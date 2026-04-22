@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { stripEnvelopeFromMessage } from "./chat-sanitize.js";
+import { MEDIA_REPLY_HINT_TEXT } from "../auto-reply/reply/media-reply-hint.js";
 
 describe("stripEnvelopeFromMessage", () => {
   test("removes message_id hint lines from user messages", () => {
@@ -88,5 +89,16 @@ describe("stripEnvelopeFromMessage", () => {
     };
     const result = stripEnvelopeFromMessage(input) as { content?: string };
     expect(result.content).toBe("hello");
+  });
+
+  test("strips injected media note and reply hint from user messages", () => {
+    const input = {
+      role: "user",
+      content: `[media attached: /Users/salerio/.bustly/media/inbound/image.png (application/octet-stream)]
+${MEDIA_REPLY_HINT_TEXT}
+请描述一下这张图`,
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("请描述一下这张图");
   });
 });

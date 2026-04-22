@@ -105,6 +105,8 @@ const BASE_METHODS = [
   "bustly.heartbeats.toggle",
   "bustly.heartbeats.delete",
   "bustly.heartbeats.events.list",
+  "bustly.heartbeats.running",
+  "bustly.heartbeats.events.update-status",
   "bustly.heartbeats.scan",
   "bustly.sessions.list",
   "bustly.sessions.create",
@@ -115,6 +117,7 @@ const BASE_METHODS = [
   "bustly.runtime.report-issue",
   "bustly.runtime.bootstrap",
   "bustly.runtime.manifest.apply",
+  "bustly.tasks.status",
   "bustly.workspace.get-active",
   "bustly.workspace.set-active",
   // WebChat WebSocket-native chat methods

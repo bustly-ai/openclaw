@@ -13,7 +13,7 @@ const MAX_EVENT_MESSAGE_CHARS = 240;
 const MAX_EVENT_ACTION_PROMPT_CHARS = 500;
 
 export type BustlyHeartbeatSeverity = "critical" | "warning" | "suggestion";
-export type BustlyHeartbeatStatus = "open" | "resolved";
+export type BustlyHeartbeatStatus = "open" | "seen" | "actioned";
 export type BustlyHeartbeatHealthStatus = "Healthy" | "Warning" | "Critical";
 
 export type BustlyHeartbeatDefinition = {
@@ -153,6 +153,17 @@ function sortHeartbeatEvents(
     return right.updatedAt - left.updatedAt;
   }
   return right.createdAt - left.createdAt;
+}
+
+function normalizeHeartbeatStatus(status: unknown): BustlyHeartbeatStatus {
+  if (status === "open" || status === "seen" || status === "actioned") {
+    return status;
+  }
+  // Backward compatibility: legacy "resolved" records are treated as "seen".
+  if (status === "resolved") {
+    return "seen";
+  }
+  return "open";
 }
 
 function buildEmptyState(agentId: string): BustlyHeartbeatState {
@@ -327,7 +338,6 @@ export function loadBustlyHeartbeatState(params: {
       ? parsed.events
           .filter((item): item is BustlyHeartbeatEventRecord => Boolean(item && typeof item === "object"))
           .map((item) => {
-            const status: BustlyHeartbeatStatus = item.status === "resolved" ? "resolved" : "open";
             return {
               id: typeof item.id === "string" ? item.id : randomUUID(),
               agentId,
@@ -340,7 +350,7 @@ export function loadBustlyHeartbeatState(params: {
                   : typeof (item as { action?: unknown }).action === "string"
                     ? ((item as { action?: string }).action ?? "")
                     : "",
-              status,
+              status: normalizeHeartbeatStatus(item.status),
               createdAt:
                 typeof item.createdAt === "number" && Number.isFinite(item.createdAt)
                   ? item.createdAt
@@ -489,5 +499,43 @@ export function resolveBustlyHeartbeatHealthSummary(params: {
     status,
     counts,
     lastScanAt: params.lastScanAt,
+  };
+}
+
+export function updateBustlyHeartbeatEventStatus(params: {
+  state: BustlyHeartbeatState;
+  eventId: string;
+  status: BustlyHeartbeatStatus;
+  updatedAt?: number;
+}): { state: BustlyHeartbeatState; event: BustlyHeartbeatEventRecord | null } {
+  const normalizedEventId = params.eventId.trim();
+  if (!normalizedEventId) {
+    return { state: params.state, event: null };
+  }
+  let matched: BustlyHeartbeatEventRecord | null = null;
+  const updatedAt =
+    typeof params.updatedAt === "number" && Number.isFinite(params.updatedAt)
+      ? params.updatedAt
+      : Date.now();
+  const events = params.state.events.map((event) => {
+    if (event.id !== normalizedEventId) {
+      return event;
+    }
+    matched = {
+      ...event,
+      status: normalizeHeartbeatStatus(params.status),
+      updatedAt,
+    };
+    return matched;
+  });
+  if (!matched) {
+    return { state: params.state, event: null };
+  }
+  return {
+    state: {
+      ...params.state,
+      events: events.sort(sortHeartbeatEvents).slice(0, MAX_HEARTBEAT_HISTORY),
+    },
+    event: matched,
   };
 }

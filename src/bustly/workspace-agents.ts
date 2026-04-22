@@ -513,7 +513,8 @@ export async function createBustlyWorkspaceAgent(params: {
   const config = readConfig(configPath);
 
   if (listAgentEntries(config).some((entry) => entry.id === agentId)) {
-    throw new Error(`Agent "${agentName}" already exists in this workspace.`);
+    const duplicateLabel = params.displayName?.trim() || params.agentName.trim() || agentName;
+    throw new Error(`Agent "${duplicateLabel}" already exists in this workspace.`);
   }
 
   const configWithoutMain = listAgentEntries(config).some((entry) => entry.id === "main")

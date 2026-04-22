@@ -100,6 +100,42 @@ describe("workspace-agents", () => {
     expect(listed.some((entry) => entry.agentId === "bustly-workspace-1-growth")).toBe(true);
   });
 
+  it("creates a workspace agent from a non-ASCII name using a stable generated slug", async () => {
+    const created = await createBustlyWorkspaceAgent({
+      workspaceId: "workspace-1",
+      agentName: "供应链助手",
+      displayName: "供应链助手",
+      configPath,
+      env: process.env,
+    });
+    expect(created.agentId).toMatch(/^bustly-workspace-1-agent-[0-9a-f]{8}$/);
+    expect(created.agentId).not.toBe("bustly-workspace-1-overview");
+    const slug = created.agentId.slice("bustly-workspace-1-".length);
+    expect(created.workspaceDir).toBe(path.join(stateDir, "workspaces", "workspace-1", "agents", slug));
+
+    const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+    const createdEntry = config.agents?.list?.find((entry) => entry.id === created.agentId);
+    expect(createdEntry?.name).toBe("供应链助手");
+  });
+
+  it("rejects duplicate non-ASCII names because they resolve to the same stable slug", async () => {
+    await createBustlyWorkspaceAgent({
+      workspaceId: "workspace-1",
+      agentName: "供应链助手",
+      displayName: "供应链助手",
+      configPath,
+      env: process.env,
+    });
+
+    await expect(createBustlyWorkspaceAgent({
+      workspaceId: "workspace-1",
+      agentName: "供应链助手",
+      displayName: "供应链助手",
+      configPath,
+      env: process.env,
+    })).rejects.toThrow(/already exists in this workspace/i);
+  });
+
   it("persists bustly workspace agent identity and skill metadata", async () => {
     const created = await createBustlyWorkspaceAgent({
       workspaceId: "workspace-1",

@@ -2190,6 +2190,35 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("mirrors final fallback replies into transcript after pre-reply abort errors", async () => {
+    const tempDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-final-fallback-transcript-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTranscriptMessages(sessionFile, [
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+    ]);
+
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      throw new Error("aborted");
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        sessionFile,
+        workspaceDir: tempDir,
+      },
+    });
+    const res = await run();
+
+    expect(res).toMatchObject({
+      text: expect.stringContaining("Agent failed before reply: aborted"),
+    });
+
+    const messages = await readTranscriptMessages(sessionFile);
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(readTextContent(messages[0]?.content)).toBe("hello");
+    expect(readTextContent(messages[1]?.content)).toContain("Agent failed before reply: aborted");
+  });
+
   it("still replies even if session reset fails to persist", async () => {
     await withTempStateDir(async (stateDir) => {
       const saveSpy = vi

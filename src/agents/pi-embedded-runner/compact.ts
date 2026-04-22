@@ -36,6 +36,7 @@ import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
+import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import {
   ensureSessionHeader,
   validateAnthropicTurns,
@@ -358,6 +359,14 @@ export async function compactEmbeddedPiSessionDirect(
       config: params.config,
     });
     const skillsPrompt = skillContext.prompt.trim();
+    const sessionLabel = params.sessionKey ?? params.sessionId;
+    const { contextFiles: injectedContextFiles } = await resolveBootstrapContextForRun({
+      workspaceDir: effectiveWorkspace,
+      config: params.config,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+    });
 
     const runAbortController = new AbortController();
     const toolsRaw = createOpenClawCodingTools({
@@ -510,6 +519,7 @@ export async function compactEmbeddedPiSessionDirect(
       userTimezone,
       userTime,
       userTimeFormat,
+      contextFiles: injectedContextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);

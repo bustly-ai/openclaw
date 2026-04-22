@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { Socket, createServer } from "node:net";
 import updater from "electron-updater";
+import { WebSocket } from "ws";
 import {
   ensureGatewayRuntimeCliShim,
   type GatewayRuntimeCliShim,
@@ -263,6 +264,7 @@ let gatewayProcess: ChildProcess | null = null;
 let gatewayStartPromise: Promise<boolean> | null = null;
 let mainWindow: BrowserWindow | null = null;
 let isAppQuitting = false;
+let quitConfirmationInFlight = false;
 let needsOnboardAtLaunch = false;
 let gatewayPort: number = 17999;
 let gatewayBind: string = "loopback";
@@ -512,6 +514,10 @@ let updateInstalling = false;
 let nativeInstallPrepared = false;
 let nativeInstallPreparationPromise: Promise<void> | null = null;
 
+function shouldBypassQuitConfirmationForUpdateInstall(): boolean {
+  return updateInstalling || updateState.stage === "installing";
+}
+
 type NativeAutoUpdaterBridge = {
   checkForUpdates: () => void;
   on: (event: string, listener: (...args: unknown[]) => void) => void;
@@ -709,6 +715,8 @@ function applyInitializationResult(result: InitializationResult): void {
 
 // Gateway configuration
 const GATEWAY_HOST = "127.0.0.1";
+const GATEWAY_PROTOCOL_VERSION = 3;
+const GATEWAY_TASKS_STATUS_TIMEOUT_MS = 2_000;
 const BUSTLY_LOGIN_HASH = "/bustly-login";
 const BUSTLY_RENDERER_URL = process.env.BUSTLY_RENDERER_URL?.trim() || "";
 const PRELOAD_PATH = process.env.NODE_ENV === "development"
@@ -1378,6 +1386,8 @@ async function handlePendingInstallOnLaunch() {
       return false;
     }
     writeMainLog("[Updater] Install appears active; quitting silently to avoid blocking ShipIt");
+    updateInstalling = true;
+    isAppQuitting = true;
     app.quit();
     return true;
   }
@@ -2094,6 +2104,170 @@ function readGatewayTokenFromConfig(): string | null {
   } catch {
     return null;
   }
+}
+
+type BustlyTasksStatus = {
+  hasRunningTasks: boolean;
+  runningCount: number;
+};
+
+function normalizeGatewayTasksStatus(payload: unknown): BustlyTasksStatus {
+  if (!payload || typeof payload !== "object") {
+    return { hasRunningTasks: false, runningCount: 0 };
+  }
+  const rec = payload as {
+    hasRunningTasks?: unknown;
+    runningCount?: unknown;
+  };
+  const runningCount =
+    typeof rec.runningCount === "number" && Number.isFinite(rec.runningCount)
+      ? Math.max(0, Math.floor(rec.runningCount))
+      : 0;
+  const hasRunningTasks =
+    typeof rec.hasRunningTasks === "boolean" ? rec.hasRunningTasks : runningCount > 0;
+  return {
+    hasRunningTasks,
+    runningCount,
+  };
+}
+
+async function fetchGatewayBustlyTasksStatus(): Promise<BustlyTasksStatus> {
+  if (!gatewayProcess || gatewayProcess.killed) {
+    return { hasRunningTasks: false, runningCount: 0 };
+  }
+
+  const token = readGatewayTokenFromConfig() ?? gatewayToken;
+  const query = token ? `?token=${encodeURIComponent(token)}` : "";
+  const gatewayUrl = `ws://${GATEWAY_HOST}:${gatewayPort}${query}`;
+
+  return await new Promise<BustlyTasksStatus>((resolve, reject) => {
+    let settled = false;
+    const connectRequestId = randomUUID();
+    const statusRequestId = randomUUID();
+    let connectSent = false;
+    let statusSent = false;
+
+    const ws = new WebSocket(gatewayUrl, {
+      handshakeTimeout: GATEWAY_TASKS_STATUS_TIMEOUT_MS,
+    });
+
+    const finishSuccess = (next: BustlyTasksStatus) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      try {
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.close();
+        }
+      } catch {}
+      resolve(next);
+    };
+
+    const finishError = (message: string, error?: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      try {
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.close();
+        }
+      } catch {}
+      const resolvedError =
+        error instanceof Error ? error : new Error(error ? `${message}: ${String(error)}` : message);
+      writeMainLog(`[Lifecycle] ${message}${error ? `: ${resolvedError.message}` : ""}`);
+      reject(resolvedError);
+    };
+
+    const timeout = setTimeout(() => {
+      finishError("Gateway tasks status check timed out");
+    }, GATEWAY_TASKS_STATUS_TIMEOUT_MS);
+
+    ws.once("error", (error) => {
+      finishError("Gateway tasks status check failed", error);
+    });
+
+    ws.on("message", (raw) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(typeof raw === "string" ? raw : raw.toString());
+      } catch {
+        return;
+      }
+      if (!parsed || typeof parsed !== "object") {
+        return;
+      }
+      const frame = parsed as {
+        type?: unknown;
+        event?: unknown;
+        payload?: unknown;
+        id?: unknown;
+        ok?: unknown;
+      };
+      if (frame.type === "event" && frame.event === "connect.challenge" && !connectSent) {
+        connectSent = true;
+        const connectFrame = {
+          type: "req",
+          id: connectRequestId,
+          method: "connect",
+          params: {
+            minProtocol: GATEWAY_PROTOCOL_VERSION,
+            maxProtocol: GATEWAY_PROTOCOL_VERSION,
+            client: {
+              id: "gateway-client",
+              version: app.getVersion(),
+              platform: process.platform,
+              mode: "backend",
+            },
+            role: "operator",
+            scopes: ["operator.read"],
+            auth: token
+              ? {
+                  token,
+                  password: token,
+                }
+              : undefined,
+          },
+        };
+        ws.send(JSON.stringify(connectFrame));
+        return;
+      }
+      if (frame.type !== "res" || typeof frame.id !== "string") {
+        return;
+      }
+      if (frame.id === connectRequestId) {
+        if (frame.ok !== true || statusSent) {
+          finishError("Gateway tasks status connect failed");
+          return;
+        }
+        statusSent = true;
+        const statusFrame = {
+          type: "req",
+          id: statusRequestId,
+          method: "bustly.tasks.status",
+          params: {},
+        };
+        ws.send(JSON.stringify(statusFrame));
+        return;
+      }
+      if (frame.id === statusRequestId) {
+        if (frame.ok !== true) {
+          finishError("Gateway tasks status request failed");
+          return;
+        }
+        finishSuccess(normalizeGatewayTasksStatus((parsed as { payload?: unknown }).payload));
+      }
+    });
+
+    ws.once("close", () => {
+      if (!settled) {
+        finishError("Gateway tasks status socket closed before response");
+      }
+    });
+  });
 }
 
 function normalizeRendererHash(hash?: string): string | null {
@@ -3263,6 +3437,7 @@ function setupIpcHandlers(): void {
         message: "Restarting to install the update.",
         error: null,
       });
+      updateInstalling = true;
       const shipItReady = await waitForShipItState();
       if (!shipItReady) {
         const statePath = resolveShipItStatePath() ?? "(unresolved)";
@@ -3275,9 +3450,9 @@ function setupIpcHandlers(): void {
           message: "Update failed.",
           error: message,
         });
+        updateInstalling = false;
         return { success: false, error: message };
       }
-      updateInstalling = true;
       setTimeout(() => {
         writeMainLog("[Updater] Calling quitAndInstall");
         autoUpdater.quitAndInstall(false, true);
@@ -3649,17 +3824,59 @@ app.on("activate", () => {
   }
 });
 
-app.on("before-quit", async () => {
+app.on("before-quit", async (event) => {
   writeMainLog("App about to quit");
-  isAppQuitting = true;
 
   if (isUpdaterHelperMode) {
+    isAppQuitting = true;
     stopUpdaterHelperPolling();
     return;
   }
 
-  if (updateInstalling) {
+  if (shouldBypassQuitConfirmationForUpdateInstall()) {
+    isAppQuitting = true;
     writeMainLog("[Updater] Update install in progress; skipping graceful gateway shutdown");
+    return;
+  }
+
+  if (!isAppQuitting) {
+    if (quitConfirmationInFlight) {
+      event.preventDefault();
+      return;
+    }
+    quitConfirmationInFlight = true;
+    event.preventDefault();
+
+    let shouldConfirmQuit = false;
+    try {
+      const tasksStatus = await fetchGatewayBustlyTasksStatus();
+      shouldConfirmQuit = tasksStatus.hasRunningTasks;
+    } catch (error) {
+      writeMainError("[Lifecycle] Failed to confirm quit with gateway tasks status:", error);
+      // Fail closed: if status check is unavailable, require confirmation to avoid dropping active tasks silently.
+      shouldConfirmQuit = true;
+    }
+
+    if (shouldConfirmQuit) {
+      const result = await dialog.showMessageBox(mainWindow ?? undefined, {
+        type: "none",
+        buttons: ["Cancel", "Quit"],
+        defaultId: 1,
+        cancelId: 0,
+        title: "Quit Bustly?",
+        message: "Are you sure you want to quit Bustly?",
+        detail: "All running tasks will be interrupted. Scheduled tasks will not be triggered.",
+        noLink: true,
+      });
+      if (result.response !== 1) {
+        quitConfirmationInFlight = false;
+        return;
+      }
+    }
+
+    quitConfirmationInFlight = false;
+    isAppQuitting = true;
+    app.quit();
     return;
   }
 
