@@ -6,7 +6,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm build:gateway && pnpm run build:preload && pnpm run build:main-dev && pnpm exec concurrently \"cd ../../www.salerio &&pnpm run dev:client-app\" \"pnpm run wait:renderer && pnpm run dev:main\"",
+    "dev": "pnpm run build:preload && pnpm run build:main-dev && pnpm exec concurrently \"cd ../../www.salerio &&pnpm run dev:client-app\" \"pnpm run wait:renderer && pnpm run dev:main\"",
+    "dev:build": "pnpm build:gateway && pnpm dev",
     "dev:renderer": "vite",
     "wait:renderer": "sleep 2",
     "dev:main": "OPENCLAW_RAW_STREAM=1 OPENCLAW_PAYLOAD_LOG=1 NODE_ENV=development pnpm exec electron dist/main-dev.js",

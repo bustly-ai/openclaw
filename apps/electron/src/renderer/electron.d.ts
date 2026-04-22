@@ -222,6 +222,7 @@ interface ElectronAPI {
   onNativeFullscreenChange: (callback: (data: { isNativeFullscreen: boolean }) => void) => () => void;
   onDeepLink: (callback: (data: DeepLinkData) => void) => () => void;
   onBustlyLoginRefresh: (callback: () => void) => () => void;
+  onBustlyLoginProgress: (callback: () => void) => () => void;
 }
 
 interface Window {

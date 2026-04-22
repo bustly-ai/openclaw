@@ -1,23 +1,14 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import path from "node:path";
-import { listAgentEntries } from "../commands/agents.config.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import {
   getBustlyAccessToken,
   readBustlyOAuthState,
   readBustlyOAuthStateEnsuringFreshToken,
 } from "../bustly-oauth.js";
-import { resolveBustlyHeartbeatWorkspaceContext } from "./heartbeats.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { ensureBustlyWorkspacePresetAgents } from "./workspace-agents.js";
 import type { BustlyWorkspaceBinding } from "./workspace-runtime.js";
 import {
   resolveActiveBustlyWorkspaceBinding,
   setActiveBustlyWorkspace,
 } from "./workspace-runtime.js";
-import { normalizeBustlyWorkspaceId } from "./workspace-agent.js";
 
 export type BustlyRuntimePresetAgent = {
   slug: string;
@@ -52,77 +43,6 @@ async function resolveWorkspaceId(params?: { workspaceId?: string }): Promise<st
     return explicitWorkspaceId;
   }
   return (await readBustlyOAuthStateEnsuringFreshToken())?.user?.workspaceId?.trim() || "";
-}
-
-function resolveConfigPathForEnv(configPath?: string, env: NodeJS.ProcessEnv = process.env): string {
-  if (configPath?.trim()) {
-    return configPath.trim();
-  }
-  const stateDir = resolveStateDir(env);
-  return resolveConfigPath(env, stateDir);
-}
-
-function readConfig(configPath: string): OpenClawConfig {
-  if (!existsSync(configPath)) {
-    return {};
-  }
-  return JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
-}
-
-function hasWorkspaceHeartbeatState(workspaceId: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const normalizedWorkspaceId = normalizeBustlyWorkspaceId(workspaceId);
-  if (!normalizedWorkspaceId) {
-    return false;
-  }
-  const heartbeatDir = path.join(
-    resolveStateDir(env),
-    "workspaces",
-    normalizedWorkspaceId,
-    "heartbeats",
-  );
-  return (
-    existsSync(heartbeatDir) &&
-    readdirSync(heartbeatDir, { withFileTypes: true }).some(
-      (entry) => entry.isFile() && entry.name.endsWith(".json"),
-    )
-  );
-}
-
-function queueInitialWorkspaceHeartbeats(params: {
-  workspaceId: string;
-  configPath?: string;
-  env?: NodeJS.ProcessEnv;
-}) {
-  const workspaceId = normalizeBustlyWorkspaceId(params.workspaceId);
-  if (!workspaceId || hasWorkspaceHeartbeatState(workspaceId, params.env)) {
-    return;
-  }
-  const cfg = readConfig(resolveConfigPathForEnv(params.configPath, params.env));
-  const agentIds = listAgentEntries(cfg)
-    .filter((entry) => {
-      if (!entry.heartbeat) {
-        return false;
-      }
-      const workspaceDir = entry.workspace?.trim();
-      if (!workspaceDir) {
-        return false;
-      }
-      return (
-        resolveBustlyHeartbeatWorkspaceContext({
-          workspaceDir,
-          env: params.env,
-        })?.workspaceId === workspaceId
-      );
-    })
-    .map((entry) => normalizeAgentId(entry.id))
-    .filter(Boolean);
-  for (const agentId of agentIds) {
-    requestHeartbeatNow({
-      reason: "wake",
-      coalesceMs: 0,
-      agentId,
-    });
-  }
 }
 
 export function getBustlyRuntimeHealthSnapshot(): {
@@ -209,12 +129,6 @@ export async function applyBustlyRuntimeManifest(
     configPath: params.configPath,
     env: params.env,
   });
-  queueInitialWorkspaceHeartbeats({
-    workspaceId,
-    configPath: params.configPath,
-    env: params.env,
-  });
-
   return {
     workspaceId,
     agentId: binding.agentId,

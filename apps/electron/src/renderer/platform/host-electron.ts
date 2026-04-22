@@ -51,6 +51,8 @@ export const electronRendererHostAdapter: RendererHostAdapter = {
     requireElectronApi().onGatewayLifecycle(callback),
   onBustlyLoginRefresh: (callback: () => void) =>
     requireElectronApi().onBustlyLoginRefresh(callback),
+  onBustlyLoginProgress: (callback: () => void) =>
+    requireElectronApi().onBustlyLoginProgress(callback),
   onNativeFullscreenChange: (callback: (data: { isNativeFullscreen: boolean }) => void) =>
     requireElectronApi().onNativeFullscreenChange(callback),
   onUpdateStatus: (callback: (data: { event: string; state?: DesktopUpdateState }) => void) =>

@@ -17,7 +17,6 @@ const {
   setActiveBustlyWorkspaceMock,
   resolveActiveBustlyWorkspaceBindingMock,
   ensureBustlyWorkspacePresetAgentsMock,
-  requestHeartbeatNowMock,
 } = vi.hoisted(() => {
   return {
     oauthStateRef: { current: null as BustlyOAuthState | null },
@@ -43,7 +42,6 @@ const {
     ensureBustlyWorkspacePresetAgentsMock: vi.fn<(params: unknown) => Promise<number>>(
       async () => 0,
     ),
-    requestHeartbeatNowMock: vi.fn(),
   };
 });
 
@@ -64,10 +62,6 @@ vi.mock("./workspace-runtime.js", () => ({
 vi.mock("./workspace-agents.js", () => ({
   ensureBustlyWorkspacePresetAgents: (params: unknown) =>
     ensureBustlyWorkspacePresetAgentsMock(params),
-}));
-
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: (params: unknown) => requestHeartbeatNowMock(params),
 }));
 
 describe("bustly runtime manifest", () => {
@@ -101,7 +95,6 @@ describe("bustly runtime manifest", () => {
     });
     ensureBustlyWorkspacePresetAgentsMock.mockReset();
     ensureBustlyWorkspacePresetAgentsMock.mockResolvedValue(0);
-    requestHeartbeatNowMock.mockReset();
   });
 
   afterEach(() => {
@@ -264,10 +257,6 @@ describe("bustly runtime manifest", () => {
       agentId: "bustly-workspace-1-overview",
       presetAgentsApplied: 1,
     });
-    expect(requestHeartbeatNowMock.mock.calls).toEqual([
-      [{ reason: "wake", coalesceMs: 0, agentId: "bustly-workspace-1-store-ops" }],
-      [{ reason: "wake", coalesceMs: 0, agentId: "bustly-workspace-1-finance" }],
-    ]);
   });
 
   it("bootstraps runtime with shared remote presets when none are provided", async () => {
@@ -336,46 +325,4 @@ describe("bustly runtime manifest", () => {
     ).rejects.toThrow("workspaceId is required");
   });
 
-  it("does not queue first-entry heartbeats once workspace heartbeat state exists", async () => {
-    mkdirSync(path.dirname(process.env.OPENCLAW_CONFIG_PATH!), { recursive: true });
-    writeFileSync(
-      process.env.OPENCLAW_CONFIG_PATH!,
-      JSON.stringify(
-        {
-          agents: {
-            defaults: {},
-            list: [
-              {
-                id: "bustly-workspace-1-store-ops",
-                workspace: path.join(process.env.OPENCLAW_STATE_DIR!, "workspaces", "workspace-1", "agents", "store-ops"),
-                heartbeat: { every: "30m", target: "none" },
-              },
-            ],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    const heartbeatStateDir = path.join(
-      process.env.OPENCLAW_STATE_DIR!,
-      "workspaces",
-      "workspace-1",
-      "heartbeats",
-    );
-    mkdirSync(heartbeatStateDir, { recursive: true });
-    writeFileSync(
-      path.join(heartbeatStateDir, "bustly-workspace-1-store-ops.json"),
-      "{}\n",
-      "utf-8",
-    );
-
-    await applyBustlyRuntimeManifest({
-      workspaceId: "workspace-1",
-      workspaceName: "Workspace One",
-    });
-
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
-  });
 });

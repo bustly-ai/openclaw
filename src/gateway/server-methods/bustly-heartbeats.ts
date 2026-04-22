@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../../agents/workspace.js";
@@ -146,11 +147,24 @@ function buildHeartbeatListItem(params: {
 async function listWorkspaceHeartbeats(workspaceId: string) {
   const agents = listBustlyWorkspaceAgents({ workspaceId }).filter((agent) => !agent.isMain);
   const cards = [];
+  let initialized = false;
+  let hasEvents = false;
   for (const agent of agents) {
+    const statePath = resolveBustlyHeartbeatStatePath({
+      workspaceId,
+      agentId: agent.agentId,
+    });
+    const hasStateJson = existsSync(statePath);
+    if (hasStateJson) {
+      initialized = true;
+    }
     const heartbeatState = loadBustlyHeartbeatState({
       workspaceId,
       agentId: agent.agentId,
     });
+    if (heartbeatState.events.length > 0) {
+      hasEvents = true;
+    }
     const { definition } = await readHeartbeatDefinition(agent);
     const heartbeatConfig = resolveAgentHeartbeatConfig(loadConfig(), agent.agentId);
     if (!definition && !heartbeatConfig && heartbeatState.events.length === 0) {
@@ -188,6 +202,8 @@ async function listWorkspaceHeartbeats(workspaceId: string) {
 
   return {
     workspaceId,
+    initialized,
+    hasEvents,
     heartbeats: cards,
     priorityEvents,
     health,
@@ -408,7 +424,18 @@ export const bustlyHeartbeatHandlers: GatewayRequestHandlers = {
     try {
       const workspaceId = resolveWorkspaceIdParam(params);
       if (!workspaceId) {
-        respond(true, { workspaceId: "", heartbeats: [], priorityEvents: [], health: null }, undefined);
+        respond(
+          true,
+          {
+            workspaceId: "",
+            initialized: false,
+            hasEvents: false,
+            heartbeats: [],
+            priorityEvents: [],
+            health: null,
+          },
+          undefined,
+        );
         return;
       }
       respond(true, await listWorkspaceHeartbeats(workspaceId), undefined);
@@ -641,7 +668,19 @@ export const bustlyHeartbeatHandlers: GatewayRequestHandlers = {
     try {
       const workspaceId = resolveWorkspaceIdParam(params);
       if (!workspaceId) {
-        respond(true, { workspaceId: "", runs: [], heartbeats: [], priorityEvents: [], health: null }, undefined);
+        respond(
+          true,
+          {
+            workspaceId: "",
+            initialized: false,
+            hasEvents: false,
+            runs: [],
+            heartbeats: [],
+            priorityEvents: [],
+            health: null,
+          },
+          undefined,
+        );
         return;
       }
       setHeartbeatsEnabled(true);

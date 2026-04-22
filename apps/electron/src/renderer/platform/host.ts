@@ -46,6 +46,7 @@ export type RendererHostAdapter = {
   consumePendingDeepLink?: () => Promise<DeepLinkData | null>;
   onGatewayLifecycle?: (callback: (data: GatewayLifecycleData) => void) => () => void;
   onBustlyLoginRefresh?: (callback: () => void) => () => void;
+  onBustlyLoginProgress?: (callback: () => void) => () => void;
   onNativeFullscreenChange?: (callback: (data: { isNativeFullscreen: boolean }) => void) => () => void;
   onUpdateStatus?: (callback: (data: { event: string; state?: DesktopUpdateState }) => void) => () => void;
   onDeepLink?: (callback: (data: DeepLinkData) => void) => () => void;

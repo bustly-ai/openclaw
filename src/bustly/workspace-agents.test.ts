@@ -20,18 +20,10 @@ const { bootstrapMock, loadBootstrapAgentsMock } = vi.hoisted(() => ({
     () => Promise<Array<{ slug: string; label: string; icon?: string; isMain?: boolean }>>
   >(async () => []),
 }));
-const { runHeartbeatOnceMock, setHeartbeatsEnabledMock } = vi.hoisted(() => ({
-  runHeartbeatOnceMock: vi.fn(async () => ({ status: "ran" as const, durationMs: 1 })),
-  setHeartbeatsEnabledMock: vi.fn<(enabled: boolean) => void>(),
-}));
 
 vi.mock("./workspace-bootstrap.js", () => ({
   initializeBustlyWorkspaceBootstrap: (params: unknown) => bootstrapMock(params),
   loadEnabledBustlyWorkspaceBootstrapAgents: () => loadBootstrapAgentsMock(),
-}));
-vi.mock("../infra/heartbeat-runner.js", () => ({
-  runHeartbeatOnce: (params: unknown) => runHeartbeatOnceMock(params),
-  setHeartbeatsEnabled: (enabled: boolean) => setHeartbeatsEnabledMock(enabled),
 }));
 
 describe("workspace-agents", () => {
@@ -53,9 +45,6 @@ describe("workspace-agents", () => {
     bootstrapMock.mockResolvedValue(undefined);
     loadBootstrapAgentsMock.mockReset();
     loadBootstrapAgentsMock.mockResolvedValue([]);
-    runHeartbeatOnceMock.mockReset();
-    runHeartbeatOnceMock.mockResolvedValue({ status: "ran", durationMs: 1 });
-    setHeartbeatsEnabledMock.mockReset();
     mkdirSync(stateDir, { recursive: true });
     const seedConfig: OpenClawConfig = {
       agents: {
@@ -204,29 +193,6 @@ describe("workspace-agents", () => {
       description: "Run growth experiments and coordinate reporting.",
     });
     expect(listed.find((entry) => entry.agentId === created.agentId)?.skills).toBeUndefined();
-  });
-
-  it("triggers initial heartbeat run after agent initialization when heartbeat is configured", async () => {
-    await createBustlyWorkspaceAgent({
-      workspaceId: "workspace-1",
-      agentName: "finance",
-      displayName: "Finance",
-      heartbeat: {
-        every: "15m",
-        target: "none",
-      },
-      configPath,
-      env: process.env,
-    });
-
-    expect(setHeartbeatsEnabledMock).toHaveBeenCalledWith(true);
-    expect(runHeartbeatOnceMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "bustly-workspace-1-finance",
-        reason: "workspace-agent-init",
-        force: true,
-      }),
-    );
   });
 
   it("creates and lists bustly workspace agent sessions", async () => {

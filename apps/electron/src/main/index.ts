@@ -2840,6 +2840,11 @@ async function runElectronBustlyLogin(loginTraceId: string): Promise<void> {
       status: "exchanging",
       error: null,
     });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      // Callback reached the local OAuth server; switch renderer to loading
+      // immediately instead of waiting for token exchange/runtime init.
+      mainWindow.webContents.send("bustly-login-progress");
+    }
     const apiResponse = await exchangeToken(authCode);
     const supabaseSession = apiResponse.data.extras?.supabase_session;
     const supabaseAccessToken = supabaseSession?.access_token?.trim() ?? "";
