@@ -6,7 +6,6 @@ import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { registerApnsToken } from "../infra/push-apns.js";
@@ -516,7 +515,6 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
 
       enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
-      requestHeartbeatNow({ reason: "exec-event" });
       return;
     }
     case "push.apns.register": {

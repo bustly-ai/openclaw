@@ -1,4 +1,3 @@
-import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type {
   CronDeliveryStatus,
   CronJob,
@@ -611,27 +610,6 @@ export async function executeJobCore(
     status: "error" as const,
     error: timeoutErrorMessage(),
   });
-  const waitWithAbort = async (ms: number) => {
-    if (!abortSignal) {
-      await new Promise<void>((resolve) => setTimeout(resolve, ms));
-      return;
-    }
-    if (abortSignal.aborted) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        abortSignal.removeEventListener("abort", onAbort);
-        resolve();
-      }, ms);
-      const onAbort = () => {
-        clearTimeout(timer);
-        abortSignal.removeEventListener("abort", onAbort);
-        resolve();
-      };
-      abortSignal.addEventListener("abort", onAbort, { once: true });
-    });
-  };
 
   if (abortSignal?.aborted) {
     return resolveAbortError();
@@ -653,63 +631,10 @@ export async function executeJobCore(
       sessionKey: job.sessionKey,
       contextKey: `cron:${job.id}`,
     });
-    if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
-      const reason = `cron:${job.id}`;
-      const maxWaitMs = state.deps.wakeNowHeartbeatBusyMaxWaitMs ?? 2 * 60_000;
-      const retryDelayMs = state.deps.wakeNowHeartbeatBusyRetryDelayMs ?? 250;
-      const waitStartedAt = state.deps.nowMs();
-
-      let heartbeatResult: HeartbeatRunResult;
-      for (;;) {
-        if (abortSignal?.aborted) {
-          return resolveAbortError();
-        }
-        heartbeatResult = await state.deps.runHeartbeatOnce({
-          reason,
-          agentId: job.agentId,
-          sessionKey: job.sessionKey,
-        });
-        if (
-          heartbeatResult.status !== "skipped" ||
-          heartbeatResult.reason !== "requests-in-flight"
-        ) {
-          break;
-        }
-        if (abortSignal?.aborted) {
-          return resolveAbortError();
-        }
-        if (state.deps.nowMs() - waitStartedAt > maxWaitMs) {
-          if (abortSignal?.aborted) {
-            return resolveAbortError();
-          }
-          state.deps.requestHeartbeatNow({
-            reason,
-            agentId: job.agentId,
-            sessionKey: job.sessionKey,
-          });
-          return { status: "ok", summary: text };
-        }
-        await waitWithAbort(retryDelayMs);
-      }
-
-      if (heartbeatResult.status === "ran") {
-        return { status: "ok", summary: text };
-      } else if (heartbeatResult.status === "skipped") {
-        return { status: "skipped", error: heartbeatResult.reason, summary: text };
-      } else {
-        return { status: "error", error: heartbeatResult.reason, summary: text };
-      }
-    } else {
-      if (abortSignal?.aborted) {
-        return resolveAbortError();
-      }
-      state.deps.requestHeartbeatNow({
-        reason: `cron:${job.id}`,
-        agentId: job.agentId,
-        sessionKey: job.sessionKey,
-      });
-      return { status: "ok", summary: text };
+    if (abortSignal?.aborted) {
+      return resolveAbortError();
     }
+    return { status: "ok", summary: text };
   }
 
   if (job.payload.kind !== "agentTurn") {
@@ -748,13 +673,6 @@ export async function executeJobCore(
       sessionKey: job.sessionKey,
       contextKey: `cron:${job.id}`,
     });
-    if (job.wakeMode === "now") {
-      state.deps.requestHeartbeatNow({
-        reason: `cron:${job.id}`,
-        agentId: job.agentId,
-        sessionKey: job.sessionKey,
-      });
-    }
   }
 
   return {
@@ -855,9 +773,6 @@ export function wake(
     return { ok: false } as const;
   }
   state.deps.enqueueSystemEvent(text);
-  if (opts.mode === "now") {
-    state.deps.requestHeartbeatNow({ reason: "wake" });
-  }
   return { ok: true } as const;
 }
 

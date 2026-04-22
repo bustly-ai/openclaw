@@ -17,14 +17,11 @@ import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
-import { defaultRuntime } from "../runtime.js";
 
 export type GatewayCronState = {
   cron: CronService;
@@ -127,26 +124,6 @@ export function buildGatewayCronService(params: {
     return canonical;
   };
 
-  const resolveCronWakeTarget = (opts?: { agentId?: string; sessionKey?: string | null }) => {
-    const runtimeConfig = loadConfig();
-    const requestedAgentId = opts?.agentId ? resolveCronAgent(opts.agentId).agentId : undefined;
-    const derivedAgentId =
-      requestedAgentId ??
-      (opts?.sessionKey
-        ? normalizeAgentId(resolveAgentIdFromSessionKey(opts.sessionKey))
-        : undefined);
-    const agentId = derivedAgentId || undefined;
-    const sessionKey =
-      opts?.sessionKey && agentId
-        ? resolveCronSessionKey({
-            runtimeConfig,
-            agentId,
-            requestedSessionKey: opts.sessionKey,
-          })
-        : undefined;
-    return { runtimeConfig, agentId, sessionKey };
-  };
-
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const runLogPrune = resolveCronRunLogPruneOptions(params.cfg.cron?.runLog);
   const resolveSessionStorePath = (agentId?: string) =>
@@ -172,23 +149,8 @@ export function buildGatewayCronService(params: {
       });
       enqueueSystemEvent(text, { sessionKey, contextKey: opts?.contextKey });
     },
-    requestHeartbeatNow: (opts) => {
-      const { agentId, sessionKey } = resolveCronWakeTarget(opts);
-      requestHeartbeatNow({
-        reason: opts?.reason,
-        agentId,
-        sessionKey,
-      });
-    },
-    runHeartbeatOnce: async (opts) => {
-      const { runtimeConfig, agentId, sessionKey } = resolveCronWakeTarget(opts);
-      return await runHeartbeatOnce({
-        cfg: runtimeConfig,
-        reason: opts?.reason,
-        agentId,
-        sessionKey,
-        deps: { ...params.deps, runtime: defaultRuntime },
-      });
+    requestHeartbeatNow: () => {
+      // Global policy: disable event-driven heartbeat wake-ups.
     },
     runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
