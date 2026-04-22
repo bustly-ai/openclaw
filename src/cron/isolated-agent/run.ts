@@ -35,6 +35,8 @@ import {
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
 import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
+import { resolveBustlyHeartbeatWorkspaceContext } from "../../bustly/heartbeats.js";
+import { upsertBustlySessionTitleExtract } from "../../bustly/session-title.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
@@ -246,6 +248,13 @@ export async function runCronIsolatedAgentTurn(params: {
       cronSession.sessionEntry.label = labelSuffix;
     }
   }
+  const scheduledSessionTitle =
+    typeof params.job.name === "string" && params.job.name.trim()
+      ? params.job.name.trim()
+      : params.job.id;
+  const bustlyWorkspaceContext = resolveBustlyHeartbeatWorkspaceContext({
+    workspaceDir,
+  });
 
   // Respect session model override — check session.modelOverride before falling
   // back to the default config model. This ensures /model changes are honoured
@@ -266,6 +275,27 @@ export async function runCronIsolatedAgentTurn(params: {
         provider = resolvedSessionOverride.ref.provider;
         model = resolvedSessionOverride.ref.model;
       }
+    }
+  }
+
+  if (
+    cronSession.isNewSession &&
+    bustlyWorkspaceContext?.workspaceId &&
+    runSessionId &&
+    scheduledSessionTitle
+  ) {
+    const sampleRouteKey = model.trim() || undefined;
+    if (sampleRouteKey) {
+      const promptExcerpt = params.message.trim() || scheduledSessionTitle;
+      void upsertBustlySessionTitleExtract({
+        workspaceId: bustlyWorkspaceContext.workspaceId,
+        sessionId: runSessionId,
+        sessionName: scheduledSessionTitle,
+        sampleRouteKey,
+        promptExcerpt,
+      }).catch(() => {
+        // Best effort: cron execution must not block on title extract reporting.
+      });
     }
   }
 

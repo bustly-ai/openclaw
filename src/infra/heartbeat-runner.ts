@@ -7,6 +7,7 @@ import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import {
   resolveAgentConfig,
+  resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
@@ -33,6 +34,8 @@ import {
   saveBustlyHeartbeatState,
   type BustlyHeartbeatStructuredEvent,
 } from "../bustly/heartbeats.js";
+import { upsertBustlySessionTitleExtract } from "../bustly/session-title.js";
+import { resolveBustlyAgentNameFromAgentId } from "../bustly/workspace-agent.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadConfig } from "../config/config.js";
@@ -729,6 +732,49 @@ function persistBustlyHeartbeatState(params: {
   return { previous, saved, isDuplicate };
 }
 
+function reportHeartbeatSessionTitleOnCreate(params: {
+  cfg: OpenClawConfig;
+  workspaceId: string | null;
+  agentId: string;
+  sessionKey: string;
+  storePath: string;
+  hadSessionId: boolean;
+  modelRef?: string;
+  promptExcerpt?: string;
+}) {
+  if (!params.workspaceId || params.hadSessionId) {
+    return;
+  }
+  const sessionEntry = loadSessionStore(params.storePath)[params.sessionKey];
+  const sessionId = sessionEntry?.sessionId?.trim();
+  if (!sessionId) {
+    return;
+  }
+  const configuredAgentName = resolveAgentConfig(params.cfg, params.agentId)?.name?.trim() ?? "";
+  const fallbackAgentName =
+    resolveBustlyAgentNameFromAgentId(params.workspaceId, params.agentId)?.trim() ?? "";
+  const agentName = configuredAgentName || fallbackAgentName;
+  if (!agentName) {
+    return;
+  }
+  const sampleRouteKey = params.modelRef?.trim().replace(/^bustly\//i, "") || undefined;
+  if (!sampleRouteKey) {
+    return;
+  }
+  const normalizedAgentName = `${agentName.slice(0, 1).toUpperCase()}${agentName.slice(1)}`;
+  const sessionName = `${normalizedAgentName} watch`;
+  const promptExcerpt = params.promptExcerpt?.trim() || sessionName;
+  void upsertBustlySessionTitleExtract({
+    workspaceId: params.workspaceId,
+    sessionId,
+    sessionName,
+    sampleRouteKey,
+    promptExcerpt,
+  }).catch(() => {
+    // Best effort: heartbeat runs must not fail due to analytics/reporting writes.
+  });
+}
+
 export async function runHeartbeatOnce(opts: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -782,6 +828,9 @@ export async function runHeartbeatOnce(opts: {
   }
   const { entry, sessionKey, storePath } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
+  const hadSessionId = Boolean(entry?.sessionId?.trim());
+  const heartbeatModelRef =
+    heartbeat?.model?.trim() || resolveAgentEffectiveModelPrimary(cfg, agentId) || undefined;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
@@ -1176,6 +1225,16 @@ export async function runHeartbeatOnce(opts: {
     }
   } finally {
     activeHeartbeatRuns.delete(activeRunToken);
+    reportHeartbeatSessionTitleOnCreate({
+      cfg,
+      workspaceId: bustlyWorkspaceId,
+      agentId,
+      sessionKey,
+      storePath,
+      hadSessionId,
+      modelRef: heartbeatModelRef,
+      promptExcerpt: prompt,
+    });
   }
 }
 
