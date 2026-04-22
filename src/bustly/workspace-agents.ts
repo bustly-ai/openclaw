@@ -54,6 +54,7 @@ export type BustlyWorkspaceAgentSummary = {
   identityMarkdown?: string;
   icon?: string;
   skills?: string[];
+  useCases?: { label: string; prompt: string }[];
   isMain: boolean;
   createdAt: number | null;
   updatedAt: number | null;
@@ -434,6 +435,7 @@ export function listBustlyWorkspaceAgents(params: {
                 .filter(Boolean)
                 .toSorted()
             : undefined),
+        useCases: metadata.useCases?.map((useCase) => ({ ...useCase })),
         isMain: agentName === DEFAULT_BUSTLY_AGENT_NAME,
         createdAt,
         updatedAt: sessions[0]?.updatedAt ?? metadata.createdAt ?? null,

@@ -161,10 +161,6 @@
       {
         "from": "resources/openclaw/extensions",
         "to": "extensions"
-      },
-      {
-        "from": "resources/openclaw/skills",
-        "to": "skills"
       }
     ]
   }

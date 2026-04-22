@@ -130,6 +130,7 @@ interface BustlyWorkspaceAgent {
   identityMarkdown?: string;
   icon?: string;
   skills?: string[];
+  useCases?: { label: string; prompt: string }[];
   isMain: boolean;
   createdAt: number | null;
   updatedAt: number | null;
