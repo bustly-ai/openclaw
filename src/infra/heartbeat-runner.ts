@@ -608,33 +608,6 @@ type HeartbeatPromptResolution = {
   bustlyWorkspaceId: string | null;
 };
 
-function resolveHeartbeatDigestWindow(params: {
-  cfg: OpenClawConfig;
-  heartbeat?: HeartbeatConfig;
-  workspaceId: string;
-  agentId: string;
-  startedAt: number;
-}): { from: string; to: string } {
-  const previous = loadBustlyHeartbeatState({
-    workspaceId: params.workspaceId,
-    agentId: params.agentId,
-  });
-  const intervalMs = resolveHeartbeatIntervalMs(params.cfg, undefined, params.heartbeat) ?? 30 * 60 * 1000;
-  const fallbackFromMs = params.startedAt - intervalMs;
-  const previousScanAt =
-    typeof previous.lastScanAt === "number" && Number.isFinite(previous.lastScanAt)
-      ? previous.lastScanAt
-      : null;
-  const fromMs = Math.max(
-    0,
-    Math.min(params.startedAt, previousScanAt !== null ? previousScanAt + 1 : fallbackFromMs),
-  );
-  return {
-    from: new Date(fromMs).toISOString(),
-    to: new Date(params.startedAt).toISOString(),
-  };
-}
-
 async function resolveHeartbeatRunPrompt(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -668,15 +641,7 @@ async function resolveHeartbeatRunPrompt(params: {
           "utf-8",
         );
         if (parseBustlyHeartbeatMarkdown(heartbeatContent)) {
-          prompt = await buildBustlyHeartbeatPromptForCurrentUser({
-            digestWindow: resolveHeartbeatDigestWindow({
-              cfg: params.cfg,
-              heartbeat: params.heartbeat,
-              workspaceId: bustlyContext.workspaceId,
-              agentId: params.agentId,
-              startedAt: params.startedAt,
-            }),
-          });
+          prompt = await buildBustlyHeartbeatPromptForCurrentUser();
           bustlyWorkspaceId = bustlyContext.workspaceId;
         }
       } catch {

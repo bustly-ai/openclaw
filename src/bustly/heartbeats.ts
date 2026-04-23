@@ -55,11 +55,6 @@ export type BustlyHeartbeatWorkspaceContext = {
   workspaceId: string;
 };
 
-export type BustlyHeartbeatDigestWindow = {
-  from: string;
-  to: string;
-};
-
 function normalizeMultilineValue(value: string): string {
   return value
     .replace(/\r\n/g, "\n")
@@ -236,14 +231,12 @@ function buildHeartbeatRunPromptLines(
 }
 
 export function buildBustlyHeartbeatRunPrompt(options?: {
-  digestWindow?: BustlyHeartbeatDigestWindow;
   preferredLanguage?: string | null;
 }): string {
   return buildHeartbeatRunPromptLines(options?.preferredLanguage).join("\n");
 }
 
 export function buildBustlyHeartbeatPrompt(options?: {
-  digestWindow?: BustlyHeartbeatDigestWindow;
   preferredLanguage?: string | null;
 }): string {
   return [
@@ -254,12 +247,9 @@ export function buildBustlyHeartbeatPrompt(options?: {
     .join("\n");
 }
 
-export async function buildBustlyHeartbeatPromptForCurrentUser(options?: {
-  digestWindow?: BustlyHeartbeatDigestWindow;
-}): Promise<string> {
+export async function buildBustlyHeartbeatPromptForCurrentUser(): Promise<string> {
   const preferredLanguage = await getBustlyUserLanguage().catch(() => null);
   return buildBustlyHeartbeatPrompt({
-    digestWindow: options?.digestWindow,
     preferredLanguage,
   });
 }

@@ -8,10 +8,6 @@ import { isCliProvider, resolveModelRefFromString } from "../../agents/model-sel
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
-import {
-  appendHeartbeatDigestEntry,
-  type HeartbeatDigestResultStatus,
-} from "../../agents/heartbeat-digest-store.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../../agents/workspace.js";
 import { searchSessionTranscripts } from "../../agents/tools/session-search-tool.js";
 import { createSkillManageTool } from "../../agents/tools/skill-manage-tool.js";
@@ -248,24 +244,6 @@ function cleanHeartbeat(value: unknown): ConsolidationClassification["heartbeat"
   return { heading, body };
 }
 
-function deriveHeartbeatWriteFromSummary(
-  summary: string,
-): NonNullable<ConsolidationClassification["heartbeat"]> | undefined {
-  const cleanSummary = cleanParagraph(summary);
-  if (!cleanSummary) {
-    return undefined;
-  }
-  const firstLine = cleanLine(cleanSummary.split("\n")[0] ?? cleanSummary) || "Long-term Goal";
-  const heading = firstLine.slice(0, 80);
-  if (!heading) {
-    return undefined;
-  }
-  return {
-    heading,
-    body: cleanSummary,
-  };
-}
-
 export function resolvePostRunMemoryReviewSettings(
   cfg?: OpenClawConfig,
 ): PostRunMemoryReviewSettings | null {
@@ -353,146 +331,6 @@ function buildSearchQuery(messages: TranscriptMessage[]): string {
     .filter(Boolean);
   const query = userMessages[userMessages.length - 1] ?? summarizeMessages(messages, 240);
   return query.trim();
-}
-
-function truncateForDigest(value: string, maxChars: number): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  return `${value.slice(0, Math.max(0, maxChars - 1))}…`;
-}
-
-function buildDigestUserIssue(params: {
-  currentTurn: TranscriptMessage[];
-  commandBody: string;
-  searchQuery: string;
-}): { summary: string; detail?: string } {
-  const userMessages = params.currentTurn
-    .filter((message) => message.role === "user")
-    .map((message) => extractMessageText(message))
-    .filter(Boolean);
-  const latestUserText =
-    userMessages[userMessages.length - 1] ||
-    params.commandBody.trim() ||
-    params.searchQuery ||
-    "User request";
-  const firstLine = latestUserText.split(/\r?\n/)[0] ?? latestUserText;
-  return {
-    summary: truncateForDigest(cleanLine(firstLine) || "User request", 160),
-    ...(cleanLine(latestUserText) && cleanLine(latestUserText) !== cleanLine(firstLine)
-      ? { detail: truncateForDigest(cleanLine(latestUserText), 320) }
-      : {}),
-  };
-}
-
-function buildDigestOutcomeSummary(params: {
-  currentTurn: TranscriptMessage[];
-  preferredSummary?: string;
-}): string {
-  const assistantMessages = params.currentTurn
-    .filter((message) => message.role === "assistant")
-    .map((message) => extractMessageText(message))
-    .filter(Boolean);
-  const latestAssistantText = assistantMessages[assistantMessages.length - 1] ?? "";
-  const summary =
-    cleanParagraph(params.preferredSummary) ||
-    cleanParagraph(latestAssistantText) ||
-    cleanLine(summarizeMessages(params.currentTurn, 1200)) ||
-    "Task finished without a summary.";
-  return truncateForDigest(summary, 800);
-}
-
-function buildDigestAgentActionSummary(params: {
-  currentTurn: TranscriptMessage[];
-  searchQuery: string;
-  toolCallCount: number;
-}): string {
-  const topic = truncateForDigest(cleanLine(params.searchQuery) || "the request", 220);
-  if (params.toolCallCount > 0) {
-    return truncateForDigest(
-      `Used ${params.toolCallCount} tool call${params.toolCallCount === 1 ? "" : "s"} to work on ${topic}.`,
-      240,
-    );
-  }
-  const assistantMessages = params.currentTurn
-    .filter((message) => message.role === "assistant")
-    .map((message) => extractMessageText(message))
-    .filter(Boolean);
-  const latestAssistantText = cleanLine(assistantMessages[assistantMessages.length - 1] ?? "");
-  if (latestAssistantText) {
-    return truncateForDigest(`Answered directly about ${topic}. ${latestAssistantText}`, 240);
-  }
-  return truncateForDigest(`Worked on ${topic}.`, 240);
-}
-
-function buildDigestFollowUp(params: {
-  status: HeartbeatDigestResultStatus;
-  reason?: string;
-  reviewError?: string;
-  preferredRisk?: string;
-}): { risk?: string; unresolvedItems?: string[] } | undefined {
-  const risk =
-    truncateForDigest(
-      cleanLine(params.preferredRisk) || cleanLine(params.reviewError) || cleanLine(params.reason),
-      240,
-    ) || "";
-  const unresolvedItems: string[] = [];
-  if (params.status === "failed") {
-    unresolvedItems.push(risk || "Task failed and likely needs another attempt.");
-  } else if (params.status === "blocked") {
-    unresolvedItems.push(risk || "Task is blocked and still needs follow-up.");
-  } else if (params.status === "partial") {
-    unresolvedItems.push(risk || "Task only partially resolved the request.");
-  }
-  if (!risk && unresolvedItems.length === 0) {
-    return undefined;
-  }
-  return {
-    ...(risk ? { risk } : {}),
-    ...(unresolvedItems.length > 0 ? { unresolvedItems } : {}),
-  };
-}
-
-async function appendHeartbeatTaskDigest(params: {
-  agentDir: string;
-  sessionId: string;
-  sessionKey?: string;
-  searchQuery: string;
-  userQuestion: { summary: string; detail?: string };
-  status: HeartbeatDigestResultStatus;
-  agentActionSummary: string;
-  outcomeSummary: string;
-  keywords?: string[];
-  followUp?: {
-    risk?: string;
-    unresolvedItems?: string[];
-  };
-}) {
-  const nowMs = Date.now();
-  await appendHeartbeatDigestEntry({
-    agentDir: params.agentDir,
-    entry: {
-      id: crypto.randomUUID(),
-      createdAt: new Date(nowMs).toISOString(),
-      createdAtMs: nowMs,
-      sessionId: params.sessionId,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      query: truncateForDigest(cleanLine(params.searchQuery), 240),
-      userQuestion: {
-        summary: params.userQuestion.summary,
-        ...(params.userQuestion.detail ? { detail: params.userQuestion.detail } : {}),
-      },
-      agentAction: {
-        summary: truncateForDigest(cleanLine(params.agentActionSummary), 240),
-      },
-      outcome: {
-        status: params.status,
-        summary: truncateForDigest(cleanLine(params.outcomeSummary), 800),
-      },
-      ...(params.keywords && params.keywords.length > 0 ? { keywords: params.keywords } : {}),
-      ...(params.followUp ? { followUp: params.followUp } : {}),
-    },
-  });
 }
 
 export function decidePostRunMemoryReview(params: {
@@ -854,11 +692,7 @@ export function enforceRuntimeRouting(params: {
   const writeSkill =
     params.classification.skill && hasProcedureSignal ? params.classification.skill : undefined;
   const writeMemory = params.classification.memory;
-  const writeHeartbeat =
-    params.classification.heartbeat ??
-    (repeatedTask || params.classification.layer === "heartbeat" || Boolean(writeSkill)
-      ? deriveHeartbeatWriteFromSummary(params.classification.summary)
-      : undefined);
+  const writeHeartbeat = params.classification.heartbeat;
   const writeRetrieval = Boolean(
     params.classification.correction ||
       params.classification.precedent ||
@@ -908,6 +742,9 @@ export function enforceRuntimeRouting(params: {
   if (!writeMemory && params.classification.layer === "memory") {
     reason = "missing_memory_payload";
   }
+  if (!writeHeartbeat && params.classification.layer === "heartbeat") {
+    reason = "missing_heartbeat_payload";
+  }
 
   return {
     primaryLayer,
@@ -951,56 +788,13 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
   const currentTurn = extractCurrentTurnMessages(transcriptMessages);
   const currentTurnSummary = summarizeMessages(currentTurn, 5000);
   const searchQuery = buildSearchQuery(currentTurn);
-  const digestUserIssue = buildDigestUserIssue({
-    currentTurn,
-    commandBody: params.commandBody,
-    searchQuery,
-  });
-  const appendDigest = async (options: {
-    status: HeartbeatDigestResultStatus;
-    outcomeSummary: string;
-    keywords?: string[];
-    followUp?: {
-      risk?: string;
-      unresolvedItems?: string[];
-    };
-  }) => {
-    try {
-      await appendHeartbeatTaskDigest({
-        agentDir: params.followupRun.run.agentDir,
-        sessionId: params.followupRun.run.sessionId,
-        sessionKey: params.sessionKey,
-        searchQuery,
-        userQuestion: digestUserIssue,
-        status: options.status,
-        agentActionSummary: buildDigestAgentActionSummary({
-          currentTurn,
-          searchQuery,
-          toolCallCount: decision.toolCallCount,
-        }),
-        outcomeSummary: options.outcomeSummary,
-        keywords: options.keywords,
-        followUp: options.followUp,
-      });
-    } catch (err) {
-      logVerbose(`failed to persist heartbeat digest: ${String(err)}`);
-    }
-  };
 
   if (!settings) {
-    await appendDigest({
-      status: "completed",
-      outcomeSummary: buildDigestOutcomeSummary({ currentTurn }),
-    });
     return;
   }
 
   const chatType = params.sessionCtx.ChatType?.trim().toLowerCase();
   if (!settings.allowInGroupChats && chatType && chatType !== "direct") {
-    await appendDigest({
-      status: "completed",
-      outcomeSummary: buildDigestOutcomeSummary({ currentTurn }),
-    });
     return;
   }
 
@@ -1019,17 +813,9 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
     return sandboxCfg.workspaceAccess === "rw";
   })();
   if (!reviewWritable) {
-    await appendDigest({
-      status: "completed",
-      outcomeSummary: buildDigestOutcomeSummary({ currentTurn }),
-    });
     return;
   }
   if (!decision.shouldRun) {
-    await appendDigest({
-      status: "completed",
-      outcomeSummary: buildDigestOutcomeSummary({ currentTurn }),
-    });
     return;
   }
 
@@ -1143,33 +929,8 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
       matchedPriorSessions,
       repeatedTask: routed.repeatedTask,
     };
-    await appendDigest({
-      status: routed.reason === "low_confidence" ? "partial" : "completed",
-      outcomeSummary: buildDigestOutcomeSummary({
-        currentTurn,
-        preferredSummary: classification.summary,
-      }),
-      keywords: classification.keywords,
-      followUp: buildDigestFollowUp({
-        status: routed.reason === "low_confidence" ? "partial" : "completed",
-        reason: routed.reason,
-        preferredRisk: routed.reason === "low_confidence" ? classification.summary : "",
-      }),
-    });
   } catch (err) {
     logVerbose(`post-run consolidation failed: ${String(err)}`);
-    await appendDigest({
-      status: "failed",
-      outcomeSummary: buildDigestOutcomeSummary({
-        currentTurn,
-        preferredSummary: "Post-run review failed after task completion.",
-      }),
-      followUp: buildDigestFollowUp({
-        status: "failed",
-        reason: "post_run_review_failed",
-        reviewError: String(err),
-      }),
-    });
     try {
       await appendReviewLedger({
         agentDir: params.followupRun.run.agentDir,

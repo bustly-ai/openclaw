@@ -233,7 +233,7 @@ describe("enforceRuntimeRouting", () => {
     });
   });
 
-  it("auto-derives heartbeat goals for repeated tasks", () => {
+  it("does not auto-promote repeated tasks into heartbeat without heartbeat payload", () => {
     const settings = resolvePostRunMemoryReviewSettings({
       agents: {
         defaults: {
@@ -262,7 +262,42 @@ describe("enforceRuntimeRouting", () => {
       settings,
     });
 
-    expect(routed.writeHeartbeat?.heading).toContain("Run inventory reconciliation every Monday");
-    expect(routed.writeHeartbeat?.body).toContain("delta exceeds 2%");
+    expect(routed.writeHeartbeat).toBeUndefined();
+    expect(routed.primaryLayer).toBe("none");
+    expect(routed.reason).toBe("repeated_workflow");
+  });
+
+  it("reports missing heartbeat payload when layer=heartbeat but heartbeat body is absent", () => {
+    const settings = resolvePostRunMemoryReviewSettings({
+      agents: {
+        defaults: {
+          selfEvolution: {
+            enabled: true,
+            minToolCalls: DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS,
+          },
+        },
+      },
+    });
+    expect(settings).not.toBeNull();
+    if (!settings) {
+      throw new Error("missing settings");
+    }
+
+    const routed = enforceRuntimeRouting({
+      classification: {
+        layer: "heartbeat",
+        reason: "long_term_goal_detected",
+        confidence: 0.93,
+        repeatedTask: false,
+        summary: "Keep watching weekly churn trend and alert on acceleration.",
+      },
+      matchedPriorSessions: 0,
+      toolCallCount: 0,
+      settings,
+    });
+
+    expect(routed.writeHeartbeat).toBeUndefined();
+    expect(routed.primaryLayer).toBe("none");
+    expect(routed.reason).toBe("missing_heartbeat_payload");
   });
 });
