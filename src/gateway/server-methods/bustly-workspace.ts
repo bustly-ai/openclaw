@@ -1,7 +1,7 @@
 import {
   resolveActiveBustlyWorkspaceBinding,
+  setActiveBustlyWorkspace,
 } from "../../bustly/workspace-runtime.js";
-import { bootstrapBustlyRuntime } from "../../bustly/runtime-manifest.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -33,10 +33,7 @@ export const bustlyWorkspaceHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },
@@ -53,10 +50,11 @@ export const bustlyWorkspaceHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const binding = await bootstrapBustlyRuntime({
+      const binding = await setActiveBustlyWorkspace({
         workspaceId,
         workspaceName,
         allowCreateConfig: true,
+        deferBootstrap: true,
         userAgent: "openclaw-cloud",
       });
       if (!binding) {
@@ -80,10 +78,7 @@ export const bustlyWorkspaceHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          err instanceof Error ? err.message : String(err),
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
       );
     }
   },
