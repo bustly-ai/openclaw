@@ -3302,9 +3302,19 @@ async function runElectronBustlyLogin(loginTraceId: string): Promise<void> {
       status: "initializing",
       error: null,
     });
+    let gatewayStoppedForWorkspaceSync = false;
+    if (gatewayProcess && !gatewayProcess.killed) {
+      writeMainInfo("[Bustly OAuth] Stopping gateway before workspace config sync");
+      await stopGateway();
+      gatewayStoppedForWorkspaceSync = true;
+    }
     await initializeGatewayRuntimeForBustlyWorkspace({
       workspaceId: apiResponse.data.workspaceId,
     });
+    if (!gatewayProcess || gatewayStoppedForWorkspaceSync) {
+      writeMainInfo("[Bustly OAuth] Starting gateway after workspace config sync");
+      await startGateway();
+    }
     syncSentryBustlyScope();
     finishBustlyLoginAttempt(loginTraceId, { status: "completed" });
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -4175,7 +4185,7 @@ void app.whenReady().then(async () => {
   writeMainLog(`fullyInitialized=${fullyInitialized} bustlyLoggedIn=${bustlyLoggedIn}`);
   const needsInit = !fullyInitialized;
   needsOnboardAtLaunch = needsInit && !bustlyLoggedIn;
-  let shouldAutoStartGateway = !needsInit;
+  let shouldAutoStartGateway = !needsInit && bustlyLoggedIn;
 
   ensureWindow();
 
@@ -4198,6 +4208,9 @@ void app.whenReady().then(async () => {
     }
   } else {
     writeMainLog("Configuration already exists and is valid");
+    if (!bustlyLoggedIn) {
+      writeMainLog("Bustly session missing; deferring gateway start until login initialization completes.");
+    }
     // Load existing config to get port and token
     const existingConfig = loadGatewayConfig();
     if (existingConfig) {

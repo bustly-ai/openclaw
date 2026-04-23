@@ -9,7 +9,7 @@ const {
   supabaseRowsRef,
   fetchPayloadRef,
   fetchStatusRef,
-  fetchWithSsrFGuardMock,
+  artifactFetchMock,
   extractArchiveMock,
   bumpSkillsSnapshotVersionMock,
 } = vi.hoisted(() => ({
@@ -17,7 +17,7 @@ const {
   supabaseRowsRef: { current: [] as unknown[] },
   fetchPayloadRef: { current: Buffer.from("skill-archive") },
   fetchStatusRef: { current: 200 },
-  fetchWithSsrFGuardMock: vi.fn(),
+  artifactFetchMock: vi.fn(),
   extractArchiveMock: vi.fn(),
   bumpSkillsSnapshotVersionMock: vi.fn(),
 }));
@@ -37,10 +37,6 @@ vi.mock("./supabase.js", () => ({
       },
     });
   }),
-}));
-
-vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
 
 vi.mock("../infra/archive.js", () => ({
@@ -111,13 +107,13 @@ describe("bustly skill catalog", () => {
     fetchPayloadRef.current = Buffer.from("skill-archive");
     fetchStatusRef.current = 200;
 
-    fetchWithSsrFGuardMock.mockReset();
-    fetchWithSsrFGuardMock.mockImplementation(async () => ({
-      response: new Response(fetchPayloadRef.current, {
+    artifactFetchMock.mockReset();
+    artifactFetchMock.mockImplementation(async () =>
+      new Response(fetchPayloadRef.current, {
         status: fetchStatusRef.current,
       }),
-      release: async () => {},
-    }));
+    );
+    vi.stubGlobal("fetch", (...args: Parameters<typeof fetch>) => artifactFetchMock(...args));
 
     extractArchiveMock.mockReset();
     extractArchiveMock.mockImplementation(async (params: { destDir: string }) => {
@@ -144,6 +140,7 @@ describe("bustly skill catalog", () => {
       process.env.BUSTLY_DEFAULT_ENABLED_SKILLS = previousDefaultEnabledSkillsEnv;
     }
     rmSync(tempRoot, { recursive: true, force: true });
+    vi.unstubAllGlobals();
     vi.resetModules();
   });
 
@@ -250,7 +247,7 @@ describe("bustly skill catalog", () => {
     const snapshotPath = path.join(configDirRef.current, "skills", ".bustly-default-installed.json");
     expect(existsSync(snapshotPath)).toBe(true);
     await Promise.resolve();
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(artifactFetchMock).toHaveBeenCalledTimes(1);
     const snapshot = JSON.parse(readFileSync(snapshotPath, "utf-8")) as {
       skills: Array<{ skillKey: string; installedVersionId?: string }>;
     };
@@ -277,14 +274,11 @@ describe("bustly skill catalog", () => {
     ];
 
     let releaseDownload: (() => void) | null = null;
-    fetchWithSsrFGuardMock.mockImplementationOnce(
+    artifactFetchMock.mockImplementationOnce(
       async () =>
         await new Promise((resolve) => {
           releaseDownload = () => {
-            resolve({
-              response: new Response(Buffer.from("deferred-default-zip"), { status: 200 }),
-              release: async () => {},
-            });
+            resolve(new Response(Buffer.from("deferred-default-zip"), { status: 200 }));
           };
         }),
     );
@@ -301,7 +295,7 @@ describe("bustly skill catalog", () => {
         }),
       ]),
     );
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(artifactFetchMock).toHaveBeenCalledTimes(1);
 
     releaseDownload?.();
     await Promise.resolve();
@@ -421,7 +415,7 @@ describe("bustly skill catalog", () => {
     ).toMatchObject({
       publishedVersionId: "v1",
     });
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    expect(artifactFetchMock).not.toHaveBeenCalled();
   });
 
   it("installs from skillops zip artifact and writes manifest", async () => {

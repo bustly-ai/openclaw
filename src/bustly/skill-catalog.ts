@@ -17,7 +17,6 @@ import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { extractArchive as extractArchiveSafe } from "../infra/archive.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { resolveBundledSkillsDir } from "../agents/skills/bundled-dir.js";
 import { CONFIG_DIR } from "../utils.js";
@@ -760,33 +759,56 @@ async function downloadArtifactZip(params: {
   zipUrl: string;
   archivePath: string;
 }): Promise<{ bytes: number }> {
-  const { response, release } = await fetchWithSsrFGuard({
-    url: params.zipUrl,
-    timeoutMs: BUSTLY_SKILL_DOWNLOAD_TIMEOUT_MS,
-    init: {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(params.zipUrl);
+  } catch {
+    throw new Error(`Invalid skill package URL: ${params.zipUrl}`);
+  }
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    throw new Error(`Invalid skill package URL protocol: ${parsedUrl.protocol}`);
+  }
+
+  const fetchImpl = globalThis.fetch;
+  if (!fetchImpl) {
+    throw new Error("fetch is not available");
+  }
+
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), BUSTLY_SKILL_DOWNLOAD_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetchImpl(parsedUrl.toString(), {
       headers: {
         Accept: "application/octet-stream,application/zip;q=0.9,*/*;q=0.1",
       },
-    },
-    auditContext: "bustly-skill-catalog",
-  });
-
-  try {
-    if (!response.ok || !response.body) {
-      throw new Error(`Download failed (${response.status} ${response.statusText})`);
+      signal: abortController.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(
+        `Skill package download timed out after ${BUSTLY_SKILL_DOWNLOAD_TIMEOUT_MS}ms.`,
+        { cause: error },
+      );
     }
-    mkdirSync(dirname(params.archivePath), { recursive: true, mode: 0o700 });
-    const output = createWriteStream(params.archivePath);
-    const body = response.body as unknown;
-    const readable = isNodeReadableStream(body)
-      ? body
-      : Readable.fromWeb(body as NodeReadableStream);
-    await pipeline(readable, output);
-    const bytes = statSync(params.archivePath).size;
-    return { bytes };
+    throw error;
   } finally {
-    await release();
+    clearTimeout(timeout);
   }
+
+  if (!response.ok || !response.body) {
+    throw new Error(`Download failed (${response.status} ${response.statusText})`);
+  }
+
+  mkdirSync(dirname(params.archivePath), { recursive: true, mode: 0o700 });
+  const output = createWriteStream(params.archivePath);
+  const body = response.body as unknown;
+  const readable = isNodeReadableStream(body)
+    ? body
+    : Readable.fromWeb(body as NodeReadableStream);
+  await pipeline(readable, output);
+  const bytes = statSync(params.archivePath).size;
+  return { bytes };
 }
 
 function computeFileSha256Hex(filePath: string): string {

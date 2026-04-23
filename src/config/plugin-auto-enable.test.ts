@@ -137,28 +137,30 @@ describe("applyPluginAutoEnable", () => {
   });
 
   describe("third-party channel plugins (pluginId ≠ channelId)", () => {
-    it("uses the plugin manifest id, not the channel id, for plugins.entries", () => {
+    it("uses the plugin manifest id, not the channel id, for plugins.allow", () => {
       // Reproduces: https://github.com/openclaw/openclaw/issues/25261
-      // Plugin "apn-channel" declares channels: ["apn"]. Doctor must write
-      // plugins.entries["apn-channel"], not plugins.entries["apn"].
+      // Plugin "apn-channel" declares channels: ["apn"]. Auto-enable should add
+      // "apn-channel" to plugins.allow, not "apn".
       const result = applyPluginAutoEnable({
         config: {
           channels: { apn: { someKey: "value" } },
+          plugins: { allow: ["telegram"] },
         },
         env: {},
         manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
       });
 
-      expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
+      expect(result.config.plugins?.allow).toEqual(["telegram", "apn-channel"]);
+      expect(result.config.plugins?.entries?.["apn-channel"]).toBeUndefined();
       expect(result.config.plugins?.entries?.["apn"]).toBeUndefined();
       expect(result.changes.join("\n")).toContain("apn configured, enabled automatically.");
     });
 
-    it("does not double-enable when plugin is already enabled under its plugin id", () => {
+    it("does not double-enable when plugin is already allowlisted under its plugin id", () => {
       const result = applyPluginAutoEnable({
         config: {
           channels: { apn: { someKey: "value" } },
-          plugins: { entries: { "apn-channel": { enabled: true } } },
+          plugins: { allow: ["apn-channel"] },
         },
         env: {},
         manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
@@ -186,12 +188,13 @@ describe("applyPluginAutoEnable", () => {
       const result = applyPluginAutoEnable({
         config: {
           channels: { "unknown-chan": { someKey: "value" } },
+          plugins: { allow: ["telegram"] },
         },
         env: {},
         manifestRegistry: makeRegistry([]),
       });
 
-      expect(result.config.plugins?.entries?.["unknown-chan"]?.enabled).toBe(true);
+      expect(result.config.plugins?.allow).toEqual(["telegram", "unknown-chan"]);
     });
   });
 

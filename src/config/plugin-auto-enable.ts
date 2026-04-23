@@ -427,20 +427,9 @@ function registerPluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawCon
       },
     };
   }
-  const entries = {
-    ...cfg.plugins?.entries,
-    [pluginId]: {
-      ...(cfg.plugins?.entries?.[pluginId] as Record<string, unknown> | undefined),
-      enabled: true,
-    },
-  };
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      entries,
-    },
-  };
+  // Non built-in plugins default to enabled when not explicitly denied/disabled.
+  // Avoid writing plugins.entries during auto-enable to prevent config churn.
+  return cfg;
 }
 
 function formatAutoEnableChange(entry: PluginEnableChange): string {
@@ -502,12 +491,19 @@ export function applyPluginAutoEnable(params: {
             }
             return (channelConfig as { enabled?: unknown }).enabled === true;
           })()
-        : next.plugins?.entries?.[entry.pluginId]?.enabled === true;
+        : (() => {
+            if (Array.isArray(allow)) {
+              return allow.includes(entry.pluginId);
+            }
+            return true;
+          })();
     if (alreadyEnabled && !allowMissing) {
       continue;
     }
-    next = registerPluginEntry(next, entry.pluginId);
-    if (allowMissing || !builtInChannelId) {
+    if (builtInChannelId) {
+      next = registerPluginEntry(next, entry.pluginId);
+    }
+    if (allowMissing) {
       next = ensurePluginAllowlisted(next, entry.pluginId);
     }
     changes.push(formatAutoEnableChange(entry));
