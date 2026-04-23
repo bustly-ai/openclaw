@@ -351,6 +351,7 @@ export async function ensureBustlyCloudReady(params?: {
     userAgent: params?.userAgent ?? "openclaw-cloud",
     baseUrl: params?.baseUrl,
     env,
+    deferPresetAgentsSync: true,
   });
   return {
     workspaceId,
