@@ -14,7 +14,7 @@ export default function App() {
     try {
       const result = await window.electronAPI.reloadRemoteRenderer();
       if (!result.success) {
-        setError(result.error ?? "Bustly could not retry the remote renderer.");
+        setError(result.error ?? "Bustly could not retry the bundled renderer entry.");
         setReloading(false);
       }
     } catch (reloadError) {
@@ -29,9 +29,10 @@ export default function App() {
         <div className="flex h-[116px] w-[116px] items-center justify-center text-red-500">
           <WarningCircle size={44} weight="bold" />
         </div>
-        <p className="onboard-loading-title">Bustly could not load the renderer from the CDN.</p>
+        <p className="onboard-loading-title">Bustly could not load the bundled renderer.</p>
         <p className="mt-2 max-w-[360px] text-center text-sm leading-6 text-[#666F8D]">
-          Check your network connection and reload to retry the remote renderer.
+          Reload to retry the local HTML entrypoint. If this build was packaged without a synced renderer entry, rebuild
+          the desktop app.
         </p>
         {error ? (
           <p className="mt-3 max-w-[360px] text-center text-sm leading-6 text-[#C24A3A]">

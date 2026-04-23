@@ -190,12 +190,12 @@ function loadMainProcessEnvFromDotEnv(): void {
   const isDevelopment = process.env.NODE_ENV === "development";
   const envPathCandidates = isDevelopment
     ? [
-        resolve(__dirname, "../../.env.internal"),
-        resolve(__dirname, "../.env.internal"),
-        resolve(process.cwd(), ".env.internal"),
         resolve(__dirname, "../../.env"),
         resolve(__dirname, "../.env"),
         resolve(process.cwd(), ".env"),
+        resolve(__dirname, "../../.env.internal"),
+        resolve(__dirname, "../.env.internal"),
+        resolve(process.cwd(), ".env.internal"),
       ]
     : [
         resolve(__dirname, "../../.env"),
@@ -729,6 +729,9 @@ const HEARTBEAT_NOTIFICATION_DEDUPE_MAX = 500;
 const GATEWAY_HEARTBEAT_NOTIFIER_CLIENT_ID = "gateway-client";
 const BUSTLY_LOGIN_HASH = "/bustly-login";
 const BUSTLY_RENDERER_URL = process.env.BUSTLY_RENDERER_URL?.trim() || "";
+const BUNDLED_RENDERER_ENTRY_DIR = "renderer-entry";
+const BUNDLED_RENDERER_ENTRY_FILE = "index.html";
+const BUNDLED_RENDERER_ENTRY_METADATA_FILE = "metadata.json";
 const PRELOAD_PATH = process.env.NODE_ENV === "development"
   ? resolve(__dirname, "main/preload.js")
   : resolve(__dirname, "preload.js");
@@ -906,10 +909,10 @@ function loadElectronEnvVars(): Record<string, string> {
   const envPaths =
     process.env.NODE_ENV === "development"
       ? [
-          resolve(__dirname, "../.env.internal"),
           resolve(__dirname, "../.env"),
-          resolve(app.getAppPath(), ".env.internal"),
           resolve(app.getAppPath(), ".env"),
+          resolve(__dirname, "../.env.internal"),
+          resolve(app.getAppPath(), ".env.internal"),
         ]
       : [resolve(__dirname, "../../.env"), resolve(app.getAppPath(), ".env")];
 
@@ -2631,6 +2634,56 @@ function loadRendererFallbackWindow(targetWindow: BrowserWindow, options?: { has
   });
 }
 
+function resolveBundledRendererEntryPath(fileName: string): string | null {
+  const candidates = [
+    process.resourcesPath
+      ? resolve(process.resourcesPath, BUNDLED_RENDERER_ENTRY_DIR, fileName)
+      : null,
+    resolve(dirname(app.getAppPath()), BUNDLED_RENDERER_ENTRY_DIR, fileName),
+    resolve(app.getAppPath(), "resources", BUNDLED_RENDERER_ENTRY_DIR, fileName),
+  ];
+  for (const candidate of candidates) {
+    if (candidate && existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function readBundledRendererEntrySourceUrl(): string | null {
+  const metadataPath = resolveBundledRendererEntryPath(BUNDLED_RENDERER_ENTRY_METADATA_FILE);
+  if (!metadataPath) {
+    return null;
+  }
+  try {
+    const raw = JSON.parse(readFileSync(metadataPath, "utf-8")) as { sourceUrl?: unknown };
+    return typeof raw.sourceUrl === "string" && raw.sourceUrl.trim() ? raw.sourceUrl.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadBundledRendererEntryWindow(targetWindow: BrowserWindow, options?: { hash?: string }) {
+  const filePath = resolveBundledRendererEntryPath(BUNDLED_RENDERER_ENTRY_FILE);
+  if (!filePath) {
+    writeMainWarn("[Renderer] Bundled renderer entry not found; falling back to the local renderer.");
+    loadRendererFallbackWindow(targetWindow, { hash: REMOTE_RENDERER_FALLBACK_HASH });
+    return;
+  }
+
+  const sourceUrl = readBundledRendererEntrySourceUrl();
+  writeMainLog(
+    `[Renderer] Loading bundled renderer entry ${filePath}${sourceUrl ? ` (synced from ${sourceUrl})` : ""}`,
+  );
+  const loadOptions = options?.hash ? { hash: options.hash } : undefined;
+  targetWindow.loadFile(filePath, loadOptions).catch((error) => {
+    writeMainError(
+      `[Renderer] Bundled renderer entry load failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    loadRendererFallbackWindow(targetWindow, { hash: REMOTE_RENDERER_FALLBACK_HASH });
+  });
+}
+
 function resolveRemoteRendererUrl(hash?: string): string | null {
   if (!BUSTLY_RENDERER_URL) {
     return null;
@@ -2685,6 +2738,11 @@ function loadRendererWindow(targetWindow: BrowserWindow, options?: { hash?: stri
   const normalizedHash = normalizeRendererHash(options?.hash);
   if (normalizedHash && LOCAL_RENDERER_ONLY_HASHES.has(normalizedHash)) {
     loadRendererFallbackWindow(targetWindow, { hash: normalizedHash });
+    return;
+  }
+
+  if (process.env.NODE_ENV !== "development") {
+    loadBundledRendererEntryWindow(targetWindow, { hash: options?.hash });
     return;
   }
 
@@ -3679,9 +3737,6 @@ function setupIpcHandlers(): void {
     if (!mainWindow || mainWindow.isDestroyed()) {
       return { success: false, error: "Main window is not available" };
     }
-    if (!BUSTLY_RENDERER_URL) {
-      return { success: false, error: "BUSTLY_RENDERER_URL is not configured" };
-    }
     loadRendererWindow(mainWindow, { hash: lastRequestedRendererHash });
     return { success: true };
   });
@@ -4025,13 +4080,13 @@ void app.whenReady().then(async () => {
     const isDevelopment = process.env.NODE_ENV === "development";
     const envPaths = isDevelopment
       ? [
-          // Development: prefer test/internal endpoints when available.
-          resolve(__dirname, "../../.env.internal"),
-          resolve(__dirname, "../.env.internal"),
-          resolve(process.cwd(), ".env.internal"),
+          // Development: prefer local/shared env first, then fall back to internal test endpoints.
           resolve(__dirname, "../../.env"),
           resolve(__dirname, "../.env"),
           resolve(process.cwd(), ".env"),
+          resolve(__dirname, "../../.env.internal"),
+          resolve(__dirname, "../.env.internal"),
+          resolve(process.cwd(), ".env.internal"),
         ]
       : [
           resolve(__dirname, "../../.env"),

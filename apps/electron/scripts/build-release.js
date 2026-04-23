@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { parse as parseDotenv } from "dotenv";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -49,6 +50,9 @@ const pnpmCmd = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const nodeCmd = process.platform === "win32" ? "node.exe" : "node";
 const packagedEnvPath = resolve(appDir, ".env");
 const selectedEnvPath = resolve(appDir, envFile);
+const rendererEntryDir = resolve(appDir, "resources", "renderer-entry");
+const rendererEntryPath = resolve(rendererEntryDir, "index.html");
+const rendererEntryMetadataPath = resolve(rendererEntryDir, "metadata.json");
 
 if (!existsSync(selectedEnvPath)) {
   console.error(`[build-release] Env file not found: ${selectedEnvPath}`);
@@ -84,11 +88,87 @@ const capture = (cmd, cmdArgs, opts = {}) => {
 
 const originalEnvExists = existsSync(packagedEnvPath);
 const originalEnvContent = originalEnvExists ? readFileSync(packagedEnvPath) : null;
+const originalRendererEntryExists = existsSync(rendererEntryPath);
+const originalRendererEntryContent = originalRendererEntryExists ? readFileSync(rendererEntryPath) : null;
+const originalRendererEntryMetadataExists = existsSync(rendererEntryMetadataPath);
+const originalRendererEntryMetadataContent = originalRendererEntryMetadataExists
+  ? readFileSync(rendererEntryMetadataPath)
+  : null;
 
 let exitCode = 0;
 
+const restoreFile = (path, existed, content) => {
+  if (existed && content) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+    return;
+  }
+  if (existsSync(path)) {
+    unlinkSync(path);
+  }
+};
+
+const resolveRendererBaseHref = (rendererUrl) => {
+  const url = new URL(rendererUrl);
+  url.hash = "";
+  url.search = "";
+  url.pathname = url.pathname.endsWith("/")
+    ? url.pathname
+    : url.pathname.replace(/[^/]*$/, "");
+  return url.toString();
+};
+
+const injectRendererBaseHref = (html, rendererUrl) => {
+  if (/<base\s/i.test(html)) {
+    return html;
+  }
+  const headMatch = /<head[^>]*>/i;
+  if (!headMatch.test(html)) {
+    throw new Error("[build-release] Synced renderer HTML is missing a <head> tag.");
+  }
+  const baseHref = resolveRendererBaseHref(rendererUrl);
+  return html.replace(headMatch, (match) => `${match}\n  <base href="${baseHref}" />`);
+};
+
+const syncRendererEntry = async (envPath) => {
+  const envContent = readFileSync(envPath, "utf-8");
+  const env = parseDotenv(envContent);
+  const rendererUrl = env.BUSTLY_RENDERER_URL?.trim() || "";
+  if (!rendererUrl) {
+    throw new Error(`[build-release] BUSTLY_RENDERER_URL is missing in ${envPath}`);
+  }
+
+  console.log(`[build-release] Syncing renderer entry from ${rendererUrl}`);
+  const response = await fetch(rendererUrl, {
+    headers: {
+      Accept: "text/html,application/xhtml+xml",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`[build-release] Failed to fetch renderer entry: HTTP ${response.status} ${response.statusText}`);
+  }
+
+  const html = await response.text();
+  if (!html.trim()) {
+    throw new Error("[build-release] Synced renderer HTML is empty.");
+  }
+
+  const normalizedHtml = injectRendererBaseHref(html, rendererUrl);
+  const metadata = {
+    sourceUrl: rendererUrl,
+    syncedAt: new Date().toISOString(),
+  };
+
+  mkdirSync(rendererEntryDir, { recursive: true });
+  writeFileSync(rendererEntryPath, normalizedHtml, "utf-8");
+  writeFileSync(rendererEntryMetadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf-8");
+};
+
 try {
   copyFileSync(selectedEnvPath, packagedEnvPath);
+  await syncRendererEntry(selectedEnvPath);
 
   run(pnpmCmd, ["run", "prepare:openclaw-deps"]);
 
@@ -155,6 +235,12 @@ try {
   } else if (!originalEnvExists && existsSync(packagedEnvPath)) {
     unlinkSync(packagedEnvPath);
   }
+  restoreFile(rendererEntryPath, originalRendererEntryExists, originalRendererEntryContent);
+  restoreFile(
+    rendererEntryMetadataPath,
+    originalRendererEntryMetadataExists,
+    originalRendererEntryMetadataContent,
+  );
 }
 
 if (exitCode !== 0) {

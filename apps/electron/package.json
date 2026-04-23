@@ -129,6 +129,14 @@
     },
     "extraResources": [
       {
+        "from": "resources/renderer-entry",
+        "to": "renderer-entry",
+        "filter": [
+          "index.html",
+          "metadata.json"
+        ]
+      },
+      {
         "from": "resources/bustly-skills",
         "to": "bustly-skills",
         "filter": [
