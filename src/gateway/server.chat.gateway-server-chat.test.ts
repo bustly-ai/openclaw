@@ -307,6 +307,37 @@ describe("gateway server chat", () => {
       };
       expect(defaultMsgs.length).toBe(300);
       expect(firstContentText(defaultMsgs[0])).toBe("m0");
+
+      const pagedRes = await rpcReq<{
+        messages?: unknown[];
+        nextBefore?: number | null;
+        hasMore?: boolean;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 200,
+      });
+      expect(pagedRes.ok).toBe(true);
+      const pagedMsgs = pagedRes.payload?.messages ?? [];
+      expect(pagedMsgs.length).toBe(200);
+      expect(firstContentText(pagedMsgs[0])).toBe("m100");
+      expect(pagedRes.payload?.nextBefore).toBe(100);
+      expect(pagedRes.payload?.hasMore).toBe(true);
+
+      const olderRes = await rpcReq<{
+        messages?: unknown[];
+        nextBefore?: number | null;
+        hasMore?: boolean;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 200,
+        before: 100,
+      });
+      expect(olderRes.ok).toBe(true);
+      const olderMsgs = olderRes.payload?.messages ?? [];
+      expect(olderMsgs.length).toBe(100);
+      expect(firstContentText(olderMsgs[0])).toBe("m0");
+      expect(olderRes.payload?.nextBefore ?? null).toBe(null);
+      expect(olderRes.payload?.hasMore).toBe(false);
     } finally {
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
