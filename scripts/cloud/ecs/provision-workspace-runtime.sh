@@ -13,7 +13,6 @@ Usage:
     [--tf-dir infra/terraform/ecs-fargate] \
     [--gateway-token <token>] \
     [--skip-channels 1] \
-    [--skip-cron 1] \
     [--skip-resource-tags 1] \
     [--ephemeral-state 1] \
     [--skip-runtime-mapping-write 1] \
@@ -159,7 +158,9 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --skip-cron)
-      SKIP_CRON="${2:-}"
+      if [[ "${2:-0}" == "1" ]]; then
+        echo "warning: --skip-cron=1 is deprecated and ignored; cron is always enabled for cloud runtime." >&2
+      fi
       shift 2
       ;;
     --skip-resource-tags)
@@ -1270,4 +1271,5 @@ fi
 echo "  http_base_url: ${HTTP_BASE_URL}"
 echo "  ws_url: ${WS_URL}"
 echo "  gateway_token: ${GATEWAY_TOKEN}"
+echo "  cron_scheduler_enabled: true"
 echo "  bustly_workspace_template_base_url: ${BUSTLY_WORKSPACE_TEMPLATE_BASE_URL}"

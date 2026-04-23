@@ -55,8 +55,7 @@ AWS_PROFILE=bustly-staging scripts/cloud/ecs/provision-workspace-runtime.sh \
   --image "$IMAGE_URI" \
   --routing-mode host \
   --runtime-domain-suffix runtime-staging.bustly.ai \
-  --skip-channels 1 \
-  --skip-cron 1
+  --skip-channels 1
 ```
 
 > 脚本会输出：`ws_url` 和 `gateway_token`。

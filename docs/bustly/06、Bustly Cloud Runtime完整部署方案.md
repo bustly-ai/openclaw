@@ -148,8 +148,7 @@ AWS_PROFILE=bustly-staging scripts/cloud/ecs/provision-workspace-runtime.sh \
   --image "$IMAGE_URI" \
   --routing-mode host \
   --runtime-domain-suffix runtime-staging.bustly.ai \
-  --skip-channels 1 \
-  --skip-cron 1
+  --skip-channels 1
 ```
 
 返回：
