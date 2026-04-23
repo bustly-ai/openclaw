@@ -116,7 +116,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "skill_manage",
     label: "skill_manage",
-    description: "Manage workspace skills",
+    description: "Manage shared managed skills",
     sectionId: "memory",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

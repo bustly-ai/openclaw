@@ -13,14 +13,15 @@ import {
   type HeartbeatDigestResultStatus,
 } from "../../agents/heartbeat-digest-store.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../../agents/workspace.js";
-import { createSkillManageTool } from "../../agents/tools/skill-manage-tool.js";
 import { searchSessionTranscripts } from "../../agents/tools/session-search-tool.js";
+import { createSkillManageTool } from "../../agents/tools/skill-manage-tool.js";
+import { CONFIG_DIR } from "../../utils.js";
+import type { FollowupRun } from "./queue.js";
+import { registerAgentRunContext } from "../../infra/agent-events.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
-import type { FollowupRun } from "./queue.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
 import {
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
@@ -1057,12 +1058,12 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
   const heartbeatFile = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
   const dailyMemoryFile = path.join(workspaceDir, "memory");
-  const skillsDir = path.join(workspaceDir, "skills");
+  const managedSkillsDir = path.join(CONFIG_DIR, "skills");
   const experienceFile = path.join(params.followupRun.run.agentDir, "experience", "entries.jsonl");
   const beforeMemoryMtime = await statMtimeMs(memoryFile);
   const beforeHeartbeatMtime = await statMtimeMs(heartbeatFile);
   const beforeDailyDirMtime = await statMtimeMs(dailyMemoryFile);
-  const beforeSkillsDirMtime = await statMtimeMs(skillsDir);
+  const beforeSkillsDirMtime = await statMtimeMs(managedSkillsDir);
   const beforeExperienceMtime = await statMtimeMs(experienceFile);
   const reviewSessionId = buildIsolatedInternalSessionId(
     params.followupRun.run.sessionId,
@@ -1192,7 +1193,7 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
   const afterMemoryMtime = await statMtimeMs(memoryFile);
   const afterHeartbeatMtime = await statMtimeMs(heartbeatFile);
   const afterDailyDirMtime = await statMtimeMs(dailyMemoryFile);
-  const afterSkillsDirMtime = await statMtimeMs(skillsDir);
+  const afterSkillsDirMtime = await statMtimeMs(managedSkillsDir);
   const afterExperienceMtime = await statMtimeMs(experienceFile);
   const changedMemory =
     beforeMemoryMtime !== afterMemoryMtime ||

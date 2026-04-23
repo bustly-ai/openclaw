@@ -16,10 +16,17 @@ async function createWorkspace() {
   return workspaceDir;
 }
 
+async function createManagedSkillsDir() {
+  const managedSkillsDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-skills-"));
+  tempDirs.push(managedSkillsDir);
+  return managedSkillsDir;
+}
+
 describe("skill_manage", () => {
-  it("creates a workspace skill and support files", async () => {
+  it("creates a managed skill, writes support files, and syncs agent metadata", async () => {
     const workspaceDir = await createWorkspace();
-    const tool = createSkillManageTool({ workspaceDir });
+    const managedSkillsDir = await createManagedSkillsDir();
+    const tool = createSkillManageTool({ workspaceDir, managedSkillsDir });
     expect(tool).toBeTruthy();
     if (!tool) {
       throw new Error("missing skill_manage tool");
@@ -44,17 +51,23 @@ describe("skill_manage", () => {
     expect(details.filesWritten).toContain("examples/checklist.md");
 
     const skillMd = await fs.readFile(
-      path.join(workspaceDir, "skills", "repeatable-handoff", "SKILL.md"),
+      path.join(managedSkillsDir, "repeatable-handoff", "SKILL.md"),
       "utf-8",
     );
     expect(skillMd).toContain("name: repeatable-handoff");
     expect(skillMd).toContain("description: Codify a reusable handoff workflow");
     expect(skillMd).toContain("# Repeatable Handoff");
+
+    const metadata = JSON.parse(
+      await fs.readFile(path.join(workspaceDir, ".bustly-agent.json"), "utf-8"),
+    ) as { skills?: string[] };
+    expect(metadata.skills).toContain("repeatable-handoff");
   });
 
-  it("deletes an existing workspace skill", async () => {
+  it("deletes an existing managed skill and removes it from agent metadata", async () => {
     const workspaceDir = await createWorkspace();
-    const tool = createSkillManageTool({ workspaceDir });
+    const managedSkillsDir = await createManagedSkillsDir();
+    const tool = createSkillManageTool({ workspaceDir, managedSkillsDir });
     expect(tool).toBeTruthy();
     if (!tool) {
       throw new Error("missing skill_manage tool");
@@ -73,6 +86,11 @@ describe("skill_manage", () => {
     });
     const details = deleted.details as { deleted?: boolean };
     expect(details.deleted).toBe(true);
-    await expect(fs.stat(path.join(workspaceDir, "skills", "cleanup-skill"))).rejects.toThrow();
+    await expect(fs.stat(path.join(managedSkillsDir, "cleanup-skill"))).rejects.toThrow();
+
+    const metadata = JSON.parse(
+      await fs.readFile(path.join(workspaceDir, ".bustly-agent.json"), "utf-8"),
+    ) as { skills?: string[] };
+    expect(metadata.skills).toBeUndefined();
   });
 });

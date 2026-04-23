@@ -277,7 +277,8 @@ export function buildAgentSystemPrompt(params: {
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     session_search: "Search prior session transcripts for similar work",
-    skill_manage: "Create/update/delete workspace skills for reusable procedures",
+    skill_manage:
+      "Create/update/delete managed skills under ~/.bustly/skills and sync .bustly-agent.json skill filters",
     image: "Analyze an image with the configured image model",
   };
 

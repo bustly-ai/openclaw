@@ -1,6 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
+import { CONFIG_DIR } from "../../utils.js";
+import {
+  loadBustlyAgentMetadata,
+  resolveBustlyAgentMetadataPath,
+  saveBustlyAgentMetadata,
+} from "../bustly-agent-metadata.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 
@@ -23,15 +29,13 @@ const SAFE_SKILL_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 function validateSkillName(skillName: string): string {
   const trimmed = skillName.trim();
   if (!SAFE_SKILL_NAME_RE.test(trimmed)) {
-    throw new ToolInputError(
-      "skillName must match ^[a-z0-9][a-z0-9_-]{0,63}$ and stay path-safe.",
-    );
+    throw new ToolInputError("skillName must match ^[a-z0-9][a-z0-9_-]{0,63}$ and stay path-safe.");
   }
   return trimmed;
 }
 
-function resolveSkillRoot(workspaceDir: string, skillName: string): string {
-  return path.resolve(workspaceDir, "skills", validateSkillName(skillName));
+function resolveSkillRoot(managedSkillsDir: string, skillName: string): string {
+  return path.resolve(managedSkillsDir, validateSkillName(skillName));
 }
 
 function resolveSupportFilePath(skillDir: string, relPath: string): string {
@@ -73,17 +77,49 @@ function buildSkillMarkdown(params: {
   return `---\n${frontmatter}\n---\n\n${body}\n`;
 }
 
-export function createSkillManageTool(opts?: { workspaceDir?: string }): AnyAgentTool | null {
+function upsertSkillInAgentMetadata(workspaceDir: string, skillName: string): string[] {
+  const current = loadBustlyAgentMetadata(workspaceDir);
+  const nextSkills = Array.from(new Set([...(current.skills ?? []), skillName])).toSorted();
+  const saved = saveBustlyAgentMetadata(workspaceDir, {
+    ...current,
+    skills: nextSkills,
+  });
+  return saved.skills ?? [];
+}
+
+function removeSkillFromAgentMetadata(
+  workspaceDir: string,
+  skillName: string,
+): string[] | undefined {
+  const current = loadBustlyAgentMetadata(workspaceDir);
+  if (!Array.isArray(current.skills)) {
+    return current.skills;
+  }
+  const nextSkills = current.skills.filter((entry) => entry !== skillName);
+  const saved = saveBustlyAgentMetadata(workspaceDir, {
+    ...current,
+    skills: nextSkills.length > 0 ? nextSkills : undefined,
+  });
+  return saved.skills;
+}
+
+export function createSkillManageTool(opts?: {
+  workspaceDir?: string;
+  managedSkillsDir?: string;
+}): AnyAgentTool | null {
   const workspaceDir = opts?.workspaceDir?.trim();
   if (!workspaceDir) {
     return null;
   }
+  const managedSkillsDir = path.resolve(
+    opts?.managedSkillsDir?.trim() || path.join(CONFIG_DIR, "skills"),
+  );
 
   return {
     label: "Skill Manage",
     name: "skill_manage",
     description:
-      "Create, update, or delete workspace skills under skills/<skillName>/ for reusable procedures. Prefer durable procedures here; keep facts/preferences in memory.",
+      "Create, update, or delete managed skills under ~/.bustly/skills/<skillName> for reusable procedures, then sync this agent's skill filter in .bustly-agent.json.",
     parameters: SkillManageSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -91,15 +127,19 @@ export function createSkillManageTool(opts?: { workspaceDir?: string }): AnyAgen
       const skillName = validateSkillName(
         readStringParam(params, "skillName", { required: true, label: "skillName" }),
       );
-      const skillDir = resolveSkillRoot(workspaceDir, skillName);
+      const skillDir = resolveSkillRoot(managedSkillsDir, skillName);
       const skillFile = path.join(skillDir, "SKILL.md");
+      const metadataPath = resolveBustlyAgentMetadataPath(workspaceDir);
 
       if (action === "delete") {
         await fs.rm(skillDir, { recursive: true, force: true });
+        const agentSkills = removeSkillFromAgentMetadata(workspaceDir, skillName);
         return jsonResult({
           status: "deleted",
           skillName,
           skillDir,
+          metadataPath,
+          agentSkills,
           deleted: true,
         });
       }
@@ -154,12 +194,16 @@ export function createSkillManageTool(opts?: { workspaceDir?: string }): AnyAgen
         await fs.writeFile(resolved, content, "utf-8");
         filesWritten.push(path.relative(skillDir, resolved).replaceAll(path.sep, "/"));
       }
+      const agentSkills = upsertSkillInAgentMetadata(workspaceDir, skillName);
 
       return jsonResult({
         status: "updated",
         skillName,
+        managedSkillsDir,
         skillDir,
         skillFile,
+        metadataPath,
+        agentSkills,
         filesWritten,
       });
     },
