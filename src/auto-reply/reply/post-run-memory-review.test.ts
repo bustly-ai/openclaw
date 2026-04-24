@@ -3,6 +3,7 @@ import {
   DEFAULT_POST_RUN_MEMORY_REVIEW_MODEL,
   DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS,
   enforceRuntimeRouting,
+  parseConsolidationClassificationFromText,
   resolvePostRunMemoryReviewSettings,
 } from "./post-run-memory-review.js";
 
@@ -23,6 +24,43 @@ describe("resolvePostRunMemoryReviewSettings", () => {
       },
     });
     expect(settings?.reviewModel).toBe("openai/gpt-5.2-mini");
+  });
+});
+
+describe("parseConsolidationClassificationFromText", () => {
+  it("accepts JSON5-style outputs with unquoted keys and single quotes", () => {
+    const parsed = parseConsolidationClassificationFromText(`{
+      layer: 'memory',
+      reason: 'working_context',
+      confidence: 0.9,
+      repeatedTask: false,
+      summary: 'Capture a short-lived note',
+      memory: {
+        target: 'daily_log',
+        heading: 'Daily note',
+        body: 'Check Docker daemon before desktop automation.'
+      }
+    }`);
+
+    expect(parsed.layer).toBe("memory");
+    expect(parsed.memory?.target).toBe("daily_log");
+  });
+
+  it("extracts the first balanced JSON object when extra braces appear later", () => {
+    const parsed = parseConsolidationClassificationFromText(`Output:
+{"layer":"none","reason":"transient","confidence":0.86,"repeatedTask":false,"summary":"No durable write."}
+diagnostic {not-json}`);
+
+    expect(parsed.layer).toBe("none");
+    expect(parsed.reason).toBe("transient");
+  });
+
+  it("skips invalid brace blocks and parses the next valid JSON object", () => {
+    const parsed = parseConsolidationClassificationFromText(`note {not_json_here}
+{"layer":"memory","reason":"working_context","confidence":0.91,"repeatedTask":false,"summary":"valid payload","memory":{"target":"daily_log","heading":"H","body":"B"}}`);
+
+    expect(parsed.layer).toBe("memory");
+    expect(parsed.memory?.target).toBe("daily_log");
   });
 });
 
@@ -188,9 +226,91 @@ describe("enforceRuntimeRouting", () => {
       settings,
     });
 
-    expect(routed.primaryLayer).toBe("memory");
+    expect(routed.primaryLayer).toBe("memory_long");
     expect(routed.writeMemory?.heading).toBe("Shopify Pagination Constraint");
     expect(routed.writeRetrieval).toBe(true);
+  });
+
+  it("routes daily log writes to the short-term memory layer", () => {
+    const settings = resolvePostRunMemoryReviewSettings({
+      agents: {
+        defaults: {
+          selfEvolution: {
+            enabled: true,
+            minToolCalls: DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS,
+          },
+        },
+      },
+    });
+    expect(settings).not.toBeNull();
+    if (!settings) {
+      throw new Error("missing settings");
+    }
+
+    const routed = enforceRuntimeRouting({
+      classification: {
+        layer: "memory",
+        reason: "working_context",
+        confidence: 0.87,
+        repeatedTask: false,
+        summary: "Track this week deployment blockers in daily notes.",
+        memory: {
+          target: "daily_log",
+          heading: "Deployment blockers",
+          body: "Docker daemon must be running before containerized desktop automation.",
+        },
+      },
+      matchedPriorSessions: 0,
+      toolCallCount: 1,
+      settings,
+    });
+
+    expect(routed.primaryLayer).toBe("memory_short");
+    expect(routed.writeMemory?.target).toBe("daily_log");
+  });
+
+  it("ignores memory payload when classifier layer is not memory", () => {
+    const settings = resolvePostRunMemoryReviewSettings({
+      agents: {
+        defaults: {
+          selfEvolution: {
+            enabled: true,
+            minToolCalls: DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS,
+          },
+        },
+      },
+    });
+    expect(settings).not.toBeNull();
+    if (!settings) {
+      throw new Error("missing settings");
+    }
+
+    const routed = enforceRuntimeRouting({
+      classification: {
+        layer: "skill",
+        reason: "reusable_procedure",
+        confidence: 0.9,
+        repeatedTask: true,
+        summary: "Reusable rollout checklist extracted from repeated runs.",
+        memory: {
+          target: "memory_md",
+          heading: "Should not be written",
+          body: "This should be ignored because layer=skill.",
+        },
+        skill: {
+          skillName: "deployment-precheck",
+          description: "Precheck before running containerized deployment",
+          body: "# Deployment Precheck\n\n1. Verify Docker daemon.\n",
+        },
+      },
+      matchedPriorSessions: 0,
+      toolCallCount: 6,
+      settings,
+    });
+
+    expect(routed.primaryLayer).toBe("skill");
+    expect(routed.writeSkill?.skillName).toBe("deployment-precheck");
+    expect(routed.writeMemory).toBeUndefined();
   });
 
   it("routes explicit heartbeat goals to HEARTBEAT.md writes", () => {

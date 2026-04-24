@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import JSON5 from "json5";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -35,7 +36,9 @@ export const DEFAULT_POST_RUN_MEMORY_REVIEW_PROMPT = [
   "Return JSON only.",
   "Extract durable facts, reusable procedures, correction episodes, and searchable precedents from the completed work.",
   "The runtime decides final storage and promotion. Your layer field is advisory only.",
-  "Use memory for durable facts, decisions, and preferences.",
+  "Use memory for facts/decisions that should be written to workspace memory files.",
+  "Inside memory.target, use memory_md for curated long-term memory and daily_log for short-term operational notes.",
+  "When unsure between long-term and short-term memory, prefer daily_log.",
   "Use skill for stable reusable procedures, SOPs, or repeatable playbooks.",
   "Use heartbeat for durable long-term goals that should be tracked in HEARTBEAT.md.",
   "Use retrieval_only when there is a correction or precedent worth preserving even if it should not yet become memory or skill.",
@@ -68,7 +71,14 @@ type ReviewDecision = {
   toolCallCount: number;
 };
 
-type ConsolidationLayer = "none" | "memory" | "skill" | "retrieval_only" | "heartbeat";
+type ConsolidationLayer =
+  | "none"
+  | "memory"
+  | "memory_long"
+  | "memory_short"
+  | "skill"
+  | "retrieval_only"
+  | "heartbeat";
 
 type ConsolidationClassification = {
   layer: ConsolidationLayer;
@@ -108,6 +118,8 @@ type ConsolidationClassification = {
 
 type ConsolidationOutcome = {
   layer: ConsolidationLayer;
+  modelLayer?: ConsolidationLayer;
+  memoryTarget?: NonNullable<ConsolidationClassification["memory"]>["target"];
   reason: string;
   confidence: number;
   matchedPriorSessions: number;
@@ -244,6 +256,16 @@ function cleanHeartbeat(value: unknown): ConsolidationClassification["heartbeat"
   return { heading, body };
 }
 
+function isMemoryLayer(layer: ConsolidationLayer): boolean {
+  return layer === "memory" || layer === "memory_long" || layer === "memory_short";
+}
+
+function resolveMemoryLayerForTarget(
+  memory: NonNullable<ConsolidationClassification["memory"]>,
+): ConsolidationLayer {
+  return memory.target === "memory_md" ? "memory_long" : "memory_short";
+}
+
 export function resolvePostRunMemoryReviewSettings(
   cfg?: OpenClawConfig,
 ): PostRunMemoryReviewSettings | null {
@@ -345,16 +367,97 @@ export function decidePostRunMemoryReview(params: {
   };
 }
 
-function extractFirstJsonObject(text: string): string | null {
+function extractJsonObjectCandidates(text: string): string[] {
   const trimmed = text.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
   const candidate = fenced || trimmed;
-  const start = candidate.indexOf("{");
-  const end = candidate.lastIndexOf("}");
-  if (start < 0 || end <= start) {
-    return null;
+  const results: string[] = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  for (let index = 0; index < candidate.length; index += 1) {
+    const ch = candidate[index];
+    if (start < 0) {
+      if (ch === "{") {
+        start = index;
+        depth = 1;
+      }
+      continue;
+    }
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (quote && ch === quote) {
+        inString = false;
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inString = true;
+      quote = ch;
+      continue;
+    }
+    if (ch === "{") {
+      depth += 1;
+      continue;
+    }
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        results.push(candidate.slice(start, index + 1));
+        start = -1;
+      }
+    }
   }
-  return candidate.slice(start, end + 1);
+  const fallbackStart = candidate.indexOf("{");
+  const fallbackEnd = candidate.lastIndexOf("}");
+  if (results.length === 0 && fallbackStart >= 0 && fallbackEnd > fallbackStart) {
+    results.push(candidate.slice(fallbackStart, fallbackEnd + 1));
+  }
+  return results;
+}
+
+function summarizeJsonSnippet(text: string): string {
+  const flattened = text.trim().replace(/\s+/g, " ");
+  return flattened.length > 240 ? `${flattened.slice(0, 240)}…` : flattened;
+}
+
+export function parseConsolidationClassificationFromText(text: string): ConsolidationClassification {
+  const candidates = extractJsonObjectCandidates(text);
+  if (candidates.length === 0) {
+    throw new Error(`structured consolidation returned no JSON: ${text.slice(0, 200)}`);
+  }
+  const failures: string[] = [];
+  for (const jsonText of candidates) {
+    try {
+      return normalizeClassification(JSON.parse(jsonText));
+    } catch (strictError) {
+      try {
+        return normalizeClassification(JSON5.parse(jsonText));
+      } catch (json5Error) {
+        const strictMessage =
+          strictError instanceof Error ? strictError.message : String(strictError);
+        const json5Message = json5Error instanceof Error ? json5Error.message : String(json5Error);
+        failures.push(
+          `strict=${strictMessage}; json5=${json5Message}; snippet=${summarizeJsonSnippet(jsonText)}`,
+        );
+      }
+    }
+  }
+  throw new Error(
+    `structured consolidation returned invalid JSON candidates (${candidates.length}): ${failures.join(
+      " || ",
+    )}`,
+  );
 }
 
 function normalizeClassification(raw: unknown): ConsolidationClassification {
@@ -363,6 +466,8 @@ function normalizeClassification(raw: unknown): ConsolidationClassification {
   const layerRaw = cleanLine(record.layer).toLowerCase();
   const layer: ConsolidationLayer =
     layerRaw === "memory" ||
+    layerRaw === "memory_long" ||
+    layerRaw === "memory_short" ||
     layerRaw === "skill" ||
     layerRaw === "retrieval_only" ||
     layerRaw === "heartbeat"
@@ -614,6 +719,11 @@ async function classifyConsolidation(params: {
     "CurrentTurnTranscript:",
     params.currentTurnSummary || "(empty)",
     "",
+    "Memory target policy:",
+    "- memory.target=memory_md -> curated long-term memory (stable preferences/facts/decisions).",
+    "- memory.target=daily_log -> short-term working notes in memory/YYYY-MM-DD.md.",
+    "- If uncertain, choose daily_log.",
+    "",
     "SimilarPriorSessions:",
     params.recentSessionSummary || "(none)",
   ].join("\n");
@@ -661,11 +771,7 @@ async function classifyConsolidation(params: {
       ?.map((payload: { text?: string | null }) => payload.text ?? "")
       .join("\n")
       .trim() ?? "";
-  const jsonText = extractFirstJsonObject(text);
-  if (!jsonText) {
-    throw new Error(`structured consolidation returned no JSON: ${text.slice(0, 200)}`);
-  }
-  return normalizeClassification(JSON.parse(jsonText));
+  return parseConsolidationClassificationFromText(text);
 }
 
 export function enforceRuntimeRouting(params: {
@@ -691,7 +797,9 @@ export function enforceRuntimeRouting(params: {
   const hasProcedureSignal = repeatedTask || params.toolCallCount >= params.settings.minToolCalls;
   const writeSkill =
     params.classification.skill && hasProcedureSignal ? params.classification.skill : undefined;
-  const writeMemory = params.classification.memory;
+  const writeMemory = isMemoryLayer(params.classification.layer)
+    ? params.classification.memory
+    : undefined;
   const writeHeartbeat = params.classification.heartbeat;
   const writeRetrieval = Boolean(
     params.classification.correction ||
@@ -713,7 +821,7 @@ export function enforceRuntimeRouting(params: {
   }
 
   if (writeMemory && primaryLayer === "none") {
-    primaryLayer = "memory";
+    primaryLayer = resolveMemoryLayerForTarget(writeMemory);
     if (!reason || reason === "unspecified") {
       reason = "runtime_preserved_memory";
     }
@@ -739,7 +847,7 @@ export function enforceRuntimeRouting(params: {
     }
   }
 
-  if (!writeMemory && params.classification.layer === "memory") {
+  if (!writeMemory && isMemoryLayer(params.classification.layer)) {
     reason = "missing_memory_payload";
   }
   if (!writeHeartbeat && params.classification.layer === "heartbeat") {
@@ -924,6 +1032,8 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
 
     outcome = {
       layer: routed.primaryLayer,
+      modelLayer: classification.layer,
+      memoryTarget: routed.writeMemory?.target,
       reason: routed.reason,
       confidence: routed.confidence,
       matchedPriorSessions,

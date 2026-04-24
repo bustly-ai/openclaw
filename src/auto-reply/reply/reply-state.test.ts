@@ -277,7 +277,8 @@ describe("post-run memory review settings", () => {
     expect(settings?.maxRecentMessages).toBe(DEFAULT_POST_RUN_MEMORY_REVIEW_MAX_RECENT_MESSAGES);
     expect(settings?.allowInGroupChats).toBe(false);
     expect(settings?.prompt).toContain("Return JSON only");
-    expect(settings?.prompt).toContain("layer: none, memory, skill, or retrieval_only");
+    expect(settings?.prompt).toContain("Use heartbeat for durable long-term goals");
+    expect(settings?.prompt).toContain("memory_md for curated long-term memory");
     expect(settings?.prompt).toContain("output layer=none");
     expect(settings?.systemPrompt).toContain("Return one JSON object");
   });

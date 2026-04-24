@@ -2614,7 +2614,7 @@ describe("runReplyAgent memory flush", () => {
       });
       expect(calls[0]?.prompt).toBe("ship it");
       expect(calls[0]?.sessionId).toBe("session");
-      expect(calls[1]?.prompt).toContain("You are the consolidation classifier");
+      expect(calls[1]?.prompt).toContain("You are the consolidation extractor");
       expect(calls[1]?.sessionId).toContain("session__post-run-review__");
       expect(calls[1]?.sessionId).not.toBe("session");
       expect(calls[1]?.prompt).toContain("Return exactly one JSON object");
@@ -2625,7 +2625,8 @@ describe("runReplyAgent memory flush", () => {
       expect(ledger).toContain('"trigger":"session_end"');
       expect(ledger).toContain('"toolCallCount":0');
       expect(ledger).toContain('"changedMemory":true');
-      expect(ledger).toContain('"layer":"memory"');
+      expect(ledger).toContain('"layer":"memory_long"');
+      expect(ledger).toContain('"memoryTarget":"memory_md"');
 
       const memoryFile = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
       expect(memoryFile).toContain("## Durable Fact");
