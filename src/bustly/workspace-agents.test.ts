@@ -673,6 +673,71 @@ describe("workspace-agents", () => {
     expect(metadata.icon).toBe("OldIcon");
   });
 
+  it("merges existing and refreshed preset skills during force refresh", async () => {
+    const existingDir = path.join(stateDir, "workspaces", "workspace-1", "agents", "marketing");
+    mkdirSync(existingDir, { recursive: true });
+    const legacyCreatedAt = BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE - 60_000;
+    writeFileSync(
+      path.join(existingDir, ".bustly-agent.json"),
+      JSON.stringify(
+        {
+          createdAt: legacyCreatedAt,
+          icon: "OldIcon",
+          skills: ["commerce-core-ops", "legacy-skill"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+    config.agents = {
+      ...config.agents,
+      list: [
+        ...(config.agents?.list ?? []),
+        {
+          id: "bustly-workspace-1-marketing",
+          name: "Marketing",
+          workspace: existingDir,
+        },
+      ],
+    };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    bootstrapMock.mockImplementationOnce(async (params: unknown) => {
+      const typed = params as { workspaceDir: string };
+      writeFileSync(
+        path.join(typed.workspaceDir, ".bustly-agent.json"),
+        JSON.stringify(
+          {
+            createdAt: legacyCreatedAt + 1_000,
+            icon: "RemoteIcon",
+            skills: ["ads-core-ops", "commerce-core-ops"],
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+    });
+
+    const bootstrapped = await ensureBustlyWorkspacePresetAgents({
+      workspaceId: "workspace-1",
+      workspaceName: "Workspace One",
+      presets: [{ slug: "marketing", label: "Marketing", icon: "TrendUp", isMain: false }],
+      configPath,
+      env: process.env,
+    });
+
+    expect(bootstrapped).toBe(1);
+    const metadata = JSON.parse(
+      readFileSync(path.join(existingDir, ".bustly-agent.json"), "utf-8"),
+    ) as { icon?: string; skills?: string[] };
+    expect(metadata.icon).toBe("RemoteIcon");
+    expect(metadata.skills).toEqual(["ads-core-ops", "commerce-core-ops", "legacy-skill"]);
+  });
+
   it("preserves template-provided IDENTITY name for preset agents", async () => {
     bootstrapMock.mockImplementationOnce(async (params: unknown) => {
       const typed = params as { workspaceDir: string };

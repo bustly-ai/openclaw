@@ -151,6 +151,16 @@ function setBustlyAgentMetadata(params: {
   saveBustlyAgentMetadata(params.workspaceDir, nextMetadata);
 }
 
+function mergeBustlyAgentSkills(
+  remoteSkills: string[] | undefined,
+  existingSkills: string[] | undefined,
+): string[] | undefined {
+  if (!remoteSkills && !existingSkills) {
+    return undefined;
+  }
+  return Array.from(new Set([...(remoteSkills ?? []), ...(existingSkills ?? [])]));
+}
+
 function resolveBustlyAgentCreatedAt(
   agentWorkspaceDir: string,
   metadata: BustlyAgentMetadata,
@@ -884,6 +894,16 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
         ...(preset.bootstrapMetadata ? { metadata: preset.bootstrapMetadata } : {}),
         requireAgentMetadata: true,
       });
+      const mergedSkills = mergeBustlyAgentSkills(
+        loadBustlyAgentMetadata(workspaceDir).skills,
+        workspaceMetadata.skills,
+      );
+      if (mergedSkills) {
+        setBustlyAgentMetadata({
+          workspaceDir,
+          skills: mergedSkills,
+        });
+      }
       bootstrappedCount += 1;
     }
   }
