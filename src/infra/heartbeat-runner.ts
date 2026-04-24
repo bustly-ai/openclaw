@@ -37,8 +37,11 @@ import {
 import { readBustlyOAuthState } from "../bustly-oauth.js";
 import { upsertBustlySessionTitleExtract } from "../bustly/session-title.js";
 import {
+  normalizeBustlyAgentName,
   normalizeBustlyWorkspaceId,
   resolveBustlyAgentNameFromAgentId,
+  resolveBustlyAgentNameFromAnyAgentId,
+  resolveBustlyWorkspaceTokenFromAgentId,
 } from "../bustly/workspace-agent.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -149,6 +152,11 @@ export type HeartbeatSummary = {
 };
 
 const DEFAULT_HEARTBEAT_TARGET = "none";
+const HEARTBEAT_SESSION_ID_MAX_CHARS = 127;
+const HEARTBEAT_SESSION_ID_WORKSPACE_TOKEN_MAX_CHARS = 48;
+const HEARTBEAT_SESSION_ID_AGENT_TOKEN_MAX_CHARS = 48;
+const HEARTBEAT_SESSION_ID_TOKEN_RE = /[^a-z0-9._-]+/gi;
+const HEARTBEAT_SESSION_ID_EDGE_RE = /^[-._]+|[-._]+$/g;
 export { isCronSystemEvent };
 
 type HeartbeatAgentState = {
@@ -457,6 +465,93 @@ async function restoreHeartbeatUpdatedAt(params: {
   });
 }
 
+async function keepHeartbeatMainSessionFresh(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  storePath: string;
+}) {
+  const mainSessionKey = resolveAgentMainSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  if (params.sessionKey !== mainSessionKey) {
+    return;
+  }
+  const oauthWorkspaceId = readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
+  const workspaceToken =
+    normalizeHeartbeatSessionIdToken(
+      oauthWorkspaceId || resolveBustlyWorkspaceTokenFromAgentId(params.agentId),
+      HEARTBEAT_SESSION_ID_WORKSPACE_TOKEN_MAX_CHARS,
+      "workspace",
+    ) || null;
+  const configuredAgentName = resolveAgentConfig(params.cfg, params.agentId)?.name?.trim() ?? "";
+  const fallbackAgentName = resolveBustlyAgentNameFromAnyAgentId(params.agentId)?.trim() ?? "";
+  const sessionAgentName = configuredAgentName || fallbackAgentName;
+  const normalizedAgentName = sessionAgentName
+    ? normalizeBustlyAgentName(sessionAgentName)
+    : null;
+  const agentToken =
+    normalizedAgentName
+      ? normalizeHeartbeatSessionIdToken(
+          normalizedAgentName,
+          HEARTBEAT_SESSION_ID_AGENT_TOKEN_MAX_CHARS,
+          "agent",
+        )
+      : null;
+  const normalizedHeartbeatSessionId =
+    workspaceToken && agentToken
+      ? trimHeartbeatSessionId(`heartbeat-${workspaceToken}-${agentToken}`)
+      : null;
+  const now = Date.now();
+  await updateSessionStore(params.storePath, (store) => {
+    const current = store[params.sessionKey];
+    const currentSessionId = current?.sessionId?.trim() ?? "";
+    const nextSessionId = normalizedHeartbeatSessionId || currentSessionId;
+    if (!nextSessionId) {
+      return;
+    }
+    const nextUpdatedAt = Math.max(current?.updatedAt ?? 0, now);
+    if (
+      current &&
+      currentSessionId === nextSessionId &&
+      (current.updatedAt ?? 0) >= nextUpdatedAt
+    ) {
+      return;
+    }
+    store[params.sessionKey] = {
+      ...(current ?? {}),
+      // Keep heartbeat on a deterministic main session-id so usage events
+      // converge by workspace+agent across client/cloud runtimes.
+      sessionId: nextSessionId,
+      updatedAt: nextUpdatedAt,
+    };
+  });
+}
+
+function normalizeHeartbeatSessionIdToken(
+  value: string | null | undefined,
+  maxChars: number,
+  fallback: string,
+): string {
+  const normalized = (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(HEARTBEAT_SESSION_ID_TOKEN_RE, "-")
+    .replace(HEARTBEAT_SESSION_ID_EDGE_RE, "")
+    .slice(0, Math.max(1, maxChars));
+  return normalized || fallback;
+}
+
+function trimHeartbeatSessionId(value: string): string {
+  const trimmed = value
+    .trim()
+    .replace(HEARTBEAT_SESSION_ID_EDGE_RE, "")
+    .slice(0, HEARTBEAT_SESSION_ID_MAX_CHARS)
+    .replace(HEARTBEAT_SESSION_ID_EDGE_RE, "");
+  return trimmed || "heartbeat-main";
+}
+
 /**
  * Prune heartbeat transcript entries by truncating the file back to a previous size.
  * This removes the user+assistant turns that were written during a HEARTBEAT_OK run,
@@ -668,23 +763,25 @@ async function resolveHeartbeatRunPrompt(params: {
   const hasCronEvents = cronEvents.length > 0;
   let bustlyWorkspaceId: string | null = null;
   let prompt = resolveHeartbeatPrompt(params.cfg, params.heartbeat);
-  if (!hasExecCompletion && !hasCronEvents) {
-    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-    const bustlyContext = resolveBustlyHeartbeatWorkspaceContext({ workspaceDir });
-    if (bustlyContext) {
-      try {
-        const heartbeatContent = await fs.readFile(
-          path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME),
-          "utf-8",
-        );
-        if (parseBustlyHeartbeatMarkdown(heartbeatContent)) {
-          prompt = await buildBustlyHeartbeatPromptForCurrentUser();
-          bustlyWorkspaceId = bustlyContext.workspaceId;
-        }
-      } catch {
-        // Fall back to the default heartbeat prompt when the Bustly heartbeat file
-        // is missing or unreadable.
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const bustlyContext = resolveBustlyHeartbeatWorkspaceContext({ workspaceDir });
+  if (bustlyContext) {
+    // Keep workspace context available for heartbeat analytics/session title upserts
+    // even when the prompt path is exec/cron based.
+    bustlyWorkspaceId = bustlyContext.workspaceId;
+  }
+  if (!hasExecCompletion && !hasCronEvents && bustlyContext) {
+    try {
+      const heartbeatContent = await fs.readFile(
+        path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME),
+        "utf-8",
+      );
+      if (parseBustlyHeartbeatMarkdown(heartbeatContent)) {
+        prompt = await buildBustlyHeartbeatPromptForCurrentUser();
       }
+    } catch {
+      // Fall back to the default heartbeat prompt when the Bustly heartbeat file
+      // is missing or unreadable.
     }
   }
   prompt = hasExecCompletion
@@ -772,17 +869,25 @@ function persistBustlyHeartbeatState(params: {
   return { previous, saved, isDuplicate };
 }
 
-function reportHeartbeatSessionTitleOnCreate(params: {
+function reportHeartbeatSessionTitle(params: {
   cfg: OpenClawConfig;
   workspaceId: string | null;
   agentId: string;
   sessionKey: string;
   storePath: string;
-  hadSessionId: boolean;
   modelRef?: string;
   promptExcerpt?: string;
 }) {
-  if (!params.workspaceId || params.hadSessionId) {
+  const workspaceId =
+    readBustlyOAuthState()?.user?.workspaceId?.trim() || params.workspaceId?.trim() || "";
+  if (!workspaceId) {
+    return;
+  }
+  const mainSessionKey = resolveAgentMainSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  if (params.sessionKey !== mainSessionKey) {
     return;
   }
   const sessionEntry = loadSessionStore(params.storePath)[params.sessionKey];
@@ -791,21 +896,17 @@ function reportHeartbeatSessionTitleOnCreate(params: {
     return;
   }
   const configuredAgentName = resolveAgentConfig(params.cfg, params.agentId)?.name?.trim() ?? "";
-  const fallbackAgentName =
-    resolveBustlyAgentNameFromAgentId(params.workspaceId, params.agentId)?.trim() ?? "";
+  const fallbackAgentName = resolveBustlyAgentNameFromAnyAgentId(params.agentId)?.trim() ?? "";
   const agentName = configuredAgentName || fallbackAgentName;
   if (!agentName) {
     return;
   }
-  const sampleRouteKey = params.modelRef?.trim().replace(/^bustly\//i, "") || undefined;
-  if (!sampleRouteKey) {
-    return;
-  }
-  const normalizedAgentName = `${agentName.slice(0, 1).toUpperCase()}${agentName.slice(1)}`;
+  const normalizedAgentName = normalizeBustlyAgentName(agentName);
   const sessionName = `${normalizedAgentName} watch`;
+  const sampleRouteKey = params.modelRef?.trim().replace(/^bustly\//i, "") || undefined;
   const promptExcerpt = params.promptExcerpt?.trim() || sessionName;
   void upsertBustlySessionTitleExtract({
-    workspaceId: params.workspaceId,
+    workspaceId,
     sessionId,
     sessionName,
     sampleRouteKey,
@@ -868,7 +969,12 @@ export async function runHeartbeatOnce(opts: {
   }
   const { entry, sessionKey, storePath } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
-  const hadSessionId = Boolean(entry?.sessionId?.trim());
+  await keepHeartbeatMainSessionFresh({
+    cfg,
+    agentId,
+    sessionKey,
+    storePath,
+  });
   const heartbeatModelRef =
     heartbeat?.model?.trim() || resolveAgentEffectiveModelPrimary(cfg, agentId) || undefined;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
@@ -1265,13 +1371,12 @@ export async function runHeartbeatOnce(opts: {
     }
   } finally {
     activeHeartbeatRuns.delete(activeRunToken);
-    reportHeartbeatSessionTitleOnCreate({
+    reportHeartbeatSessionTitle({
       cfg,
       workspaceId: bustlyWorkspaceId,
       agentId,
       sessionKey,
       storePath,
-      hadSessionId,
       modelRef: heartbeatModelRef,
       promptExcerpt: prompt,
     });

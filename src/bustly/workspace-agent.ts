@@ -3,6 +3,8 @@ const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
 const LEADING_DASH_RE = /^-+/;
 const TRAILING_DASH_RE = /-+$/;
 const UUID_PREFIX_RE = /^([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BUSTLY_AGENT_WITH_WORKSPACE_RE = /^bustly-([0-9a-f]{8})-(.+)$/i;
+const BUSTLY_LEGACY_MAIN_AGENT_RE = /^bustly-([0-9a-f]{8})$/i;
 const NON_ASCII_AGENT_PREFIX = "agent-";
 
 export const DEFAULT_BUSTLY_AGENT_NAME = "overview";
@@ -80,6 +82,43 @@ export function resolveBustlyAgentNameFromAgentId(
   }
   const agentName = normalizedAgentId.slice(prefix.length).trim();
   return normalizeBustlyAgentName(agentName);
+}
+
+export function resolveBustlyWorkspaceTokenFromAgentId(
+  agentId: string | undefined | null,
+): string | null {
+  const normalizedAgentId = normalizeToken(agentId);
+  if (!normalizedAgentId) {
+    return null;
+  }
+  const withWorkspace = BUSTLY_AGENT_WITH_WORKSPACE_RE.exec(normalizedAgentId);
+  if (withWorkspace?.[1]) {
+    return normalizeToken(withWorkspace[1]);
+  }
+  const legacyMain = BUSTLY_LEGACY_MAIN_AGENT_RE.exec(normalizedAgentId);
+  return legacyMain?.[1] ? normalizeToken(legacyMain[1]) : null;
+}
+
+export function resolveBustlyAgentNameFromAnyAgentId(
+  agentId: string | undefined | null,
+): string | null {
+  const normalizedAgentId = normalizeToken(agentId);
+  if (!normalizedAgentId) {
+    return null;
+  }
+  const withWorkspace = BUSTLY_AGENT_WITH_WORKSPACE_RE.exec(normalizedAgentId);
+  if (withWorkspace) {
+    const agentName = withWorkspace[2]?.trim() ?? "";
+    if (!agentName) {
+      return DEFAULT_BUSTLY_AGENT_NAME;
+    }
+    return normalizeBustlyAgentName(agentName);
+  }
+  const legacyMain = BUSTLY_LEGACY_MAIN_AGENT_RE.exec(normalizedAgentId);
+  if (legacyMain) {
+    return DEFAULT_BUSTLY_AGENT_NAME;
+  }
+  return null;
 }
 
 export function buildBustlyAgentConversationSessionKey(
