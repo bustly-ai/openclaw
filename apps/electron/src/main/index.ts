@@ -2963,10 +2963,6 @@ function createWindow(): void {
 }
 
 function setupAutoUpdater(): void {
-  if (!app.isPackaged) {
-    writeMainLog("[Updater] Development mode: auto-updates enabled");
-  }
-
   const updateUrl =
     process.env.BUSTLY_UPDATE_URL?.trim();
   const updateBaseUrl =
@@ -2981,6 +2977,37 @@ function setupAutoUpdater(): void {
   const normalizeBase = (input: string) => input.replace(/\/+$/, "");
   const buildPlatformUrl = (base: string) => `${normalizeBase(base)}/${platformKey}/`;
   const resolvedUpdateUrl = updateUrl || (updateBaseUrl ? buildPlatformUrl(updateBaseUrl) : "");
+  const devModeUpdater = autoUpdater as typeof autoUpdater & {
+    forceDevUpdateConfig?: boolean;
+    updateConfigPath?: string | null;
+  };
+
+  if (!app.isPackaged) {
+    if (!resolvedUpdateUrl) {
+      devModeUpdater.forceDevUpdateConfig = false;
+      writeMainLog("[Updater] Development mode: updater disabled (missing BUSTLY_UPDATE_URL/BUSTLY_UPDATE_BASE_URL)");
+    } else {
+      const devUpdateConfigPath = join(app.getPath("userData"), "dev-app-update.yml");
+      const devUpdateConfigContent = [
+        "provider: generic",
+        `url: ${resolvedUpdateUrl}`,
+        "updaterCacheDirName: bustly-updater",
+      ].join("\n");
+      try {
+        writeFileSync(devUpdateConfigPath, `${devUpdateConfigContent}\n`, "utf-8");
+        devModeUpdater.updateConfigPath = devUpdateConfigPath;
+        devModeUpdater.forceDevUpdateConfig = true;
+        writeMainLog(
+          `[Updater] Development mode: auto-updates enabled (forceDevUpdateConfig=true, config=${devUpdateConfigPath})`,
+        );
+      } catch (error) {
+        devModeUpdater.forceDevUpdateConfig = false;
+        writeMainLog(
+          `[Updater] Development mode: failed to write dev updater config: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
 
   const appVersion = app.getVersion();
   const prerelease = appVersion.includes("-") ? appVersion.split("-")[1] ?? "" : "";

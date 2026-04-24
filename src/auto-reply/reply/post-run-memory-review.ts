@@ -24,7 +24,7 @@ import {
   buildEmbeddedRunContexts,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
-import { buildIsolatedInternalSessionId, withIsolatedSessionFile } from "./isolated-session-file.js";
+import { withIsolatedSessionFile } from "./isolated-session-file.js";
 import { readSessionMessages } from "./post-compaction-audit.js";
 
 export const DEFAULT_POST_RUN_MEMORY_REVIEW_MIN_TOOL_CALLS = 5;
@@ -671,7 +671,6 @@ async function classifyConsolidation(params: {
   sessionCtx: TemplateContext;
   opts?: GetReplyOptions;
   reviewRunId: string;
-  reviewSessionId: string;
   defaultModel: string;
   settings: PostRunMemoryReviewSettings;
   currentTurn: TranscriptMessage[];
@@ -756,7 +755,7 @@ async function classifyConsolidation(params: {
             ...embeddedContext,
             ...senderContext,
             ...runBaseParams,
-            sessionId: params.reviewSessionId,
+            sessionId: params.followupRun.run.sessionId,
             sessionFile,
             prompt: classificationPrompt,
             extraSystemPrompt: classificationSystemPrompt,
@@ -959,11 +958,6 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
   const beforeDailyDirMtime = await statMtimeMs(dailyMemoryFile);
   const beforeSkillsDirMtime = await statMtimeMs(managedSkillsDir);
   const beforeExperienceMtime = await statMtimeMs(experienceFile);
-  const reviewSessionId = buildIsolatedInternalSessionId(
-    params.followupRun.run.sessionId,
-    "post-run-review",
-    reviewRunId,
-  );
 
   let outcome: ConsolidationOutcome | undefined;
 
@@ -974,7 +968,6 @@ export async function runPostRunMemoryReviewIfNeeded(params: {
       sessionCtx: params.sessionCtx,
       opts: params.opts,
       reviewRunId,
-      reviewSessionId,
       defaultModel: params.defaultModel,
       settings,
       currentTurn,

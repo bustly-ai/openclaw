@@ -2615,8 +2615,7 @@ describe("runReplyAgent memory flush", () => {
       expect(calls[0]?.prompt).toBe("ship it");
       expect(calls[0]?.sessionId).toBe("session");
       expect(calls[1]?.prompt).toContain("You are the consolidation extractor");
-      expect(calls[1]?.sessionId).toContain("session__post-run-review__");
-      expect(calls[1]?.sessionId).not.toBe("session");
+      expect(calls[1]?.sessionId).toBe("session");
       expect(calls[1]?.prompt).toContain("Return exactly one JSON object");
       expect(calls[1]?.prompt).toContain("CurrentTurnTranscript:");
 
