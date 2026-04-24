@@ -34,8 +34,12 @@ import {
   saveBustlyHeartbeatState,
   type BustlyHeartbeatStructuredEvent,
 } from "../bustly/heartbeats.js";
+import { readBustlyOAuthState } from "../bustly-oauth.js";
 import { upsertBustlySessionTitleExtract } from "../bustly/session-title.js";
-import { resolveBustlyAgentNameFromAgentId } from "../bustly/workspace-agent.js";
+import {
+  normalizeBustlyWorkspaceId,
+  resolveBustlyAgentNameFromAgentId,
+} from "../bustly/workspace-agent.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadConfig } from "../config/config.js";
@@ -241,18 +245,51 @@ export function resolveHeartbeatSummaryForAgent(
 }
 
 function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
+  const activeWorkspaceId = readBustlyOAuthState()?.user?.workspaceId?.trim() ?? "";
+  const normalizedActiveWorkspaceId = normalizeBustlyWorkspaceId(activeWorkspaceId);
   const list = cfg.agents?.list ?? [];
-  if (hasExplicitHeartbeatAgents(cfg)) {
-    return list
+  const configuredAgents = hasExplicitHeartbeatAgents(cfg)
+    ? list
       .filter((entry) => entry?.heartbeat)
       .map((entry) => {
         const id = normalizeAgentId(entry.id);
         return { agentId: id, heartbeat: resolveHeartbeatConfig(cfg, id) };
       })
-      .filter((entry) => entry.agentId);
+      .filter((entry) => entry.agentId)
+    : (() => {
+        const fallbackId = resolveDefaultAgentId(cfg);
+        return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
+      })();
+  if (!normalizedActiveWorkspaceId) {
+    return configuredAgents;
   }
-  const fallbackId = resolveDefaultAgentId(cfg);
-  return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
+
+  const activeLegacyAgentId = normalizeAgentId(`bustly-${normalizedActiveWorkspaceId}`);
+  const workspaceScopedAgents = configuredAgents.filter((entry) => {
+    const agentId = normalizeAgentId(entry.agentId);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const workspaceContext = resolveBustlyHeartbeatWorkspaceContext({ workspaceDir });
+    if (workspaceContext?.workspaceId) {
+      return (
+        normalizeBustlyWorkspaceId(workspaceContext.workspaceId) === normalizedActiveWorkspaceId
+      );
+    }
+    if (!agentId.startsWith("bustly-")) {
+      return true;
+    }
+    if (agentId === activeLegacyAgentId) {
+      return true;
+    }
+    return Boolean(resolveBustlyAgentNameFromAgentId(normalizedActiveWorkspaceId, agentId));
+  });
+  if (workspaceScopedAgents.length !== configuredAgents.length) {
+    log.info("heartbeat: filtered non-active workspace agents", {
+      configuredAgents: configuredAgents.length,
+      retainedAgents: workspaceScopedAgents.length,
+      workspaceId: normalizedActiveWorkspaceId,
+    });
+  }
+  return workspaceScopedAgents;
 }
 
 export function resolveHeartbeatIntervalMs(

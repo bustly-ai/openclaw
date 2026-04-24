@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as bustlyOAuthModule from "../bustly-oauth.js";
 import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
@@ -13,6 +14,10 @@ describe("startHeartbeatRunner", () => {
       runOnce,
     });
   }
+
+  beforeEach(() => {
+    vi.spyOn(bustlyOAuthModule, "readBustlyOAuthState").mockReturnValue(null);
+  });
 
   afterEach(() => {
     resetHeartbeatWakeStateForTests();
@@ -330,6 +335,40 @@ describe("startHeartbeatRunner", () => {
         agentId: "bustly-workspace-2-store-ops",
         heartbeat: { every: "30m" },
         reason: "wake",
+      }),
+    );
+
+    runner.stop();
+  });
+
+  it("only schedules Bustly heartbeat agents from the active workspace", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    vi.mocked(bustlyOAuthModule.readBustlyOAuthState).mockReturnValue({
+      user: {
+        workspaceId: "workspace-1",
+      },
+    } as unknown as ReturnType<typeof bustlyOAuthModule.readBustlyOAuthState>);
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          list: [
+            { id: "bustly-workspace-1-overview", heartbeat: { every: "30m" } },
+            { id: "bustly-workspace-2-overview", heartbeat: { every: "30m" } },
+          ],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "bustly-workspace-1-overview",
       }),
     );
 
