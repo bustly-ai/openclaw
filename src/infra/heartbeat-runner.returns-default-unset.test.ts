@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import * as bustlyOAuth from "../bustly-oauth.js";
+import * as sessionTitleModule from "../bustly/session-title.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { whatsappOutbound } from "../channels/plugins/outbound/whatsapp.js";
 import {
@@ -493,6 +495,78 @@ describe("runHeartbeatOnce", () => {
     expect(res.status).toBe("skipped");
     if (res.status === "skipped") {
       expect(res.reason).toBe("quiet-hours");
+    }
+  });
+
+  it("pins heartbeat main sessionId by workspace+agent and reports agent-name watch label", async () => {
+    const tmpDir = await createCaseDir("hb-fixed-session-id");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceId = "43e9866a-5e1b-41f2-8fb4-1043884377d7";
+    const agentId = "bustly-43e9866a-store-ops";
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "none" },
+        },
+        list: [{ id: agentId, default: true }],
+      },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "random-session-id",
+          updatedAt: Date.now() - 1_000,
+        },
+      }),
+    );
+
+    const oauthSpy = vi.spyOn(bustlyOAuth, "readBustlyOAuthState").mockReturnValue({
+      user: { workspaceId },
+    } as unknown as ReturnType<typeof bustlyOAuth.readBustlyOAuthState>);
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig").mockResolvedValue({
+      text: "HEARTBEAT_OK",
+    });
+    const upsertSpy = vi
+      .spyOn(sessionTitleModule, "upsertBustlySessionTitleExtract")
+      .mockResolvedValue();
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        agentId,
+        deps: createHeartbeatDeps(vi.fn().mockResolvedValue({ messageId: "noop", toJid: "noop" })),
+      });
+      expect(res.status).toBe("ran");
+
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { sessionId?: string }
+      >;
+      expect(store[sessionKey]?.sessionId).toBe(
+        "heartbeat-43e9866a-5e1b-41f2-8fb4-1043884377d7-store-ops",
+      );
+      expect(upsertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId,
+          sessionId: "heartbeat-43e9866a-5e1b-41f2-8fb4-1043884377d7-store-ops",
+          sessionName: "store-ops watch",
+        }),
+      );
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          SessionKey: sessionKey,
+        }),
+        expect.any(Object),
+        cfg,
+      );
+    } finally {
+      upsertSpy.mockRestore();
+      replySpy.mockRestore();
+      oauthSpy.mockRestore();
     }
   });
 
