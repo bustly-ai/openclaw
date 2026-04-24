@@ -29,6 +29,8 @@ export type BustlyWorkspaceBinding = {
   workspaceDir: string;
 };
 
+const pendingWorkspaceBootstrap = new Map<string, Promise<void>>();
+
 function stripPerAgentSkipBootstrap(
   entries: OpenClawAgentListEntry[] | undefined,
 ): OpenClawAgentListEntry[] | undefined {
@@ -118,6 +120,7 @@ export async function ensureBustlyWorkspaceAgentConfig(params: {
   selectedModelInput?: string;
   configPath?: string;
   allowCreateConfig?: boolean;
+  deferBootstrap?: boolean;
   userAgent?: string;
   baseUrl?: string;
   env?: NodeJS.ProcessEnv;
@@ -188,13 +191,40 @@ export async function ensureBustlyWorkspaceAgentConfig(params: {
     },
   );
   if (!workspaceExists) {
-    await initializeBustlyWorkspaceBootstrap({
-      workspaceDir,
-      workspaceId,
-      workspaceName: params.workspaceName,
-      agentName,
-      requireAgentMetadata: agentName === DEFAULT_BUSTLY_AGENT_NAME,
-    });
+    mkdirSync(workspaceDir, { recursive: true, mode: 0o700 });
+    if (params.deferBootstrap) {
+      const bootstrapKey = `${workspaceId}:${agentName}:${workspaceDir}`;
+      if (!pendingWorkspaceBootstrap.has(bootstrapKey)) {
+        const bootstrapPromise = (async () => {
+          try {
+            await initializeBustlyWorkspaceBootstrap({
+              workspaceDir,
+              workspaceId,
+              workspaceName: params.workspaceName,
+              agentName,
+              requireAgentMetadata: agentName === DEFAULT_BUSTLY_AGENT_NAME,
+            });
+          } catch (error) {
+            console.warn("[BustlyWorkspace] Deferred bootstrap failed", {
+              workspaceId,
+              agentName,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          } finally {
+            pendingWorkspaceBootstrap.delete(bootstrapKey);
+          }
+        })();
+        pendingWorkspaceBootstrap.set(bootstrapKey, bootstrapPromise);
+      }
+    } else {
+      await initializeBustlyWorkspaceBootstrap({
+        workspaceDir,
+        workspaceId,
+        workspaceName: params.workspaceName,
+        agentName,
+        requireAgentMetadata: agentName === DEFAULT_BUSTLY_AGENT_NAME,
+      });
+    }
   }
 
   if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
@@ -251,6 +281,7 @@ export async function setActiveBustlyWorkspace(params: {
   selectedModelInput?: string;
   configPath?: string;
   allowCreateConfig?: boolean;
+  deferBootstrap?: boolean;
   userAgent?: string;
   baseUrl?: string;
   env?: NodeJS.ProcessEnv;
@@ -267,6 +298,7 @@ export async function setActiveBustlyWorkspace(params: {
     selectedModelInput: params.selectedModelInput,
     configPath: params.configPath,
     allowCreateConfig: params.allowCreateConfig,
+    deferBootstrap: params.deferBootstrap,
     userAgent: params.userAgent,
     baseUrl: params.baseUrl,
     env: params.env,
@@ -319,6 +351,7 @@ export async function ensureBustlyCloudReady(params?: {
     userAgent: params?.userAgent ?? "openclaw-cloud",
     baseUrl: params?.baseUrl,
     env,
+    deferPresetAgentsSync: true,
   });
   return {
     workspaceId,

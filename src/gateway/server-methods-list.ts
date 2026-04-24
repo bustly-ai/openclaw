@@ -49,6 +49,7 @@ const BASE_METHODS = [
   "skills.update",
   "skills.catalog.list",
   "skills.catalog.install",
+  "skills.catalog.upload",
   "skills.catalog.update",
   "skills.catalog.uninstall",
   "update.run",

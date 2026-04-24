@@ -6,6 +6,7 @@ import { bumpSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import {
   installBustlyGlobalSkill,
+  installBustlyUploadedSkillFromPath,
   listBustlyGlobalSkillCatalog,
   uninstallBustlyGlobalSkill,
   updateBustlyGlobalSkill,
@@ -93,6 +94,33 @@ export const skillsHandlers: GatewayRequestHandlers = {
     try {
       await installBustlyGlobalSkill(skillKey);
       respond(true, { ok: true, skillKey }, undefined);
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : String(error)),
+      );
+    }
+  },
+  "skills.catalog.upload": async ({ params, respond }) => {
+    const sourcePath = typeof params.path === "string" ? params.path.trim() : "";
+    if (!sourcePath) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "path is required"));
+      return;
+    }
+    try {
+      const result = await installBustlyUploadedSkillFromPath(sourcePath);
+      respond(
+        true,
+        {
+          ok: true,
+          path: sourcePath,
+          skillKey: result.skillKey,
+          installDir: result.installDir,
+          sourceKind: result.sourceKind,
+        },
+        undefined,
+      );
     } catch (error) {
       respond(
         false,

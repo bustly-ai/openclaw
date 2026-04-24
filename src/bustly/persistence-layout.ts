@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -93,6 +94,43 @@ async function ensureSymlink(sourcePath: string, targetPath: string): Promise<vo
   await fs.symlink(relativeTarget, sourcePath);
 }
 
+function resolveEphemeralOverrideRoot(targetPath: string): string {
+  const relativeFromFsRoot = path.relative(path.parse(targetPath).root, targetPath);
+  return path.join(os.tmpdir(), "openclaw-ephemeral-overrides", relativeFromFsRoot);
+}
+
+function findContainingPersistentDirectory(
+  targetPath: string,
+  directoryMappings: Array<{ sourcePath: string; targetPath: string }>,
+): { sourcePath: string; targetPath: string } | undefined {
+  return directoryMappings.find((mapping) => {
+    const relative = path.relative(mapping.sourcePath, targetPath);
+    return relative && !relative.startsWith("..") && !path.isAbsolute(relative);
+  });
+}
+
+async function ensureEphemeralOverride(sourcePath: string, localTargetPath: string): Promise<void> {
+  await fs.mkdir(localTargetPath, { recursive: true });
+  await ensureParent(sourcePath);
+
+  if (await pathExists(sourcePath)) {
+    const stat = await fs.lstat(sourcePath);
+    if (stat.isSymbolicLink()) {
+      const current = await fs.readlink(sourcePath);
+      const resolvedCurrent = path.resolve(path.dirname(sourcePath), current);
+      if (resolvedCurrent === path.resolve(localTargetPath)) {
+        return;
+      }
+      await fs.rm(sourcePath, { recursive: true, force: true });
+    } else {
+      await fs.rm(sourcePath, { recursive: true, force: true });
+    }
+  }
+
+  const relativeTarget = path.relative(path.dirname(sourcePath), localTargetPath) || ".";
+  await fs.symlink(relativeTarget, sourcePath);
+}
+
 export async function applyPersistenceLayout(params: {
   efsMountRoot?: string | null;
   persistentAssets?: PersistentAssetSpec[];
@@ -108,6 +146,7 @@ export async function applyPersistenceLayout(params: {
     (asset) => asset.storage === "efs" && asset.assetKey.trim() && path.isAbsolute(asset.path),
   );
   const mappedRoots: string[] = [];
+  const directoryMappings: Array<{ sourcePath: string; targetPath: string }> = [];
   for (const asset of persistentAssets) {
     const assetKind = asset.kind ?? "directory";
     const mappedParent = mappedRoots.find((root) => {
@@ -131,6 +170,10 @@ export async function applyPersistenceLayout(params: {
     await ensureSymlink(asset.path, targetPath);
     if (assetKind === "directory") {
       mappedRoots.push(asset.path);
+      directoryMappings.push({
+        sourcePath: asset.path,
+        targetPath,
+      });
     }
   }
 
@@ -138,7 +181,27 @@ export async function applyPersistenceLayout(params: {
     if (!path.isAbsolute(ephemeralPath)) {
       continue;
     }
-    await fs.mkdir(ephemeralPath, { recursive: true });
+
+    const containingPersistentDirectory = findContainingPersistentDirectory(
+      ephemeralPath,
+      directoryMappings,
+    );
+
+    if (!containingPersistentDirectory) {
+      await fs.mkdir(ephemeralPath, { recursive: true });
+      continue;
+    }
+
+    const relativeWithinPersistentRoot = path.relative(
+      containingPersistentDirectory.sourcePath,
+      ephemeralPath,
+    );
+    const persistedPath = path.join(
+      containingPersistentDirectory.targetPath,
+      relativeWithinPersistentRoot,
+    );
+
+    await ensureEphemeralOverride(persistedPath, resolveEphemeralOverrideRoot(ephemeralPath));
   }
 }
 

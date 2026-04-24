@@ -283,7 +283,22 @@ describe("workspace-runtime", () => {
       userAgent: "cloud-test-agent",
     });
 
-    expect(bootstrapMock).not.toHaveBeenCalled();
+    expect(
+      bootstrapMock.mock.calls.some(([params]) => {
+        const bootstrapParams = params as {
+          workspaceId?: string;
+          agentName?: string;
+          workspaceDir?: string;
+        };
+        return (
+          bootstrapParams.workspaceId === "workspace-1" &&
+          bootstrapParams.agentName === "overview" &&
+          bootstrapParams.workspaceDir?.includes(
+            path.join("workspaces", "workspace-1", "agents", "overview"),
+          )
+        );
+      }),
+    ).toBe(false);
   });
 
   it("is idempotent when switching to the current workspace", async () => {
@@ -315,7 +330,7 @@ describe("workspace-runtime", () => {
     expect(setActiveWorkspaceIdMock).not.toHaveBeenCalled();
   });
 
-  it("does not persist a workspace switch when bootstrap fails", async () => {
+  it("persists the active workspace switch without waiting for deferred bootstrap", async () => {
     oauthStateRef.current = {
       deviceId: "device-1",
       callbackPort: 17900,
@@ -337,17 +352,17 @@ describe("workspace-runtime", () => {
       allowCreateConfig: true,
     });
 
-    bootstrapMock.mockRejectedValueOnce(
-      new Error("Workspace workspace-2 not found for bootstrap."),
+    bootstrapMock.mockImplementationOnce(
+      async () => await new Promise((resolve) => setTimeout(resolve, 50)),
     );
-    await expect(
-      setActiveBustlyWorkspace({
-        workspaceId: "workspace-2",
-        allowCreateConfig: true,
-      }),
-    ).rejects.toThrow("Workspace workspace-2 not found for bootstrap.");
+    const switched = await setActiveBustlyWorkspace({
+      workspaceId: "workspace-2",
+      allowCreateConfig: true,
+      deferBootstrap: true,
+    });
 
-    expect(setActiveWorkspaceIdMock).not.toHaveBeenCalled();
+    expect(switched?.workspaceId).toBe("workspace-2");
+    expect(setActiveWorkspaceIdMock).toHaveBeenCalledWith("workspace-2");
 
     const config = JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH!, "utf-8")) as {
       models?: {
@@ -358,7 +373,7 @@ describe("workspace-runtime", () => {
         };
       };
     };
-    expect(config.models?.providers?.bustly?.headers?.["X-Workspace-Id"]).toBe("workspace-1");
+    expect(config.models?.providers?.bustly?.headers?.["X-Workspace-Id"]).toBe("workspace-2");
   });
 
   it("preserves openclaw-lark plugin settings during cloud preflight", async () => {

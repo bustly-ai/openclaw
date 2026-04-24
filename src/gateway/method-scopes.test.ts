@@ -18,6 +18,9 @@ describe("method scope resolution", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("skills.catalog.update")).toEqual([
       "operator.write",
     ]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("skills.catalog.upload")).toEqual([
+      "operator.write",
+    ]);
   });
 
   it("returns empty scopes for unknown methods", () => {

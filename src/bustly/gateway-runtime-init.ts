@@ -23,6 +23,7 @@ export interface GatewayRuntimeInitOptions {
   userAgent?: string;
   baseUrl?: string;
   env?: NodeJS.ProcessEnv;
+  deferPresetAgentsSync?: boolean;
 }
 
 export interface GatewayRuntimeInitResult {
@@ -154,6 +155,58 @@ function applyGatewayRuntimeBaseConfig(
   };
 }
 
+const pendingPresetAgentWarmups = new Map<string, Promise<void>>();
+
+async function warmBustlyWorkspacePresetAgents(params: {
+  workspaceId: string;
+  workspaceName?: string;
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const { loadEnabledBustlyRemoteAgentPresets } = await import("./agent-presets.js");
+  const { ensureBustlyWorkspacePresetAgents } = await import("./workspace-agents.js");
+  const presetAgents = await loadEnabledBustlyRemoteAgentPresets({ env: params.env });
+  await ensureBustlyWorkspacePresetAgents({
+    workspaceId: params.workspaceId,
+    workspaceName: params.workspaceName,
+    presets: presetAgents.map((preset) => ({
+      slug: preset.slug,
+      label: preset.label,
+      icon: preset.icon,
+      isMain: preset.isMain,
+    })),
+    configPath: params.configPath,
+    allowCreateConfig: true,
+    env: params.env,
+  });
+}
+
+function scheduleDeferredPresetAgentWarmup(params: {
+  workspaceId: string;
+  workspaceName?: string;
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+}): void {
+  const warmupKey = `${params.configPath}:${params.workspaceId}`;
+  if (pendingPresetAgentWarmups.has(warmupKey)) {
+    return;
+  }
+  const warmupPromise = Promise.resolve()
+    .then(async () => {
+      await warmBustlyWorkspacePresetAgents(params);
+    })
+    .catch((error) => {
+      console.warn("[BustlyWorkspace] Deferred preset agent warmup failed", {
+        workspaceId: params.workspaceId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    })
+    .finally(() => {
+      pendingPresetAgentWarmups.delete(warmupKey);
+    });
+  pendingPresetAgentWarmups.set(warmupKey, warmupPromise);
+}
+
 export async function ensureGatewayRuntimeInit(
   options: GatewayRuntimeInitOptions,
 ): Promise<GatewayRuntimeInitResult> {
@@ -193,31 +246,32 @@ export async function ensureGatewayRuntimeInit(
   if (!binding) {
     throw new Error("Failed to initialize Bustly workspace binding.");
   }
-
-  // Ensure preset sub-agents stay in sync with the remote Bustly prompt templates
-  // so cloud runtimes align with desktop defaults on every bootstrap.
-  const { loadEnabledBustlyRemoteAgentPresets } = await import("./agent-presets.js");
-  const { ensureBustlyWorkspacePresetAgents } = await import("./workspace-agents.js");
-  const presetAgents = await loadEnabledBustlyRemoteAgentPresets({ env });
-  await ensureBustlyWorkspacePresetAgents({
-    workspaceId,
-    workspaceName: options.workspaceName,
-    presets: presetAgents.map((preset) => ({
-      slug: preset.slug,
-      label: preset.label,
-      icon: preset.icon,
-      isMain: preset.isMain,
-    })),
-    configPath,
-    allowCreateConfig: true,
-    env,
-  });
+  if (!options.deferPresetAgentsSync) {
+    // Keep explicit runtime init paths synchronous so they preserve the existing
+    // "all preset agents ready before return" contract.
+    await warmBustlyWorkspacePresetAgents({
+      workspaceId,
+      workspaceName: options.workspaceName,
+      configPath,
+      env,
+    });
+  }
 
   const finalSnapshot = await io.readConfigFileSnapshot();
   const finalConfig = finalSnapshot.valid ? finalSnapshot.config : runtimeBase.config;
   const agentDir = resolveGatewayRuntimeAgentDir(env);
   await ensureOpenClawModelsJson(finalConfig, agentDir);
   await ensurePiAuthJsonFromAuthProfiles(agentDir);
+  if (options.deferPresetAgentsSync) {
+    // Cloud startup only needs the active workspace binding ready. Preset agents
+    // can hydrate in the background without blocking health.
+    scheduleDeferredPresetAgentWarmup({
+      workspaceId,
+      workspaceName: options.workspaceName,
+      configPath,
+      env,
+    });
+  }
 
   return {
     success: true,
