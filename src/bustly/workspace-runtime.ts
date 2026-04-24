@@ -21,7 +21,7 @@ import {
   resolveBustlyAgentNameFromAgentId,
   normalizeBustlyWorkspaceId,
 } from "./workspace-agent.js";
-import { loadBustlyMainAgentPreset } from "./agent-presets.js";
+import { loadBustlyMainAgentPreset, loadBustlyRemoteAgentMetadata } from "./agent-presets.js";
 import { initializeBustlyWorkspaceBootstrap } from "./workspace-bootstrap.js";
 
 type OpenClawAgentListEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
@@ -50,12 +50,34 @@ function stripPerAgentSkipBootstrap(
   });
 }
 
-function resolveWorkspaceDisplayName(agentName: string, workspaceName?: string): string {
-  const normalizedWorkspaceName = workspaceName?.trim();
+function fallbackWorkspaceAgentDisplayName(agentName: string): string {
+  const humanized = agentName
+    .split(/[-_]+/g)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .map((segment) => segment.slice(0, 1).toUpperCase() + segment.slice(1))
+    .join(" ");
+  return humanized || agentName;
+}
+
+async function resolveWorkspaceDisplayName(params: {
+  agentName: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<string> {
+  const agentName = params.agentName;
   if (agentName === DEFAULT_BUSTLY_AGENT_NAME) {
     return "Overview";
   }
-  return normalizedWorkspaceName || agentName;
+  try {
+    const metadata = await loadBustlyRemoteAgentMetadata(agentName, {
+      env: params.env,
+    });
+    const label = metadata.label?.trim();
+    if (label) {
+      return label;
+    }
+  } catch {}
+  return fallbackWorkspaceAgentDisplayName(agentName);
 }
 
 function resolveConfiguredWorkspaceAgentName(
@@ -205,7 +227,15 @@ export async function ensureBustlyWorkspaceAgentConfig(params: {
         },
       }
     : config;
-  const nextName = resolveWorkspaceDisplayName(agentName, params.workspaceName);
+  const existingAgentEntryName = listAgentEntries(configWithoutMain)
+    .find((entry) => entry.id === agentId)
+    ?.name?.trim();
+  const nextName =
+    existingAgentEntryName ||
+    (await resolveWorkspaceDisplayName({
+      agentName,
+      env,
+    }));
   const updated = applyAgentConfig(configWithoutMain, {
     agentId,
     name: nextName,
@@ -302,6 +332,7 @@ export async function synchronizeBustlyWorkspaceContext(params?: {
   selectedModelInput?: string;
   configPath?: string;
   allowCreateConfig?: boolean;
+  deferBootstrap?: boolean;
   userAgent?: string;
   baseUrl?: string;
   env?: NodeJS.ProcessEnv;
@@ -317,6 +348,7 @@ export async function synchronizeBustlyWorkspaceContext(params?: {
     selectedModelInput: params?.selectedModelInput,
     configPath: params?.configPath,
     allowCreateConfig: params?.allowCreateConfig,
+    deferBootstrap: params?.deferBootstrap,
     userAgent: params?.userAgent,
     baseUrl: params?.baseUrl,
     env: params?.env,

@@ -1,7 +1,7 @@
 import {
-  resolveActiveBustlyWorkspaceBinding,
-  setActiveBustlyWorkspace,
-} from "../../bustly/workspace-runtime.js";
+  applyBustlyRuntimeManifest,
+} from "../../bustly/runtime-manifest.js";
+import { resolveActiveBustlyWorkspaceBinding } from "../../bustly/workspace-runtime.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -50,21 +50,12 @@ export const bustlyWorkspaceHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const binding = await setActiveBustlyWorkspace({
+      const binding = await applyBustlyRuntimeManifest({
         workspaceId,
         workspaceName,
         allowCreateConfig: true,
-        deferBootstrap: true,
         userAgent: "openclaw-cloud",
       });
-      if (!binding) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "Failed to switch Bustly workspace."),
-        );
-        return;
-      }
       respond(
         true,
         {

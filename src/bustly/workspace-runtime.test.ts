@@ -384,6 +384,44 @@ describe("workspace-runtime", () => {
     expect(config.models?.providers?.bustly?.headers?.["X-Workspace-Id"]).toBe("workspace-2");
   });
 
+  it("keeps workspace switch agent display name aligned with agent identity, not workspace name", async () => {
+    oauthStateRef.current = {
+      deviceId: "device-1",
+      callbackPort: 17900,
+      user: {
+        userId: "u-1",
+        userName: "Tester",
+        userEmail: "tester@example.com",
+        userAccessToken: "token-1",
+        workspaceId: "workspace-1",
+        skills: [],
+      },
+      supabase: {
+        url: "https://example.supabase.co",
+        anonKey: "anon-key",
+      },
+    };
+
+    await setActiveBustlyWorkspace({
+      workspaceId: "workspace-2",
+      workspaceName: "Henry's",
+      allowCreateConfig: true,
+    });
+
+    const config = JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH!, "utf-8")) as {
+      agents?: {
+        list?: Array<{
+          id?: string;
+          name?: string;
+        }>;
+      };
+    };
+    const switchedAgent = config.agents?.list?.find(
+      (entry) => entry.id === "bustly-workspace-2-finance",
+    );
+    expect(switchedAgent?.name).toBe("Finance");
+  });
+
   it("preserves openclaw-lark plugin settings during cloud preflight", async () => {
     oauthStateRef.current = {
       deviceId: "device-1",

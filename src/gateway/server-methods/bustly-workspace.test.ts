@@ -3,7 +3,7 @@ import { ErrorCodes } from "../protocol/index.js";
 
 const mocks = vi.hoisted(() => ({
   resolveActiveBustlyWorkspaceBinding: vi.fn(),
-  setActiveBustlyWorkspace: vi.fn(),
+  applyBustlyRuntimeManifest: vi.fn(),
 }));
 
 vi.mock("../../bustly/workspace-runtime.js", async (importOriginal) => {
@@ -12,9 +12,12 @@ vi.mock("../../bustly/workspace-runtime.js", async (importOriginal) => {
     ...actual,
     resolveActiveBustlyWorkspaceBinding: (...args: unknown[]) =>
       mocks.resolveActiveBustlyWorkspaceBinding(...args),
-    setActiveBustlyWorkspace: (...args: unknown[]) => mocks.setActiveBustlyWorkspace(...args),
   };
 });
+
+vi.mock("../../bustly/runtime-manifest.js", () => ({
+  applyBustlyRuntimeManifest: (params: unknown) => mocks.applyBustlyRuntimeManifest(params),
+}));
 
 import { bustlyWorkspaceHandlers } from "./bustly-workspace.js";
 
@@ -47,7 +50,7 @@ async function invokeSetActive(params: Record<string, unknown>) {
 describe("gateway bustly.workspace methods", () => {
   beforeEach(() => {
     mocks.resolveActiveBustlyWorkspaceBinding.mockReset();
-    mocks.setActiveBustlyWorkspace.mockReset();
+    mocks.applyBustlyRuntimeManifest.mockReset();
   });
 
   it("returns current active bustly workspace", async () => {
@@ -91,24 +94,24 @@ describe("gateway bustly.workspace methods", () => {
         message: "workspaceId is required",
       }),
     );
-    expect(mocks.setActiveBustlyWorkspace).not.toHaveBeenCalled();
+    expect(mocks.applyBustlyRuntimeManifest).not.toHaveBeenCalled();
   });
 
   it("switches active workspace and returns updated binding", async () => {
-    mocks.setActiveBustlyWorkspace.mockResolvedValue({
+    mocks.applyBustlyRuntimeManifest.mockResolvedValue({
       workspaceId: "workspace-2",
       agentId: "bustly-workspace-2-overview",
       workspaceDir: "/tmp/workspaces/workspace-2/agents/overview",
+      presetAgentsApplied: 4,
     });
     const respond = await invokeSetActive({
       workspaceId: "workspace-2",
       workspaceName: "Workspace Two",
     });
-    expect(mocks.setActiveBustlyWorkspace).toHaveBeenCalledWith({
+    expect(mocks.applyBustlyRuntimeManifest).toHaveBeenCalledWith({
       workspaceId: "workspace-2",
       workspaceName: "Workspace Two",
       allowCreateConfig: true,
-      deferBootstrap: true,
       userAgent: "openclaw-cloud",
     });
     expect(respond).toHaveBeenCalledWith(
