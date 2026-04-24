@@ -447,6 +447,63 @@ describe("bustly skill catalog", () => {
     expect(bumpSkillsSnapshotVersionMock).toHaveBeenCalledTimes(1);
   });
 
+  it("installs uploaded skill archives into managed skills with local-upload manifest", async () => {
+    const sourceArchive = path.join(tempRoot, "uploaded.skill.zip");
+    writeFileSync(sourceArchive, "not-a-real-zip");
+
+    const mod = await import("./skill-catalog.js");
+    const result = await mod.installBustlyUploadedSkillFromPath(sourceArchive);
+
+    expect(result.skillKey).toBe("test-skill");
+    const installDir = path.join(configDirRef.current, "skills", "test-skill");
+    expect(result.installDir).toBe(installDir);
+    expect(result.sourcePath).toBe(sourceArchive);
+    expect(result.sourceKind).toBe("file");
+    expect(existsSync(path.join(installDir, "SKILL.md"))).toBe(true);
+    expect(
+      JSON.parse(readFileSync(path.join(installDir, ".bustly-skill.json"), "utf-8")),
+    ).toMatchObject({
+      skillKey: "test-skill",
+      source: "local-upload",
+      name: "test skill",
+    });
+    expect(bumpSkillsSnapshotVersionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists uploaded local skills as managed entries when absent from catalog", async () => {
+    const managedDir = path.join(configDirRef.current, "skills", "uploaded-custom");
+    mkdirSync(managedDir, { recursive: true });
+    writeFileSync(path.join(managedDir, "SKILL.md"), "---\nname: Uploaded Custom\ndescription: Uploaded skill\n---\n");
+    writeFileSync(
+      path.join(managedDir, ".bustly-skill.json"),
+      JSON.stringify(
+        {
+          skillKey: "uploaded-custom",
+          installedAt: "2026-04-20T00:00:00.000Z",
+          source: "local-upload",
+        },
+        null,
+        2,
+      ),
+    );
+    supabaseRowsRef.current = [];
+
+    const mod = await import("./skill-catalog.js");
+    const items = await mod.listBustlyGlobalSkillCatalog();
+    expect(items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          skillKey: "uploaded-custom",
+          source: "openclaw-managed",
+          installed: true,
+          canInstall: false,
+          canUpdate: false,
+          canUninstall: true,
+        }),
+      ]),
+    );
+  });
+
   it("fails update when zip checksum mismatches", async () => {
     const installDir = path.join(configDirRef.current, "skills", "meta-ads");
     mkdirSync(installDir, { recursive: true });
@@ -503,6 +560,30 @@ describe("bustly skill catalog", () => {
     const mod = await import("./skill-catalog.js");
     await mod.uninstallBustlyGlobalSkill("meta-ads");
     await mod.uninstallBustlyGlobalSkill("meta-ads");
+
+    expect(existsSync(installDir)).toBe(false);
+    expect(bumpSkillsSnapshotVersionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uninstalls uploaded local skills", async () => {
+    const installDir = path.join(configDirRef.current, "skills", "uploaded-custom");
+    mkdirSync(installDir, { recursive: true });
+    writeFileSync(path.join(installDir, "SKILL.md"), "# custom\n");
+    writeFileSync(
+      path.join(installDir, ".bustly-skill.json"),
+      JSON.stringify(
+        {
+          skillKey: "uploaded-custom",
+          installedAt: "2026-01-01T00:00:00.000Z",
+          source: "local-upload",
+        },
+        null,
+        2,
+      ),
+    );
+
+    const mod = await import("./skill-catalog.js");
+    await mod.uninstallBustlyGlobalSkill("uploaded-custom");
 
     expect(existsSync(installDir)).toBe(false);
     expect(bumpSkillsSnapshotVersionMock).toHaveBeenCalledTimes(1);

@@ -13,12 +13,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createWriteStream } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { extractArchive as extractArchiveSafe } from "../infra/archive.js";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { resolveBundledSkillsDir } from "../agents/skills/bundled-dir.js";
+import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
+import { getFrontmatterString } from "../shared/frontmatter.js";
 import { CONFIG_DIR } from "../utils.js";
 import { bustlySupabaseFetch } from "./supabase.js";
 
@@ -69,9 +71,11 @@ type BustlyCatalogResolvedRow = {
 
 type BustlyInstalledSkillManifest = {
   skillKey: string;
-  publishedVersionId: string;
+  publishedVersionId?: string;
   installedAt: string;
-  source: "skillops-zip";
+  source: "skillops-zip" | "local-upload";
+  name?: string;
+  description?: string;
 };
 
 type BustlyInstalledSkillRecord = {
@@ -319,18 +323,38 @@ function parseBustlySkillManifest(raw: string): BustlyInstalledSkillManifest | n
       return null;
     }
     const skillKey = toOptionalString(parsed.skillKey);
-    const publishedVersionId = toOptionalString(parsed.publishedVersionId);
     const installedAt = toOptionalString(parsed.installedAt);
     const source = toOptionalString(parsed.source);
-    if (!skillKey || !publishedVersionId || !installedAt || source !== "skillops-zip") {
+    if (!skillKey || !installedAt) {
       return null;
     }
-    return {
-      skillKey,
-      publishedVersionId,
-      installedAt,
-      source: "skillops-zip",
-    };
+
+    if (source === "skillops-zip") {
+      const publishedVersionId = toOptionalString(parsed.publishedVersionId);
+      if (!publishedVersionId) {
+        return null;
+      }
+      return {
+        skillKey,
+        publishedVersionId,
+        installedAt,
+        source: "skillops-zip",
+        name: toOptionalString(parsed.name),
+        description: toOptionalString(parsed.description),
+      };
+    }
+
+    if (source === "local-upload") {
+      return {
+        skillKey,
+        installedAt,
+        source: "local-upload",
+        name: toOptionalString(parsed.name),
+        description: toOptionalString(parsed.description),
+      };
+    }
+
+    return null;
   } catch {
     return null;
   }
@@ -380,6 +404,57 @@ function writeInstalledSkillManifest(targetDir: string, manifest: BustlyInstalle
     mode: 0o600,
   });
   renameSync(`${manifestPath}.tmp`, manifestPath);
+}
+
+function parseSkillPresentationFromFile(skillMdPath: string): {
+  skillKey?: string;
+  name?: string;
+  description?: string;
+} {
+  if (!existsSync(skillMdPath)) {
+    return {};
+  }
+  try {
+    const raw = readFileSync(skillMdPath, "utf-8");
+    const frontmatter = parseFrontmatterBlock(raw);
+    const frontmatterSkillKey = toOptionalString(getFrontmatterString(frontmatter, "skillKey"));
+    const frontmatterName = toOptionalString(getFrontmatterString(frontmatter, "name"));
+    const frontmatterDescription = toOptionalString(getFrontmatterString(frontmatter, "description"));
+
+    let body = raw;
+    if (raw.startsWith("---\n")) {
+      const closing = raw.indexOf("\n---\n", 4);
+      if (closing >= 0) {
+        body = raw.slice(closing + "\n---\n".length);
+      }
+    }
+    const lines = body
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const heading = lines.find((line) => line.startsWith("#"))?.replace(/^#+\s*/, "").trim();
+    const paragraph = lines.find((line) => !line.startsWith("#") && !line.startsWith("```"));
+
+    return {
+      ...(frontmatterSkillKey ? { skillKey: frontmatterSkillKey } : {}),
+      ...(frontmatterName || heading ? { name: frontmatterName ?? heading } : {}),
+      ...(frontmatterDescription || paragraph
+        ? { description: frontmatterDescription ?? paragraph }
+        : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function assertValidSkillMarkdown(params: { skillKey: string; skillMdPath: string }): void {
+  if (!existsSync(params.skillMdPath)) {
+    throw new Error(`Skill "${params.skillKey}" package is missing SKILL.md.`);
+  }
+  const stat = lstatSync(params.skillMdPath);
+  if (!stat.isFile()) {
+    throw new Error(`Skill "${params.skillKey}" package has an invalid SKILL.md.`);
+  }
 }
 
 function readDefaultInstalledSnapshot(): BustlyDefaultInstalledSnapshot {
@@ -849,7 +924,7 @@ function findSinglePayloadRoot(extractDir: string): string {
 function atomicallyReplaceManagedSkill(params: {
   skillKey: string;
   payloadDir: string;
-  publishedVersionId: string;
+  manifest: BustlyInstalledSkillManifest;
 }): string {
   const managedSkillsDir = resolveBustlyManagedSkillsDir();
   mkdirSync(managedSkillsDir, { recursive: true, mode: 0o700 });
@@ -861,12 +936,7 @@ function atomicallyReplaceManagedSkill(params: {
   const backupDir = join(managedSkillsDir, `.${installDirName}.backup-${nonce}`);
 
   cpSync(params.payloadDir, stagingDir, { recursive: true, force: true });
-  writeInstalledSkillManifest(stagingDir, {
-    skillKey: params.skillKey,
-    publishedVersionId: params.publishedVersionId,
-    installedAt: new Date().toISOString(),
-    source: "skillops-zip",
-  });
+  writeInstalledSkillManifest(stagingDir, params.manifest);
 
   let movedExisting = false;
   try {
@@ -939,18 +1009,20 @@ function installFromSkillArtifact(params: {
 
       const payloadDir = findSinglePayloadRoot(extractDir);
       const skillMdPath = join(payloadDir, "SKILL.md");
-      if (!existsSync(skillMdPath)) {
-        throw new Error(`Skill "${params.skillKey}" package is missing SKILL.md.`);
-      }
-      const stat = lstatSync(skillMdPath);
-      if (!stat.isFile()) {
-        throw new Error(`Skill "${params.skillKey}" package has an invalid SKILL.md.`);
-      }
+      assertValidSkillMarkdown({
+        skillKey: params.skillKey,
+        skillMdPath,
+      });
 
       return atomicallyReplaceManagedSkill({
         skillKey: params.skillKey,
         payloadDir,
-        publishedVersionId: params.publishedVersionId,
+        manifest: {
+          skillKey: params.skillKey,
+          publishedVersionId: params.publishedVersionId,
+          installedAt: new Date().toISOString(),
+          source: "skillops-zip",
+        },
       });
     } finally {
       rmSync(installWorkDir, { recursive: true, force: true });
@@ -981,6 +1053,142 @@ function resolveCatalogRowForMutation(params: {
   };
 }
 
+type UploadedSkillPayload = {
+  sourcePath: string;
+  sourceKind: "file" | "directory";
+  payloadDir: string;
+  cleanupDir?: string;
+};
+
+async function resolveUploadedSkillPayload(sourcePath: string): Promise<UploadedSkillPayload> {
+  const normalizedSourcePath = sourcePath.trim();
+  if (!normalizedSourcePath) {
+    throw new Error("source path is required.");
+  }
+  if (!existsSync(normalizedSourcePath)) {
+    throw new Error(`Uploaded skill source does not exist: ${normalizedSourcePath}`);
+  }
+
+  const sourceStat = lstatSync(normalizedSourcePath);
+  if (sourceStat.isDirectory()) {
+    const payloadDir = findSinglePayloadRoot(normalizedSourcePath);
+    return {
+      sourcePath: normalizedSourcePath,
+      sourceKind: "directory",
+      payloadDir,
+    };
+  }
+  if (!sourceStat.isFile()) {
+    throw new Error(`Unsupported uploaded skill source: ${normalizedSourcePath}`);
+  }
+
+  const managedSkillsDir = resolveBustlyManagedSkillsDir();
+  mkdirSync(managedSkillsDir, { recursive: true, mode: 0o700 });
+  const nonce = `${Date.now()}-${randomBytes(4).toString("hex")}`;
+  const workDir = join(managedSkillsDir, `.upload-${nonce}`);
+  mkdirSync(workDir, { recursive: true, mode: 0o700 });
+
+  const sourceBaseName = basename(normalizedSourcePath).toLowerCase();
+  if (sourceBaseName === "skill.md") {
+    const payloadDir = join(workDir, "payload");
+    mkdirSync(payloadDir, { recursive: true, mode: 0o700 });
+    cpSync(normalizedSourcePath, join(payloadDir, "SKILL.md"), { force: true });
+    return {
+      sourcePath: normalizedSourcePath,
+      sourceKind: "file",
+      payloadDir,
+      cleanupDir: workDir,
+    };
+  }
+
+  if (!sourceBaseName.endsWith(".zip") && !sourceBaseName.endsWith(".skill")) {
+    throw new Error("Uploaded skill must be a directory, SKILL.md file, .zip, or .skill archive.");
+  }
+
+  const extractDir = join(workDir, "extract");
+  mkdirSync(extractDir, { recursive: true, mode: 0o700 });
+  await extractArchiveSafe({
+    archivePath: normalizedSourcePath,
+    destDir: extractDir,
+    timeoutMs: BUSTLY_SKILL_DOWNLOAD_TIMEOUT_MS,
+    kind: "zip",
+  });
+  const payloadDir = findSinglePayloadRoot(extractDir);
+  return {
+    sourcePath: normalizedSourcePath,
+    sourceKind: "file",
+    payloadDir,
+    cleanupDir: workDir,
+  };
+}
+
+function resolveUploadedSkillKey(params: {
+  payloadDir: string;
+  sourcePath: string;
+}): string {
+  const presentation = parseSkillPresentationFromFile(join(params.payloadDir, "SKILL.md"));
+  const candidates = [
+    presentation.skillKey,
+    presentation.name,
+    basename(params.payloadDir),
+    basename(params.sourcePath),
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeBustlySkillLookupToken(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  throw new Error("Unable to resolve a valid skill key from uploaded source.");
+}
+
+export async function installBustlyUploadedSkillFromPath(sourcePath: string): Promise<{
+  skillKey: string;
+  installDir: string;
+  sourcePath: string;
+  sourceKind: "file" | "directory";
+}> {
+  const resolved = await resolveUploadedSkillPayload(sourcePath);
+  try {
+    const skillKey = resolveUploadedSkillKey({
+      payloadDir: resolved.payloadDir,
+      sourcePath: resolved.sourcePath,
+    });
+    const skillMdPath = join(resolved.payloadDir, "SKILL.md");
+    assertValidSkillMarkdown({
+      skillKey,
+      skillMdPath,
+    });
+    const presentation = parseSkillPresentationFromFile(skillMdPath);
+
+    const installDir = atomicallyReplaceManagedSkill({
+      skillKey,
+      payloadDir: resolved.payloadDir,
+      manifest: {
+        skillKey,
+        installedAt: new Date().toISOString(),
+        source: "local-upload",
+        name: presentation.name ?? skillKey,
+        description: presentation.description ?? "Uploaded custom skill.",
+      },
+    });
+
+    invalidateCatalogRowsCache();
+    bumpSkillsSnapshotVersion({ reason: "manual" });
+
+    return {
+      skillKey,
+      installDir,
+      sourcePath: resolved.sourcePath,
+      sourceKind: resolved.sourceKind,
+    };
+  } finally {
+    if (resolved.cleanupDir && existsSync(resolved.cleanupDir)) {
+      rmSync(resolved.cleanupDir, { recursive: true, force: true });
+    }
+  }
+}
+
 export function resolveBustlyDefaultInstalledSkillTokens(): Set<string> {
   return readBundledDefaultEnabledSkillTokens();
 }
@@ -996,9 +1204,13 @@ export async function listBustlyGlobalSkillCatalog(): Promise<BustlyGlobalSkillC
   const defaultInstalledByToken = resolveCatalogDefaultInstalled(rows);
   scheduleDefaultInstalledSkillsMaterialization(rows);
   const installedRecords = readInstalledSkillRecords();
+  const listedTokens = new Set<string>();
 
-  return rows.map((row) => {
+  const catalogItems = rows.map((row) => {
     const skillToken = normalizeBustlySkillLookupToken(row.slug);
+    if (skillToken) {
+      listedTokens.add(skillToken);
+    }
     const installedRecord = skillToken ? installedRecords.get(skillToken) : undefined;
     const defaultSnapshotEntry = skillToken ? defaultInstalledByToken.get(skillToken) : undefined;
     const installedVersionId =
@@ -1015,7 +1227,12 @@ export async function listBustlyGlobalSkillCatalog(): Promise<BustlyGlobalSkillC
     const hasInstallArtifact = Boolean(row.artifact?.zipUrl && row.artifact?.sha256);
 
     const canInstall = !installed && Boolean(publishedVersionId && hasInstallArtifact);
-    const canUpdate = Boolean(installedRecord && publishedVersionId && hasInstallArtifact && hasUpdate);
+    const canUpdate = Boolean(
+      installedRecord?.manifest.source === "skillops-zip"
+      && publishedVersionId
+      && hasInstallArtifact
+      && hasUpdate,
+    );
     const canUninstall = Boolean(installedRecord && !row.defaultInstalled);
 
     const source = resolveSkillCatalogItemSource({
@@ -1046,6 +1263,47 @@ export async function listBustlyGlobalSkillCatalog(): Promise<BustlyGlobalSkillC
       canUninstall,
     };
   });
+
+  const uploadedItems = Array.from(installedRecords.entries())
+    .filter(([token]) => !listedTokens.has(token))
+    .map(([, record]) => {
+      const skillMdPath = join(record.installDir, "SKILL.md");
+      const presentation = parseSkillPresentationFromFile(skillMdPath);
+      const skillKey = record.manifest.skillKey;
+      const name = presentation.name ?? record.manifest.name ?? skillKey;
+      const description =
+        presentation.description
+        ?? record.manifest.description
+        ?? "Uploaded custom skill.";
+      return {
+        id: `managed-${normalizeBustlySkillLookupToken(skillKey)}`,
+        name,
+        description,
+        source: "openclaw-managed",
+        sourceLabel: resolveBustlySkillSourceLabel("openclaw-managed"),
+        skillKey,
+        filePath: existsSync(skillMdPath) ? skillMdPath : "",
+        eligible: true,
+        bundled: false,
+        category: "Uncategorized",
+        defaultInstalled: false,
+        installed: true,
+        installedVersionId: record.manifest.publishedVersionId,
+        publishedVersionId: undefined,
+        hasUpdate: false,
+        canInstall: false,
+        canUpdate: false,
+        canUninstall: true,
+      } satisfies BustlyGlobalSkillCatalogItem;
+    })
+    .sort((left, right) =>
+      left.name.localeCompare(right.name, undefined, {
+        sensitivity: "base",
+        numeric: true,
+      }),
+    );
+
+  return [...catalogItems, ...uploadedItems];
 }
 
 export async function installBustlyGlobalSkill(skillKey: string): Promise<void> {
@@ -1144,8 +1402,8 @@ export async function uninstallBustlyGlobalSkill(skillKey: string): Promise<void
   }
 
   const manifest = parseBustlySkillManifest(readFileSync(manifestPath, "utf-8"));
-  if (!manifest || manifest.source !== "skillops-zip") {
-    throw new Error(`Skill "${normalizedSkillKey}" is not managed by skillops-zip.`);
+  if (!manifest || (manifest.source !== "skillops-zip" && manifest.source !== "local-upload")) {
+    throw new Error(`Skill "${normalizedSkillKey}" is not managed by Bustly.`);
   }
 
   rmSync(installDir, { recursive: true, force: true });

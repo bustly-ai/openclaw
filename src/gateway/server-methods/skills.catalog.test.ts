@@ -4,6 +4,7 @@ import { ErrorCodes } from "../protocol/index.js";
 const mocks = vi.hoisted(() => ({
   listBustlyGlobalSkillCatalog: vi.fn(),
   installBustlyGlobalSkill: vi.fn(),
+  installBustlyUploadedSkillFromPath: vi.fn(),
   updateBustlyGlobalSkill: vi.fn(),
   uninstallBustlyGlobalSkill: vi.fn(),
 }));
@@ -11,6 +12,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../bustly/skill-catalog.js", () => ({
   listBustlyGlobalSkillCatalog: () => mocks.listBustlyGlobalSkillCatalog(),
   installBustlyGlobalSkill: (skillKey: string) => mocks.installBustlyGlobalSkill(skillKey),
+  installBustlyUploadedSkillFromPath: (sourcePath: string) =>
+    mocks.installBustlyUploadedSkillFromPath(sourcePath),
   updateBustlyGlobalSkill: (skillKey: string) => mocks.updateBustlyGlobalSkill(skillKey),
   uninstallBustlyGlobalSkill: (skillKey: string) => mocks.uninstallBustlyGlobalSkill(skillKey),
 }));
@@ -21,6 +24,7 @@ describe("skills.catalog gateway handlers", () => {
   beforeEach(() => {
     mocks.listBustlyGlobalSkillCatalog.mockReset();
     mocks.installBustlyGlobalSkill.mockReset();
+    mocks.installBustlyUploadedSkillFromPath.mockReset();
     mocks.updateBustlyGlobalSkill.mockReset();
     mocks.uninstallBustlyGlobalSkill.mockReset();
   });
@@ -108,6 +112,59 @@ describe("skills.catalog gateway handlers", () => {
       expect.objectContaining({
         code: ErrorCodes.INVALID_REQUEST,
         message: "skillKey is required",
+      }),
+    );
+  });
+
+  it("installs an uploaded local skill package", async () => {
+    mocks.installBustlyUploadedSkillFromPath.mockResolvedValue({
+      skillKey: "uploaded-skill",
+      installDir: "/tmp/.bustly/skills/uploaded-skill",
+      sourcePath: "/tmp/uploaded-skill.zip",
+      sourceKind: "file",
+    });
+    const respond = vi.fn();
+    await skillsHandlers["skills.catalog.upload"]({
+      params: { path: "/tmp/uploaded-skill.zip" },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: {} as never,
+      respond,
+    });
+
+    expect(mocks.installBustlyUploadedSkillFromPath).toHaveBeenCalledWith("/tmp/uploaded-skill.zip");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: true,
+        path: "/tmp/uploaded-skill.zip",
+        skillKey: "uploaded-skill",
+        installDir: "/tmp/.bustly/skills/uploaded-skill",
+        sourceKind: "file",
+      },
+      undefined,
+    );
+  });
+
+  it("validates required path for upload install", async () => {
+    const respond = vi.fn();
+    await skillsHandlers["skills.catalog.upload"]({
+      params: {},
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: {} as never,
+      respond,
+    });
+
+    expect(mocks.installBustlyUploadedSkillFromPath).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "path is required",
       }),
     );
   });

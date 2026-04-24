@@ -118,6 +118,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "bustly.runtime.user-language.set",
     "bustly.workspace.set-active",
     "skills.catalog.install",
+    "skills.catalog.upload",
     "skills.catalog.update",
     "skills.catalog.uninstall",
     "chat.send",
