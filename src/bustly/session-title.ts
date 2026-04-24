@@ -17,6 +17,7 @@ import { normalizeBustlyWorkspaceId } from "./workspace-agent.js";
 const SESSION_TITLE_MAX_TOKENS = 24;
 const SESSION_TITLE_TIMEOUT_MS = 20_000;
 const SESSION_TITLE_MODEL_ID = process.env.BUSTLY_SESSION_TITLE_MODEL_ID?.trim() || "chat.standard";
+const SESSION_TITLE_BLOCKED_SUBSTRINGS = ["/admin?setting_modal=billing", "model access"];
 const SESSION_TITLE_SYSTEM_PROMPT = [
   "Extract a concise task title from the user request text.",
   "The title must describe the user's intended task, not an assistant response.",
@@ -123,6 +124,9 @@ function normalizeGeneratedSessionTitle(value: string): string | null {
   }
   const lower = normalized.toLowerCase();
   if (["conversation", "new conversation", "help", "task"].includes(lower)) {
+    return null;
+  }
+  if (SESSION_TITLE_BLOCKED_SUBSTRINGS.some((token) => lower.includes(token))) {
     return null;
   }
   return normalized;

@@ -15,8 +15,21 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => ({
   resolveModel: vi.fn(() => ({ model: null })),
 }));
 
+vi.mock("../agents/model-auth.js", () => ({
+  getApiKeyForModel: vi.fn(async () => ({
+    apiKey: "test-api-key",
+    source: "test",
+    mode: "api-key",
+  })),
+  requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
+}));
+
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => null),
+}));
+
+vi.mock("../infra/model-request-adapter.js", () => ({
+  runTrackedModelRequest: vi.fn(),
 }));
 
 vi.mock("./supabase.js", () => ({
@@ -31,6 +44,7 @@ vi.mock("./supabase.js", () => ({
 }));
 
 import { scheduleBustlySessionTitleGeneration } from "./session-title.js";
+import { runTrackedModelRequest } from "../infra/model-request-adapter.js";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const startedAt = Date.now();
@@ -52,6 +66,7 @@ describe("session-title fallback upsert", () => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = path.join(tempRoot, "state");
     supabaseCallsRef.current = [];
+    vi.mocked(resolveModel).mockReturnValue({ model: null } as ReturnType<typeof resolveModel>);
   });
 
   afterEach(() => {
@@ -103,6 +118,77 @@ describe("session-title fallback upsert", () => {
       undefined,
       expect.any(Object),
     );
+    expect(supabaseCallsRef.current).toHaveLength(1);
+    const request = supabaseCallsRef.current[0];
+    expect(request?.path).toContain("workspace_session_name_extracts");
+    const payload = JSON.parse(String(request?.body)) as Array<Record<string, unknown>>;
+    expect(payload).toHaveLength(1);
+    expect(payload[0]).toMatchObject({
+      workspace_id: workspaceId,
+      session_id: sessionId,
+      session_name: promptExcerpt,
+      sample_route_key: "chat.advanced",
+      prompt_excerpt: promptExcerpt,
+    });
+
+    const sessionStore = loadSessionStore(storePath, { skipCache: true });
+    expect(sessionStore[sessionKey]?.label).toBe(seedLabel);
+  });
+
+  it("falls back to prompt excerpt when generated title matches blocked patterns", async () => {
+    const workspaceId = "workspace-1";
+    const agentId = "bustly-workspace-1-overview";
+    const sessionKey = "agent:bustly-workspace-1-overview:conversation:session-2";
+    const sessionId = "session-2";
+    const seedLabel = "Daily pulse";
+    const promptExcerpt = "Summarize weekly order trends";
+    const onLabelUpdated = vi.fn();
+
+    vi.mocked(resolveModel).mockReturnValue({
+      model: {
+        provider: "bustly",
+        id: "chat.standard",
+        api: "openai-responses",
+      },
+    } as ReturnType<typeof resolveModel>);
+    vi.mocked(runTrackedModelRequest).mockResolvedValue({
+      result: async () => ({
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "www.bustly.shop/admin?setting_modal=billing Model access",
+          },
+        ],
+        stopReason: "stop",
+      }),
+    } as Awaited<ReturnType<typeof runTrackedModelRequest>>);
+
+    const storePath = resolveDefaultSessionStorePath(agentId);
+    await updateSessionStore(storePath, (store) => {
+      store[sessionKey] = {
+        sessionId,
+        updatedAt: Date.now(),
+        label: seedLabel,
+      };
+    });
+
+    scheduleBustlySessionTitleGeneration({
+      workspaceId,
+      agentId,
+      sessionKey,
+      sessionId,
+      seedLabel,
+      promptExcerpt,
+      sampleRouteKey: "chat.advanced",
+      cfg: { providers: [] } as OpenClawConfig,
+      onLabelUpdated,
+    });
+
+    await waitFor(() => supabaseCallsRef.current.length > 0);
+
+    expect(runTrackedModelRequest).toHaveBeenCalledTimes(1);
+    expect(onLabelUpdated).not.toHaveBeenCalled();
     expect(supabaseCallsRef.current).toHaveLength(1);
     const request = supabaseCallsRef.current[0];
     expect(request?.path).toContain("workspace_session_name_extracts");
