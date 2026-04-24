@@ -5,20 +5,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BustlyOAuthState } from "../config/types.base.js";
 import { ensureGatewayRuntimeInit } from "./gateway-runtime-init.js";
 
-const { oauthStateRef, bootstrapMock, ensureModelsJsonMock, ensurePiAuthJsonMock } = vi.hoisted(
-  () => {
-    return {
-      oauthStateRef: { current: null as BustlyOAuthState | null },
-      bootstrapMock: vi.fn<(params: unknown) => Promise<void>>(async () => {}),
-      ensureModelsJsonMock: vi.fn<
-        (config: unknown, agentDir: string) => Promise<{ agentDir: string; wrote: boolean }>
-      >(async () => ({ agentDir: "", wrote: true })),
-      ensurePiAuthJsonMock: vi.fn<
-        (agentDir: string) => Promise<{ authPath: string; wrote: boolean }>
-      >(async () => ({ authPath: "", wrote: true })),
-    };
-  },
-);
+const {
+  oauthStateRef,
+  bootstrapMock,
+  ensureModelsJsonMock,
+  ensurePiAuthJsonMock,
+  loadEnabledBustlyWorkspaceBootstrapAgentsMock,
+} = vi.hoisted(() => {
+  return {
+    oauthStateRef: { current: null as BustlyOAuthState | null },
+    bootstrapMock: vi.fn<(params: unknown) => Promise<void>>(async () => {}),
+    ensureModelsJsonMock: vi.fn<
+      (config: unknown, agentDir: string) => Promise<{ agentDir: string; wrote: boolean }>
+    >(async () => ({ agentDir: "", wrote: true })),
+    ensurePiAuthJsonMock: vi.fn<
+      (agentDir: string) => Promise<{ authPath: string; wrote: boolean }>
+    >(async () => ({ authPath: "", wrote: true })),
+    loadEnabledBustlyWorkspaceBootstrapAgentsMock:
+      vi.fn<(options?: unknown) => Promise<unknown[]>>(),
+  };
+});
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => oauthStateRef.current),
@@ -27,6 +33,8 @@ vi.mock("../bustly-oauth.js", () => ({
 
 vi.mock("./workspace-bootstrap.js", () => ({
   initializeBustlyWorkspaceBootstrap: (params: unknown) => bootstrapMock(params),
+  loadEnabledBustlyWorkspaceBootstrapAgents: (options?: unknown) =>
+    loadEnabledBustlyWorkspaceBootstrapAgentsMock(options),
 }));
 
 vi.mock("../agents/models-config.js", () => ({
@@ -42,13 +50,16 @@ describe("gateway-runtime-init", () => {
   let tempDir: string;
   let previousStateDir: string | undefined;
   let previousConfigPath: string | undefined;
+  let previousWorkspaceTemplateBaseUrl: string | undefined;
 
   beforeEach(() => {
     tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-runtime-init-"));
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    previousWorkspaceTemplateBaseUrl = process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
     process.env.OPENCLAW_STATE_DIR = path.join(tempDir, "state");
     process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, "state", "openclaw.json");
+    delete process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
     oauthStateRef.current = {
       deviceId: "device-1",
       callbackPort: 17900,
@@ -68,9 +79,15 @@ describe("gateway-runtime-init", () => {
     bootstrapMock.mockReset();
     ensureModelsJsonMock.mockReset();
     ensurePiAuthJsonMock.mockReset();
+    loadEnabledBustlyWorkspaceBootstrapAgentsMock.mockReset();
     bootstrapMock.mockResolvedValue(undefined);
     ensureModelsJsonMock.mockResolvedValue({ agentDir: "", wrote: true });
     ensurePiAuthJsonMock.mockResolvedValue({ authPath: "", wrote: true });
+    loadEnabledBustlyWorkspaceBootstrapAgentsMock.mockResolvedValue([
+      { slug: "finance", label: "Finance", isMain: false, bootstrapMetadata: {} },
+      { slug: "marketing", label: "Marketing", isMain: false, bootstrapMetadata: {} },
+      { slug: "store-ops", label: "Store Ops", isMain: false, bootstrapMetadata: {} },
+    ]);
   });
 
   afterEach(() => {
@@ -83,6 +100,11 @@ describe("gateway-runtime-init", () => {
       delete process.env.OPENCLAW_CONFIG_PATH;
     } else {
       process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+    }
+    if (previousWorkspaceTemplateBaseUrl === undefined) {
+      delete process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
+    } else {
+      process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL = previousWorkspaceTemplateBaseUrl;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -99,7 +121,7 @@ describe("gateway-runtime-init", () => {
 
     expect(result.workspaceId).toBe("workspace-1");
     expect(result.workspace).toContain(
-      path.join("workspaces", "workspace-1", "agents", "overview"),
+      path.join("workspaces", "workspace-1", "agents", "finance"),
     );
     expect(result.gatewayPort).toBe(18799);
     expect(result.gatewayBind).toBe("loopback");

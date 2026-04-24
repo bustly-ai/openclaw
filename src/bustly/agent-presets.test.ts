@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadBustlyRemoteAgentMetadata,
   loadBustlyRemoteAgentPresets,
@@ -6,15 +6,26 @@ import {
 } from "./agent-presets.js";
 
 describe("bustly agent presets", () => {
+  let previousWorkspaceTemplateBaseUrl: string | undefined;
+
+  beforeEach(() => {
+    previousWorkspaceTemplateBaseUrl = process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
+    delete process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
+  });
+
   afterEach(() => {
+    if (previousWorkspaceTemplateBaseUrl === undefined) {
+      delete process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
+    } else {
+      process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL = previousWorkspaceTemplateBaseUrl;
+    }
     resetBustlyRemoteAgentPresetsCache();
   });
 
-  it("falls back to bundled preset config when remote env is absent", async () => {
+  it("falls back to bundled preset slugs when remote env is absent", async () => {
     const presets = await loadBustlyRemoteAgentPresets();
 
     expect(presets.map((preset) => preset.slug)).toEqual([
-      "overview",
       "finance",
       "customers",
       "store-ops",
@@ -45,31 +56,10 @@ describe("bustly agent presets", () => {
     ]);
   });
 
-  it("falls back to bundled agent metadata when remote env is absent", async () => {
-    const metadata = await loadBustlyRemoteAgentMetadata("marketing");
-
-    expect(metadata).toEqual({
-      label: "Marketing",
-      icon: "Web3_Avatar_1.png",
-      skills: ["ads-core-ops", "commerce-core-ops"],
-      useCases: [
-        {
-          label: "Campaign Diagnosis",
-          prompt:
-            "Identify which campaigns and acquisition channels are driving efficient growth versus wasting budget.",
-        },
-        {
-          label: "Budget Guidance",
-          prompt:
-            "Recommend where to cut spend, where to scale, and which campaigns need immediate optimization.",
-        },
-        {
-          label: "Funnel Analysis",
-          prompt:
-            "Pinpoint where demand is leaking across the funnel, from traffic to click, conversion, and checkout.",
-        },
-      ],
-    });
+  it("requires remote metadata when template base URL is missing", async () => {
+    await expect(loadBustlyRemoteAgentMetadata("marketing")).rejects.toThrow(
+      "Missing Bustly agent metadata at agents/marketing/.bustly-agent.json",
+    );
   });
 
   it("loads and normalizes remote agent metadata", async () => {

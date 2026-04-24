@@ -842,28 +842,28 @@ async function initializeGatewayRuntimeForBustlyWorkspace(params: {
     throw new Error("Missing Bustly workspaceId for gateway runtime initialization.");
   }
 
-  const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId);
-  writeMainInfo(
-    `[Init] Ensuring gateway runtime for Bustly workspace ${workspaceId} at ${workspaceDir}`,
-  );
+  writeMainInfo(`[Init] Ensuring gateway runtime for Bustly workspace ${workspaceId}`);
   const result = await initializeOpenClaw({
-    workspace: workspaceDir,
+    workspace: resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId),
   });
   if (!result.success) {
     throw new Error(result.error ?? "Failed to initialize OpenClaw");
   }
 
-  await synchronizeBustlyWorkspaceContext({
+  const binding = await synchronizeBustlyWorkspaceContext({
     workspaceId,
     workspaceName: params.workspaceName,
     allowCreateConfig: true,
     userAgent: "bustly-desktop",
     env: process.env,
   });
+  if (!binding) {
+    throw new Error("Failed to synchronize Bustly workspace context.");
+  }
 
   applyInitializationResult({
     ...result,
-    workspace: workspaceDir,
+    workspace: binding.workspaceDir,
   });
 }
 

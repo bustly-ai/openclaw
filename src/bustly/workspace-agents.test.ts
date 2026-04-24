@@ -18,7 +18,13 @@ import {
 const { bootstrapMock, loadBootstrapAgentsMock } = vi.hoisted(() => ({
   bootstrapMock: vi.fn<(params: unknown) => Promise<void>>(async () => {}),
   loadBootstrapAgentsMock: vi.fn<
-    () => Promise<Array<{ slug: string; label: string; icon?: string; isMain?: boolean }>>
+    () => Promise<Array<{
+      slug: string;
+      label: string;
+      icon?: string;
+      isMain?: boolean;
+      bootstrapMetadata?: Record<string, unknown>;
+    }>>
   >(async () => []),
 }));
 
@@ -281,7 +287,6 @@ describe("workspace-agents", () => {
       workspaceId: "workspace-1",
       agentId: "bustly-workspace-1-overview",
     });
-    expect(hiddenByDefault).toEqual([]);
 
     const sessions = listBustlyWorkspaceAgentSessions({
       workspaceId: "workspace-1",
@@ -307,6 +312,7 @@ describe("workspace-agents", () => {
         updatedAt: 200,
       },
     ]);
+    expect(hiddenByDefault).toEqual(sessions);
   });
 
   it("lists heartbeat main sessions in the agent session list", () => {
@@ -456,8 +462,8 @@ describe("workspace-agents", () => {
 
   it("loads preset agents from bootstrap config when presets are omitted", async () => {
     loadBootstrapAgentsMock.mockResolvedValueOnce([
-      { slug: "overview", label: "Overview", icon: "Robot", isMain: true },
-      { slug: "finance", label: "Finance", icon: "Wallet", isMain: false },
+      { slug: "overview", label: "Overview", icon: "Robot", isMain: true, bootstrapMetadata: {} },
+      { slug: "finance", label: "Finance", icon: "Wallet", isMain: false, bootstrapMetadata: {} },
     ]);
 
     const bootstrapped = await ensureBustlyWorkspacePresetAgents({
@@ -483,6 +489,50 @@ describe("workspace-agents", () => {
       every: DEFAULT_BUSTLY_HEARTBEAT_EVERY,
       target: "none",
     });
+  });
+
+  it("preserves remote preset metadata without local icon overwrite", async () => {
+    const remoteMetadata = {
+      label: "Finance",
+      icon: "Web3_Avatar_4.png",
+      skills: ["commerce-core-ops"],
+      useCases: [
+        {
+          label: "Revenue Quality",
+          prompt: "Evaluate margin quality.",
+        },
+      ],
+    };
+    bootstrapMock.mockImplementationOnce(async (params: unknown) => {
+      const typed = params as { workspaceDir: string };
+      mkdirSync(typed.workspaceDir, { recursive: true });
+      writeFileSync(
+        path.join(typed.workspaceDir, ".bustly-agent.json"),
+        JSON.stringify(remoteMetadata, null, 2),
+      );
+    });
+
+    const bootstrapped = await ensureBustlyWorkspacePresetAgents({
+      workspaceId: "workspace-1",
+      workspaceName: "Workspace One",
+      presets: [
+        {
+          slug: "finance",
+          label: "Finance",
+          icon: "Wallet",
+          isMain: false,
+          bootstrapMetadata: remoteMetadata,
+        },
+      ],
+      configPath,
+      env: process.env,
+    });
+
+    expect(bootstrapped).toBe(1);
+    const metadata = JSON.parse(
+      readFileSync(path.join(stateDir, "workspaces", "workspace-1", "agents", "finance", ".bustly-agent.json"), "utf-8"),
+    ) as { icon?: string };
+    expect(metadata.icon).toBe("Web3_Avatar_4.png");
   });
 
   it("skips bootstrap when the preset agent already exists on disk", async () => {
@@ -619,8 +669,7 @@ describe("workspace-agents", () => {
     const metadata = JSON.parse(
       readFileSync(path.join(existingDir, ".bustly-agent.json"), "utf-8"),
     ) as { createdAt?: number; icon?: string };
-    expect(typeof metadata.createdAt).toBe("number");
-    expect((metadata.createdAt ?? 0) > legacyCreatedAt).toBe(true);
+    expect(metadata.createdAt).toBe(legacyCreatedAt);
     expect(metadata.icon).toBe("OldIcon");
   });
 

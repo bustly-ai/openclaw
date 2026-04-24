@@ -34,7 +34,7 @@ const {
   bootstrapMock,
   ensureModelsJsonMock,
   ensurePiAuthJsonMock,
-  loadEnabledBustlyRemoteAgentPresetsMock,
+  loadEnabledBustlyWorkspaceBootstrapAgentsMock,
   ensureBustlyWorkspacePresetAgentsMock,
 } = vi.hoisted(() => {
   return {
@@ -46,7 +46,8 @@ const {
     ensurePiAuthJsonMock: vi.fn<
       (agentDir: string) => Promise<{ authPath: string; wrote: boolean }>
     >(async () => ({ authPath: "", wrote: true })),
-    loadEnabledBustlyRemoteAgentPresetsMock: vi.fn<(options?: unknown) => Promise<unknown[]>>(),
+    loadEnabledBustlyWorkspaceBootstrapAgentsMock:
+      vi.fn<(options?: unknown) => Promise<unknown[]>>(),
     ensureBustlyWorkspacePresetAgentsMock: vi.fn<(params: unknown) => Promise<number>>(),
   };
 });
@@ -58,6 +59,8 @@ vi.mock("../bustly-oauth.js", () => ({
 
 vi.mock("./workspace-bootstrap.js", () => ({
   initializeBustlyWorkspaceBootstrap: (params: unknown) => bootstrapMock(params),
+  loadEnabledBustlyWorkspaceBootstrapAgents: (options?: unknown) =>
+    loadEnabledBustlyWorkspaceBootstrapAgentsMock(options),
 }));
 
 vi.mock("../agents/models-config.js", () => ({
@@ -69,11 +72,6 @@ vi.mock("../agents/pi-auth-json.js", () => ({
   ensurePiAuthJsonFromAuthProfiles: (agentDir: string) => ensurePiAuthJsonMock(agentDir),
 }));
 
-vi.mock("./agent-presets.js", () => ({
-  loadEnabledBustlyRemoteAgentPresets: (options?: unknown) =>
-    loadEnabledBustlyRemoteAgentPresetsMock(options),
-}));
-
 vi.mock("./workspace-agents.js", () => ({
   ensureBustlyWorkspacePresetAgents: (params: unknown) =>
     ensureBustlyWorkspacePresetAgentsMock(params),
@@ -83,13 +81,16 @@ describe("gateway-runtime-init deferred preset warmup", () => {
   let tempDir: string;
   let previousStateDir: string | undefined;
   let previousConfigPath: string | undefined;
+  let previousWorkspaceTemplateBaseUrl: string | undefined;
 
   beforeEach(() => {
     tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-runtime-defer-"));
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    previousWorkspaceTemplateBaseUrl = process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
     process.env.OPENCLAW_STATE_DIR = path.join(tempDir, "state");
     process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, "state", "openclaw.json");
+    delete process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
     oauthStateRef.current = {
       deviceId: "device-1",
       callbackPort: 17900,
@@ -112,10 +113,10 @@ describe("gateway-runtime-init deferred preset warmup", () => {
     ensureModelsJsonMock.mockResolvedValue({ agentDir: "", wrote: true });
     ensurePiAuthJsonMock.mockReset();
     ensurePiAuthJsonMock.mockResolvedValue({ authPath: "", wrote: true });
-    loadEnabledBustlyRemoteAgentPresetsMock.mockReset();
-    loadEnabledBustlyRemoteAgentPresetsMock.mockResolvedValue([
-      { slug: "marketing", label: "Marketing" },
-      { slug: "store-ops", label: "Store Ops" },
+    loadEnabledBustlyWorkspaceBootstrapAgentsMock.mockReset();
+    loadEnabledBustlyWorkspaceBootstrapAgentsMock.mockResolvedValue([
+      { slug: "marketing", label: "Marketing", isMain: false, bootstrapMetadata: {} },
+      { slug: "store-ops", label: "Store Ops", isMain: false, bootstrapMetadata: {} },
     ]);
     ensureBustlyWorkspacePresetAgentsMock.mockReset();
     ensureBustlyWorkspacePresetAgentsMock.mockResolvedValue(0);
@@ -131,6 +132,11 @@ describe("gateway-runtime-init deferred preset warmup", () => {
       delete process.env.OPENCLAW_CONFIG_PATH;
     } else {
       process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+    }
+    if (previousWorkspaceTemplateBaseUrl === undefined) {
+      delete process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
+    } else {
+      process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL = previousWorkspaceTemplateBaseUrl;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -151,7 +157,7 @@ describe("gateway-runtime-init deferred preset warmup", () => {
 
     await expect(
       waitForExpectation(() => {
-        expect(loadEnabledBustlyRemoteAgentPresetsMock).toHaveBeenCalledTimes(1);
+        expect(loadEnabledBustlyWorkspaceBootstrapAgentsMock).toHaveBeenCalledTimes(1);
         expect(ensureBustlyWorkspacePresetAgentsMock).toHaveBeenCalledTimes(1);
       }),
     ).resolves.toBeUndefined();
@@ -163,7 +169,7 @@ describe("gateway-runtime-init deferred preset warmup", () => {
       ]),
     ).resolves.toBe("resolved");
 
-    expect(loadEnabledBustlyRemoteAgentPresetsMock).toHaveBeenCalledTimes(1);
+    expect(loadEnabledBustlyWorkspaceBootstrapAgentsMock).toHaveBeenCalledTimes(1);
     expect(ensureBustlyWorkspacePresetAgentsMock).toHaveBeenCalledTimes(1);
 
     deferredWarmup.resolve(0);

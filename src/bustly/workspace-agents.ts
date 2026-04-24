@@ -522,8 +522,11 @@ export async function createBustlyWorkspaceAgent(params: {
   const agentName = normalizeBustlyAgentName(params.agentName);
   const displayName = params.displayName?.trim() || agentName;
   const customIdentityDescription = params.description?.trim();
+  const preserveRemoteMetadata = params.bootstrapMetadata !== undefined;
   const explicitIcon = params.icon?.trim() || undefined;
-  const icon = explicitIcon ?? (!params.skipBootstrap ? "SquaresFour" : undefined);
+  const icon = preserveRemoteMetadata
+    ? undefined
+    : explicitIcon ?? (!params.skipBootstrap ? "SquaresFour" : undefined);
   const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId, agentName, params.env);
   const agentId = buildBustlyWorkspaceAgentId(workspaceId, agentName);
   const config = readConfig(configPath);
@@ -592,7 +595,7 @@ export async function createBustlyWorkspaceAgent(params: {
       });
     }
   }
-  if (!params.skipBootstrap || icon || params.skills !== undefined) {
+  if (!preserveRemoteMetadata && (!params.skipBootstrap || icon || params.skills !== undefined)) {
     setBustlyAgentMetadata({
       workspaceDir,
       ...(icon ? { icon } : {}),
@@ -855,7 +858,6 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
         agentName: preset.slug,
         displayName: preset.label,
         preserveTemplateIdentityName: true,
-        ...(workspaceExists ? {} : { icon: preset.icon }),
         heartbeat: DEFAULT_PRESET_HEARTBEAT,
         ...(preset.bootstrapMetadata ? { bootstrapMetadata: preset.bootstrapMetadata } : {}),
         requireBootstrapMetadata: !workspaceExists,
@@ -881,10 +883,6 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
         agentName: preset.slug,
         ...(preset.bootstrapMetadata ? { metadata: preset.bootstrapMetadata } : {}),
         requireAgentMetadata: true,
-      });
-      setBustlyAgentMetadata({
-        workspaceDir,
-        createdAt: Date.now(),
       });
       bootstrappedCount += 1;
     }

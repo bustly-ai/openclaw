@@ -18,8 +18,10 @@ import {
   buildBustlyWorkspaceAgentId,
   DEFAULT_BUSTLY_AGENT_NAME,
   normalizeBustlyAgentName,
+  resolveBustlyAgentNameFromAgentId,
   normalizeBustlyWorkspaceId,
 } from "./workspace-agent.js";
+import { loadBustlyMainAgentPreset } from "./agent-presets.js";
 import { initializeBustlyWorkspaceBootstrap } from "./workspace-bootstrap.js";
 
 type OpenClawAgentListEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
@@ -54,6 +56,52 @@ function resolveWorkspaceDisplayName(agentName: string, workspaceName?: string):
     return "Overview";
   }
   return normalizedWorkspaceName || agentName;
+}
+
+function resolveConfiguredWorkspaceAgentName(
+  config: OpenClawConfig,
+  workspaceId: string,
+): string | null {
+  const preferred = listAgentEntries(config).find((entry) => {
+    if (entry.default !== true) {
+      return false;
+    }
+    return resolveBustlyAgentNameFromAgentId(workspaceId, entry.id) !== null;
+  });
+  if (!preferred) {
+    return null;
+  }
+  const resolved = resolveBustlyAgentNameFromAgentId(workspaceId, preferred.id);
+  if (!resolved || resolved === DEFAULT_BUSTLY_AGENT_NAME) {
+    return null;
+  }
+  return resolved;
+}
+
+async function resolveWorkspaceAgentName(params: {
+  workspaceId: string;
+  requestedAgentName?: string;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<string> {
+  const explicitName = params.requestedAgentName?.trim();
+  if (explicitName) {
+    const normalizedExplicit = normalizeBustlyAgentName(explicitName);
+    if (normalizedExplicit === DEFAULT_BUSTLY_AGENT_NAME) {
+      throw new Error("Overview agent is disabled for automatic runtime bootstrap.");
+    }
+    return normalizedExplicit;
+  }
+  const configured = resolveConfiguredWorkspaceAgentName(params.config, params.workspaceId);
+  if (configured) {
+    return configured;
+  }
+  const mainPreset = await loadBustlyMainAgentPreset({ env: params.env });
+  const normalizedPreset = normalizeBustlyAgentName(mainPreset.slug);
+  if (normalizedPreset === DEFAULT_BUSTLY_AGENT_NAME) {
+    throw new Error("Overview agent is disabled for automatic runtime bootstrap.");
+  }
+  return normalizedPreset;
 }
 
 function readConfigFromPath(configPath: string): OpenClawConfig {
@@ -130,7 +178,6 @@ export async function ensureBustlyWorkspaceAgentConfig(params: {
   if (!workspaceId) {
     throw new Error("Bustly workspaceId is required.");
   }
-  const agentName = normalizeBustlyAgentName(params.agentName);
   const configPath = params.configPath ?? resolveConfigPathForEnv(env);
   if (!existsSync(configPath)) {
     if (!params.allowCreateConfig) {
@@ -138,9 +185,15 @@ export async function ensureBustlyWorkspaceAgentConfig(params: {
     }
     ensureConfigExists(configPath);
   }
+  const config = readConfigFromPath(configPath);
+  const agentName = await resolveWorkspaceAgentName({
+    workspaceId,
+    requestedAgentName: params.agentName,
+    config,
+    env,
+  });
   const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId, agentName, env);
   const agentId = buildBustlyWorkspaceAgentId(workspaceId, agentName);
-  const config = readConfigFromPath(configPath);
   const workspaceExists = existsSync(workspaceDir);
 
   const configWithoutMain = listAgentEntries(config).some((entry) => entry.id === "main")
@@ -202,7 +255,7 @@ export async function ensureBustlyWorkspaceAgentConfig(params: {
               workspaceId,
               workspaceName: params.workspaceName,
               agentName,
-              requireAgentMetadata: agentName === DEFAULT_BUSTLY_AGENT_NAME,
+              requireAgentMetadata: true,
             });
           } catch (error) {
             console.warn("[BustlyWorkspace] Deferred bootstrap failed", {
@@ -222,7 +275,7 @@ export async function ensureBustlyWorkspaceAgentConfig(params: {
         workspaceId,
         workspaceName: params.workspaceName,
         agentName,
-        requireAgentMetadata: agentName === DEFAULT_BUSTLY_AGENT_NAME,
+        requireAgentMetadata: true,
       });
     }
   }

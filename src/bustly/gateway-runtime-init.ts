@@ -163,9 +163,9 @@ async function warmBustlyWorkspacePresetAgents(params: {
   configPath: string;
   env: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const { loadEnabledBustlyRemoteAgentPresets } = await import("./agent-presets.js");
+  const { loadEnabledBustlyWorkspaceBootstrapAgents } = await import("./workspace-bootstrap.js");
   const { ensureBustlyWorkspacePresetAgents } = await import("./workspace-agents.js");
-  const presetAgents = await loadEnabledBustlyRemoteAgentPresets({ env: params.env });
+  const presetAgents = await loadEnabledBustlyWorkspaceBootstrapAgents({ env: params.env });
   await ensureBustlyWorkspacePresetAgents({
     workspaceId: params.workspaceId,
     workspaceName: params.workspaceName,
@@ -174,6 +174,7 @@ async function warmBustlyWorkspacePresetAgents(params: {
       label: preset.label,
       icon: preset.icon,
       isMain: preset.isMain,
+      bootstrapMetadata: preset.bootstrapMetadata,
     })),
     configPath: params.configPath,
     allowCreateConfig: true,

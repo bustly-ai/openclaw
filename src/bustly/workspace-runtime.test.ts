@@ -15,6 +15,7 @@ const {
   setActiveWorkspaceIdMock,
   readBustlyOAuthStateEnsuringFreshTokenMock,
   bootstrapMock,
+  loadEnabledBustlyWorkspaceBootstrapAgentsMock,
 } = vi.hoisted(() => {
   return {
     oauthStateRef: { current: null as BustlyOAuthState | null },
@@ -23,6 +24,8 @@ const {
     readBustlyOAuthStateEnsuringFreshTokenMock:
       vi.fn<(options?: { forceRefresh?: boolean }) => Promise<BustlyOAuthState | null>>(),
     bootstrapMock: vi.fn(async () => {}),
+    loadEnabledBustlyWorkspaceBootstrapAgentsMock:
+      vi.fn<(options?: unknown) => Promise<unknown[]>>(),
   };
 });
 const { ensureModelsJsonMock, ensurePiAuthJsonMock } = vi.hoisted(() => {
@@ -51,6 +54,8 @@ vi.mock("../bustly-oauth.js", () => ({
 
 vi.mock("./workspace-bootstrap.js", () => ({
   initializeBustlyWorkspaceBootstrap: (params: unknown) => bootstrapMock(params),
+  loadEnabledBustlyWorkspaceBootstrapAgents: (options?: unknown) =>
+    loadEnabledBustlyWorkspaceBootstrapAgentsMock(options),
 }));
 
 vi.mock("./skill-catalog.js", () => ({
@@ -72,7 +77,7 @@ describe("workspace-runtime", () => {
   let previousConfigPath: string | undefined;
   let previousWorkspaceTemplateBaseUrl: string | undefined;
 
-  function expectOverviewBootstrapCalled(): void {
+  function expectDefaultPresetBootstrapCalled(): void {
     expect(bootstrapMock).toHaveBeenCalled();
     expect(
       bootstrapMock.mock.calls.some(([params]) => {
@@ -83,9 +88,9 @@ describe("workspace-runtime", () => {
         };
         return (
           bootstrapParams.workspaceId === "workspace-1" &&
-          bootstrapParams.agentName === "overview" &&
+          bootstrapParams.agentName === "finance" &&
           bootstrapParams.workspaceDir?.includes(
-            path.join("workspaces", "workspace-1", "agents", "overview"),
+            path.join("workspaces", "workspace-1", "agents", "finance"),
           )
         );
       }),
@@ -99,6 +104,7 @@ describe("workspace-runtime", () => {
     previousWorkspaceTemplateBaseUrl = process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
     process.env.OPENCLAW_STATE_DIR = path.join(tempDir, "state");
     process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, "state", "openclaw.json");
+    delete process.env.BUSTLY_WORKSPACE_TEMPLATE_BASE_URL;
     oauthStateRef.current = null;
     oauthFreshStateRef.current = null;
     setActiveWorkspaceIdMock.mockReset();
@@ -108,6 +114,8 @@ describe("workspace-runtime", () => {
     });
     bootstrapMock.mockReset();
     bootstrapMock.mockResolvedValue(undefined);
+    loadEnabledBustlyWorkspaceBootstrapAgentsMock.mockReset();
+    loadEnabledBustlyWorkspaceBootstrapAgentsMock.mockResolvedValue([]);
     ensureModelsJsonMock.mockReset();
     ensureModelsJsonMock.mockResolvedValue({ agentDir: "", wrote: true });
     ensurePiAuthJsonMock.mockReset();
@@ -176,7 +184,7 @@ describe("workspace-runtime", () => {
     });
 
     expect(binding.workspaceId).toBe("workspace-1");
-    expectOverviewBootstrapCalled();
+    expectDefaultPresetBootstrapCalled();
   });
 
   it("uses a refreshed oauth state before cloud preflight", async () => {
@@ -210,7 +218,7 @@ describe("workspace-runtime", () => {
 
     expect(readBustlyOAuthStateEnsuringFreshTokenMock).toHaveBeenCalledTimes(1);
     expect(binding.workspaceId).toBe("workspace-1");
-    expectOverviewBootstrapCalled();
+    expectDefaultPresetBootstrapCalled();
   });
 
   it("initializes config and workspace binding for cloud mode", async () => {
@@ -234,12 +242,12 @@ describe("workspace-runtime", () => {
       userAgent: "cloud-test-agent",
     });
     expect(binding.workspaceId).toBe("workspace-1");
-    expect(binding.agentId).toBe("bustly-workspace-1-overview");
+    expect(binding.agentId).toBe("bustly-workspace-1-finance");
     expect(binding.workspaceDir).toContain(
-      path.join("workspaces", "workspace-1", "agents", "overview"),
+      path.join("workspaces", "workspace-1", "agents", "finance"),
     );
     expect(refreshDefaultInstalledSkillsSnapshotMock).toHaveBeenCalledTimes(1);
-    expectOverviewBootstrapCalled();
+    expectDefaultPresetBootstrapCalled();
     const configPath = process.env.OPENCLAW_CONFIG_PATH!;
     const config = JSON.parse(readFileSync(configPath, "utf-8")) as {
       gateway?: {
@@ -275,7 +283,7 @@ describe("workspace-runtime", () => {
       },
     };
     mkdirSync(
-      path.join(process.env.OPENCLAW_STATE_DIR!, "workspaces", "workspace-1", "agents", "overview"),
+      path.join(process.env.OPENCLAW_STATE_DIR!, "workspaces", "workspace-1", "agents", "finance"),
       { recursive: true },
     );
 
@@ -292,9 +300,9 @@ describe("workspace-runtime", () => {
         };
         return (
           bootstrapParams.workspaceId === "workspace-1" &&
-          bootstrapParams.agentName === "overview" &&
+          bootstrapParams.agentName === "finance" &&
           bootstrapParams.workspaceDir?.includes(
-            path.join("workspaces", "workspace-1", "agents", "overview"),
+            path.join("workspaces", "workspace-1", "agents", "finance"),
           )
         );
       }),
