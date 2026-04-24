@@ -2291,6 +2291,10 @@ function showHeartbeatNotification(payload: BustlyHeartbeatNotificationEvent) {
   if (!Notification.isSupported()) {
     return;
   }
+  const activeWorkspaceId = resolveBustlyWorkspaceIdFromOAuthState();
+  if (!activeWorkspaceId || payload.workspaceId !== activeWorkspaceId) {
+    return;
+  }
   if (payload.event.status !== "open") {
     return;
   }
