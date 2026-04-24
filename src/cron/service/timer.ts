@@ -17,6 +17,7 @@ import {
 } from "./jobs.js";
 import { locked } from "./locked.js";
 import { ensureLoaded, persist } from "./store.js";
+import { isCronJobAllowedForActiveWorkspace } from "./workspace.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
 
@@ -464,16 +465,20 @@ function findDueJobs(state: CronServiceState): CronJob[] {
 }
 
 function isRunnableJob(params: {
+  state: CronServiceState;
   job: CronJob;
   nowMs: number;
   skipJobIds?: ReadonlySet<string>;
   skipAtIfAlreadyRan?: boolean;
 }): boolean {
-  const { job, nowMs } = params;
+  const { state, job, nowMs } = params;
   if (!job.state) {
     job.state = {};
   }
   if (!job.enabled) {
+    return false;
+  }
+  if (!isCronJobAllowedForActiveWorkspace(state, job)) {
     return false;
   }
   if (params.skipJobIds?.has(job.id)) {
@@ -502,6 +507,7 @@ function collectRunnableJobs(
   }
   return state.store.jobs.filter((job) =>
     isRunnableJob({
+      state,
       job,
       nowMs,
       skipJobIds: opts?.skipJobIds,

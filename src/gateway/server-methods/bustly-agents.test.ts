@@ -139,7 +139,8 @@ describe("gateway bustly agent/session handlers", () => {
 
   it("lists agents for explicit workspace id", async () => {
     mocks.listBustlyWorkspaceAgents.mockReturnValue([
-      { agentId: "bustly-workspace-1-overview", name: "Overview" },
+      { agentId: "bustly-workspace-1-overview", agentName: "overview", name: "Overview" },
+      { agentId: "bustly-workspace-1-marketing", agentName: "marketing", name: "Marketing" },
     ]);
     const { respond } = await invoke("bustly.agents.list", { workspaceId: "workspace-1" });
     expect(mocks.listBustlyWorkspaceAgents).toHaveBeenCalledWith({
@@ -147,7 +148,7 @@ describe("gateway bustly agent/session handlers", () => {
     });
     expect(respond).toHaveBeenCalledWith(
       true,
-      [{ agentId: "bustly-workspace-1-overview", name: "Overview" }],
+      [{ agentId: "bustly-workspace-1-marketing", agentName: "marketing", name: "Marketing" }],
       undefined,
     );
   });

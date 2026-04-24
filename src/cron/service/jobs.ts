@@ -24,6 +24,7 @@ import {
   normalizePayloadToSystemText,
   normalizeRequiredName,
 } from "./normalize.js";
+import { isCronJobAllowedForActiveWorkspace } from "./workspace.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 
@@ -332,7 +333,12 @@ export function recomputeNextRunsForMaintenance(state: CronServiceState): boolea
 
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
-  const enabled = jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number");
+  const enabled = jobs.filter(
+    (j) =>
+      j.enabled &&
+      typeof j.state.nextRunAtMs === "number" &&
+      isCronJobAllowedForActiveWorkspace(state, j),
+  );
   if (enabled.length === 0) {
     return undefined;
   }

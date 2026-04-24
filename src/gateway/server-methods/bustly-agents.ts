@@ -2,7 +2,10 @@ import { readBustlyOAuthStateEnsuringFreshToken } from "../../bustly-oauth.js";
 import { loadBustlyRemoteAgentMetadata } from "../../bustly/agent-presets.js";
 import { DEFAULT_BUSTLY_HEARTBEAT_EVERY } from "../../bustly/heartbeats.js";
 import { scheduleBustlySessionTitleGeneration } from "../../bustly/session-title.js";
-import { normalizeBustlyAgentName } from "../../bustly/workspace-agent.js";
+import {
+  DEFAULT_BUSTLY_AGENT_NAME,
+  normalizeBustlyAgentName,
+} from "../../bustly/workspace-agent.js";
 import { getBustlySupabaseAuthConfigEnsuringFreshToken } from "../../bustly/supabase.js";
 import {
   createBustlyWorkspaceAgent,
@@ -70,11 +73,15 @@ export const bustlyAgentsHandlers: GatewayRequestHandlers = {
         respond(true, [], undefined);
         return;
       }
+      // Compatibility: legacy workspaces may still keep the old Overview agent in config.
+      const agents = listBustlyWorkspaceAgents({
+        workspaceId,
+      }).filter(
+        (agent) => normalizeBustlyAgentName(agent.agentName) !== DEFAULT_BUSTLY_AGENT_NAME,
+      );
       respond(
         true,
-        listBustlyWorkspaceAgents({
-          workspaceId,
-        }),
+        agents,
         undefined,
       );
     } catch (err) {
