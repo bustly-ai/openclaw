@@ -91,7 +91,7 @@ import {
   sanitizeSessionHistory,
   sanitizeToolsForGoogle,
 } from "../google.js";
-import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
+import { limitHistoryTurns, resolveRunHistoryTurnLimit } from "../history.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
 import {
@@ -1010,7 +1010,11 @@ export async function runEmbeddedAttempt(
           : validatedGemini;
         const truncated = limitHistoryTurns(
           validated,
-          getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+          resolveRunHistoryTurnLimit({
+            sessionKey: params.sessionKey,
+            config: params.config,
+            isHeartbeat: params.isHeartbeat === true,
+          }),
         );
         // Re-run tool_use/tool_result pairing repair after truncation, since
         // limitHistoryTurns can orphan tool_result blocks by removing the

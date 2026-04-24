@@ -46,6 +46,16 @@ const DEFAULT_PRESET_HEARTBEAT: NonNullable<OpenClawAgentListEntry["heartbeat"]>
 // so prompt/template updates can overwrite legacy bootstrap files once.
 export const BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE = Date.UTC(2026, 4, 17, 0, 0, 0, 0);
 
+function normalizePresetHeartbeatConfig(
+  heartbeat: OpenClawAgentListEntry["heartbeat"] | undefined,
+): NonNullable<OpenClawAgentListEntry["heartbeat"]> {
+  return {
+    ...(heartbeat ?? {}),
+    every: DEFAULT_PRESET_HEARTBEAT.every,
+    target: heartbeat?.target ?? DEFAULT_PRESET_HEARTBEAT.target,
+  };
+}
+
 export type BustlyWorkspaceAgentSummary = {
   agentId: string;
   agentName: string;
@@ -768,7 +778,47 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
     }
     ensureConfigExists(configPath);
   }
-  const cfg = readConfig(configPath);
+  const presets =
+    params.presets ?? (await loadEnabledBustlyWorkspaceBootstrapAgents({ env: params.env }));
+  let cfg = readConfig(configPath);
+  let configMutated = false;
+  for (const preset of presets) {
+    if (preset.slug === DEFAULT_BUSTLY_AGENT_NAME || preset.isMain) {
+      continue;
+    }
+    const agentId = buildBustlyWorkspaceAgentId(normalizedWorkspaceId, preset.slug);
+    const list = listAgentEntries(cfg);
+    const index = list.findIndex(
+      (entry) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
+    );
+    if (index < 0) {
+      continue;
+    }
+    const existingEntry = list[index];
+    const shouldForceHeartbeatEvery =
+      existingEntry.heartbeat?.every !== DEFAULT_PRESET_HEARTBEAT.every;
+    const shouldSetHeartbeatTarget = !existingEntry.heartbeat?.target;
+    if (!shouldForceHeartbeatEvery && !shouldSetHeartbeatTarget) {
+      continue;
+    }
+    const nextList = [...list];
+    nextList[index] = {
+      ...existingEntry,
+      heartbeat: normalizePresetHeartbeatConfig(existingEntry.heartbeat),
+    };
+    cfg = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        list: nextList,
+      },
+    };
+    configMutated = true;
+  }
+  if (configMutated) {
+    writeConfig(configPath, cfg);
+  }
+
   const existingWorkspaceAgentIds = new Set(
     listBustlyWorkspaceAgentIds(cfg, normalizedWorkspaceId),
   );
@@ -778,8 +828,6 @@ export async function ensureBustlyWorkspacePresetAgents(params: {
       .map((entry) => [entry.id, entry] as const),
   );
   const workspaceAgentIds = new Set(existingWorkspaceAgentIds);
-  const presets =
-    params.presets ?? (await loadEnabledBustlyWorkspaceBootstrapAgents({ env: params.env }));
   let bootstrappedCount = 0;
   for (const preset of presets) {
     if (preset.slug === DEFAULT_BUSTLY_AGENT_NAME || preset.isMain) {

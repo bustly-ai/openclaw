@@ -6,7 +6,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { getBustlyUserLanguage } from "./user-language.js";
 import { normalizeBustlyWorkspaceId } from "./workspace-agent.js";
 
-export const DEFAULT_BUSTLY_HEARTBEAT_EVERY = "30m";
+export const DEFAULT_BUSTLY_HEARTBEAT_EVERY = "2h";
 const MAX_HEARTBEAT_EVENTS = 16;
 const MAX_HEARTBEAT_HISTORY = 200;
 const MAX_EVENT_TITLE_CHARS = 80;

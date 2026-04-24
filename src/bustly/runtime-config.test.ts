@@ -9,6 +9,7 @@ import {
   normalizeBustlyModelRef,
   syncBustlyConfigFile,
 } from "./runtime-config.js";
+import { DEFAULT_BUSTLY_HEARTBEAT_EVERY } from "./heartbeats.js";
 
 vi.mock("../bustly-oauth.js", () => ({
   readBustlyOAuthState: vi.fn(() => ({
@@ -65,7 +66,54 @@ describe("applyBustlyOnlyConfig", () => {
       "User-Agent": "unit-test-agent",
       "X-Workspace-Id": "workspace-live",
     });
+    expect(next.agents?.defaults?.heartbeat?.every).toBe(DEFAULT_BUSTLY_HEARTBEAT_EVERY);
     expect(next.agents?.defaults?.heartbeat?.model).toBe(BUSTLY_DEFAULT_HEARTBEAT_MODEL_REF);
+  });
+
+  it("force-migrates heartbeat interval for all bustly agents with heartbeat config", () => {
+    const seeded = baseConfig();
+    seeded.agents = {
+      ...seeded.agents,
+      list: [
+        { id: "bustly-workspace-1-overview" },
+        {
+          id: "bustly-workspace-1-finance",
+          heartbeat: { every: "30m", target: "none" },
+        },
+        {
+          id: "bustly-workspace-2-custom",
+          heartbeat: { every: "15m" },
+        },
+        {
+          id: "ops",
+          heartbeat: { every: "5m", target: "telegram" },
+        },
+      ],
+    };
+
+    const next = applyBustlyOnlyConfig(seeded, {
+      selectedModelInput: "chat.standard",
+      userAgent: "unit-test-agent",
+    });
+
+    const list = next.agents?.list ?? [];
+    const finance = list.find((entry) => entry.id === "bustly-workspace-1-finance");
+    const custom = list.find((entry) => entry.id === "bustly-workspace-2-custom");
+    const ops = list.find((entry) => entry.id === "ops");
+    const overview = list.find((entry) => entry.id === "bustly-workspace-1-overview");
+    expect(finance?.heartbeat).toMatchObject({
+      every: DEFAULT_BUSTLY_HEARTBEAT_EVERY,
+      target: "none",
+    });
+    expect(custom?.heartbeat).toMatchObject({
+      every: DEFAULT_BUSTLY_HEARTBEAT_EVERY,
+      target: "none",
+    });
+    expect(ops?.heartbeat).toMatchObject({
+      every: "5m",
+      target: "telegram",
+    });
+    expect(overview?.heartbeat).toBeUndefined();
   });
 });
 
@@ -82,6 +130,7 @@ describe("syncBustlyConfigFile", () => {
     const synced = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
     const model = synced.agents?.defaults?.model as { primary?: string };
     expect(model?.primary).toBe("bustly/chat.ultra");
+    expect(synced.agents?.defaults?.heartbeat?.every).toBe(DEFAULT_BUSTLY_HEARTBEAT_EVERY);
     expect(synced.models?.providers?.bustly?.headers?.["User-Agent"]).toBe("sync-agent");
   });
 });

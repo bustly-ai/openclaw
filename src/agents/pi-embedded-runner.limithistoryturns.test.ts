@@ -1,6 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { limitHistoryTurns } from "./pi-embedded-runner.js";
+import {
+  AUTOMATION_HISTORY_TURN_LIMIT,
+  limitHistoryTurns,
+  resolveRunHistoryTurnLimit,
+} from "./pi-embedded-runner.js";
 
 describe("limitHistoryTurns", () => {
   const mockUsage = {
@@ -123,5 +127,64 @@ describe("limitHistoryTurns", () => {
     const limited = limitHistoryTurns(messages, 1);
     expect(firstText(limited[0])).toBe("second");
     expect(firstText(limited[1])).toBe("response");
+  });
+});
+
+describe("resolveRunHistoryTurnLimit", () => {
+  const dmSessionKey = "agent:main:telegram:direct:12345";
+  const cronSessionKey = "agent:main:cron:nightly-report";
+
+  it("uses configured history limit for non-automation runs", () => {
+    const limit = resolveRunHistoryTurnLimit({
+      sessionKey: dmSessionKey,
+      config: {
+        channels: {
+          telegram: {
+            dmHistoryLimit: 9,
+          },
+        },
+      },
+      isHeartbeat: false,
+    } as never);
+    expect(limit).toBe(9);
+  });
+
+  it("caps heartbeat runs to automation turn limit", () => {
+    const limit = resolveRunHistoryTurnLimit({
+      sessionKey: dmSessionKey,
+      config: {
+        channels: {
+          telegram: {
+            dmHistoryLimit: 9,
+          },
+        },
+      },
+      isHeartbeat: true,
+    } as never);
+    expect(limit).toBe(AUTOMATION_HISTORY_TURN_LIMIT);
+  });
+
+  it("keeps stricter configured limit for heartbeat runs", () => {
+    const limit = resolveRunHistoryTurnLimit({
+      sessionKey: dmSessionKey,
+      config: {
+        channels: {
+          telegram: {
+            dmHistoryLimit: 2,
+          },
+        },
+      },
+      isHeartbeat: true,
+    } as never);
+    expect(limit).toBe(2);
+  });
+
+  it("applies automation limit to cron sessions", () => {
+    const limit = resolveRunHistoryTurnLimit({
+      sessionKey: cronSessionKey,
+      config: undefined,
+      isHeartbeat: false,
+    });
+    expect(limit).toBe(AUTOMATION_HISTORY_TURN_LIMIT);
   });
 });

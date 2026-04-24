@@ -1,7 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isCronSessionKey } from "../../routing/session-key.js";
 
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
+export const AUTOMATION_HISTORY_TURN_LIMIT = 3;
 
 function stripThreadSuffix(value: string): string {
   const match = value.match(THREAD_SUFFIX_REGEX);
@@ -106,6 +108,22 @@ export function getHistoryLimitFromSessionKey(
   }
 
   return undefined;
+}
+
+export function resolveRunHistoryTurnLimit(params: {
+  sessionKey: string | undefined;
+  config: OpenClawConfig | undefined;
+  isHeartbeat: boolean;
+}): number | undefined {
+  const configured = getHistoryLimitFromSessionKey(params.sessionKey, params.config);
+  const isAutomationRun = params.isHeartbeat || isCronSessionKey(params.sessionKey);
+  if (!isAutomationRun) {
+    return configured;
+  }
+  if (typeof configured === "number" && configured > 0) {
+    return Math.min(configured, AUTOMATION_HISTORY_TURN_LIMIT);
+  }
+  return AUTOMATION_HISTORY_TURN_LIMIT;
 }
 
 /**

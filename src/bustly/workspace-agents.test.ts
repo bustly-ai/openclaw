@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { DEFAULT_BUSTLY_HEARTBEAT_EVERY } from "./heartbeats.js";
 import {
   BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE,
   createBustlyWorkspaceAgent,
@@ -448,7 +449,7 @@ describe("workspace-agents", () => {
       (entry) => entry.id === `bustly-${normalizedWorkspaceId}-marketing`,
     );
     expect(marketingEntry?.heartbeat).toMatchObject({
-      every: "30m",
+      every: DEFAULT_BUSTLY_HEARTBEAT_EVERY,
       target: "none",
     });
   });
@@ -479,7 +480,7 @@ describe("workspace-agents", () => {
       (entry) => entry.id === "bustly-workspace-1-finance",
     );
     expect(financeEntry?.heartbeat).toMatchObject({
-      every: "30m",
+      every: DEFAULT_BUSTLY_HEARTBEAT_EVERY,
       target: "none",
     });
   });
@@ -518,6 +519,60 @@ describe("workspace-agents", () => {
     expect(
       nextConfig.agents?.list?.some((entry) => entry.id === "bustly-workspace-1-marketing"),
     ).toBe(true);
+  });
+
+  it("forces preset heartbeat interval for existing workspace agents", async () => {
+    const existingDir = path.join(stateDir, "workspaces", "workspace-1", "agents", "marketing");
+    mkdirSync(existingDir, { recursive: true });
+    writeFileSync(
+      path.join(existingDir, ".bustly-agent.json"),
+      JSON.stringify(
+        {
+          createdAt: BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE + 60_000,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const config = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+    config.agents = {
+      ...config.agents,
+      list: [
+        ...(config.agents?.list ?? []),
+        {
+          id: "bustly-workspace-1-marketing",
+          name: "Marketing",
+          workspace: existingDir,
+          heartbeat: {
+            every: "30m",
+            target: "whatsapp",
+          },
+        },
+      ],
+    };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const bootstrapped = await ensureBustlyWorkspacePresetAgents({
+      workspaceId: "workspace-1",
+      workspaceName: "Workspace One",
+      presets: [{ slug: "marketing", label: "Marketing", icon: "TrendUp", isMain: false }],
+      configPath,
+      env: process.env,
+    });
+
+    expect(bootstrapped).toBe(0);
+    expect(bootstrapMock).not.toHaveBeenCalled();
+
+    const nextConfig = JSON.parse(readFileSync(configPath, "utf-8")) as OpenClawConfig;
+    const marketingEntry = nextConfig.agents?.list?.find(
+      (entry) => entry.id === "bustly-workspace-1-marketing",
+    );
+    expect(marketingEntry?.heartbeat).toMatchObject({
+      every: DEFAULT_BUSTLY_HEARTBEAT_EVERY,
+      target: "whatsapp",
+    });
   });
 
   it("force-refreshes legacy preset agents created before the cutoff", async () => {

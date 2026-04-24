@@ -4,9 +4,11 @@ export { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runne
 
 export { applyGoogleTurnOrderingFix } from "./pi-embedded-runner/google.js";
 export {
+  AUTOMATION_HISTORY_TURN_LIMIT,
   getDmHistoryLimitFromSessionKey,
   getHistoryLimitFromSessionKey,
   limitHistoryTurns,
+  resolveRunHistoryTurnLimit,
 } from "./pi-embedded-runner/history.js";
 export { resolveEmbeddedSessionLane } from "./pi-embedded-runner/lanes.js";
 export { runEmbeddedPiAgent } from "./pi-embedded-runner/run.js";

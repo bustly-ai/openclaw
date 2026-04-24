@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
 import { BUSTLY_PROVIDER_ID } from "../agents/bustly-models.js";
 import { readBustlyOAuthState } from "../bustly-oauth.js";
+import { DEFAULT_BUSTLY_HEARTBEAT_EVERY } from "./heartbeats.js";
 
 export const BUSTLY_PROVIDER_PROFILE_ID = `${BUSTLY_PROVIDER_ID}:default`;
 export const BUSTLY_MODEL_GATEWAY_BASE_URL_DEFAULT = "https://gw.bustly.ai/api/v1";
@@ -164,6 +165,19 @@ export function applyBustlyOnlyConfig(
   const existingHeartbeatConfig = existingDefaults.heartbeat;
   const heartbeatModel =
     existingHeartbeatConfig?.model?.trim() || BUSTLY_DEFAULT_HEARTBEAT_MODEL_REF;
+  const normalizedAgentList = cfg.agents?.list?.map((entry) => {
+    if (!entry.id.startsWith("bustly-") || !entry.heartbeat) {
+      return entry;
+    }
+    return {
+      ...entry,
+      heartbeat: {
+        ...entry.heartbeat,
+        every: DEFAULT_BUSTLY_HEARTBEAT_EVERY,
+        target: entry.heartbeat.target ?? "none",
+      },
+    };
+  });
   const existingModelConfig = existingDefaults.model;
   const preservedFallbacks =
     typeof existingModelConfig === "object" &&
@@ -192,6 +206,7 @@ export function applyBustlyOnlyConfig(
         ...existingDefaults,
         heartbeat: {
           ...existingHeartbeatConfig,
+          every: DEFAULT_BUSTLY_HEARTBEAT_EVERY,
           model: heartbeatModel,
         },
         model: {
@@ -200,6 +215,7 @@ export function applyBustlyOnlyConfig(
         },
         models: nextAgentModels,
       },
+      ...(normalizedAgentList ? { list: normalizedAgentList } : {}),
     },
     models: {
       ...cfg.models,
