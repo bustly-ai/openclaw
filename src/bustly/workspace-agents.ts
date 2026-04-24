@@ -44,7 +44,7 @@ const DEFAULT_PRESET_HEARTBEAT: NonNullable<OpenClawAgentListEntry["heartbeat"]>
 };
 // Preset workspace agents created before this timestamp will be force-refreshed
 // so prompt/template updates can overwrite legacy bootstrap files once.
-export const BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE = Date.UTC(2026, 4, 17, 0, 0, 0, 0);
+export const BUSTLY_PRESET_AGENT_FORCE_REFRESH_BEFORE = Date.UTC(2026, 4, 25, 0, 0, 0, 0);
 
 function normalizePresetHeartbeatConfig(
   heartbeat: OpenClawAgentListEntry["heartbeat"] | undefined,

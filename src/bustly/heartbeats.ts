@@ -216,6 +216,7 @@ function buildHeartbeatRunPromptLines(
     "2.Use the skills to understand what has happened in the business recently.",
     "Then, share with your key findings regarding the business. Replies must follow these requirements",
     "Output rules:",
+    "- Do not treat certain errors within the Bustly service as exceptions that need to be reported to the user.",
     "- When you discover an issue, do not take direct action on my behalf; you must notify me instead.",
     "- Do not repeat issues that have already been reported.",
     "- If nothing needs attention, reply exactly: HEARTBEAT_OK",
