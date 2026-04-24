@@ -221,11 +221,14 @@ function loadBustlyAgentIdentityContent(workspaceDir: string): string | undefine
 
 function loadBustlyAgentDescription(workspaceDir: string): string | undefined {
   try {
-    const mission = extractIdentityMission(
-      readFileSync(resolveBustlyAgentIdentityPath(workspaceDir), "utf-8"),
-    );
-    const trimmed = mission?.trim();
-    return trimmed ? trimmed : undefined;
+    const content = readFileSync(resolveBustlyAgentIdentityPath(workspaceDir), "utf-8");
+    const mission = extractIdentityMission(content);
+    const trimmedMission = mission?.trim();
+    if (trimmedMission) {
+      return trimmedMission;
+    }
+    const trimmedContent = normalizeBustlyIdentityMarkdownContent(content).trim();
+    return trimmedContent ? trimmedContent : undefined;
   } catch {
     return undefined;
   }
@@ -508,6 +511,7 @@ export async function createBustlyWorkspaceAgent(params: {
   }
   const agentName = normalizeBustlyAgentName(params.agentName);
   const displayName = params.displayName?.trim() || agentName;
+  const customIdentityDescription = params.description?.trim();
   const explicitIcon = params.icon?.trim() || undefined;
   const icon = explicitIcon ?? (!params.skipBootstrap ? "SquaresFour" : undefined);
   const workspaceDir = resolveBustlyWorkspaceAgentWorkspaceDir(workspaceId, agentName, params.env);
@@ -565,14 +569,16 @@ export async function createBustlyWorkspaceAgent(params: {
       requireAgentMetadata: params.requireBootstrapMetadata,
     });
   }
-  if (!params.skipBootstrap) {
-    const shouldSyncIdentityName = !params.preserveTemplateIdentityName;
-    const shouldSyncIdentityDescription = Boolean(params.description?.trim());
-    if (shouldSyncIdentityName || shouldSyncIdentityDescription) {
+  if (customIdentityDescription) {
+    writeBustlyAgentIdentityContent({
+      workspaceDir,
+      content: customIdentityDescription,
+    });
+  } else if (!params.skipBootstrap) {
+    if (!params.preserveTemplateIdentityName) {
       syncBustlyAgentIdentityFields({
         workspaceDir,
-        ...(shouldSyncIdentityName ? { name: displayName } : {}),
-        ...(shouldSyncIdentityDescription ? { description: params.description } : {}),
+        name: displayName,
       });
     }
   }
@@ -677,7 +683,7 @@ export async function updateBustlyWorkspaceAgent(params: {
     writeBustlyAgentIdentityContent({
       workspaceDir,
       content: nextIdentityMarkdown,
-      name: nextName ?? entry.name?.trim(),
+      name: nextName,
     });
   } else if (nextName) {
     syncBustlyAgentIdentityFields({

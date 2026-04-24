@@ -158,9 +158,11 @@ describe("workspace-agents", () => {
       description: "Own performance marketing and weekly reporting.",
       skills: ["ads", "reports"],
     });
-    expect(listed.find((entry) => entry.agentId === created.agentId)?.identityMarkdown).toContain(
-      "Own performance marketing and weekly reporting.",
-    );
+    const createdIdentity = listed.find((entry) => entry.agentId === created.agentId)?.identityMarkdown;
+    expect(createdIdentity).toBe("Own performance marketing and weekly reporting.\n");
+    expect(createdIdentity).not.toContain("Managed by Bustly bootstrap");
+    expect(createdIdentity).not.toContain("# IDENTITY.md - Agent Identity");
+    expect(createdIdentity).not.toContain("- Role:");
 
     await updateBustlyWorkspaceAgent({
       workspaceId: "workspace-1",
@@ -193,6 +195,37 @@ describe("workspace-agents", () => {
       description: "Run growth experiments and coordinate reporting.",
     });
     expect(listed.find((entry) => entry.agentId === created.agentId)?.skills).toBeUndefined();
+  });
+
+  it("keeps custom identity markdown unchanged when updating without renaming", async () => {
+    const created = await createBustlyWorkspaceAgent({
+      workspaceId: "workspace-1",
+      agentName: "ops",
+      displayName: "Ops",
+      description: "Initial identity text.",
+      configPath,
+      env: process.env,
+    });
+
+    await updateBustlyWorkspaceAgent({
+      workspaceId: "workspace-1",
+      agentId: created.agentId,
+      identityMarkdown: "You operate execution workflows.\nKeep handoffs explicit.\n",
+      configPath,
+      env: process.env,
+    });
+
+    const listed = listBustlyWorkspaceAgents({
+      workspaceId: "workspace-1",
+      configPath,
+      env: process.env,
+    });
+    const identityMarkdown = listed.find((entry) => entry.agentId === created.agentId)?.identityMarkdown;
+    expect(identityMarkdown).toBe("You operate execution workflows.\nKeep handoffs explicit.\n");
+    expect(identityMarkdown).not.toContain("- Name:");
+    expect(listed.find((entry) => entry.agentId === created.agentId)?.description).toBe(
+      "You operate execution workflows.\nKeep handoffs explicit.",
+    );
   });
 
   it("creates and lists bustly workspace agent sessions", async () => {
