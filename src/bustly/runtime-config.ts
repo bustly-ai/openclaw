@@ -5,7 +5,7 @@ import { readBustlyOAuthState } from "../bustly-oauth.js";
 
 export const BUSTLY_PROVIDER_PROFILE_ID = `${BUSTLY_PROVIDER_ID}:default`;
 export const BUSTLY_MODEL_GATEWAY_BASE_URL_DEFAULT = "https://gw.bustly.ai/api/v1";
-export const BUSTLY_DEFAULT_MODEL_REF = `${BUSTLY_PROVIDER_ID}/chat.ultra`;
+export const BUSTLY_DEFAULT_MODEL_REF = `${BUSTLY_PROVIDER_ID}/chat.standard`;
 export const BUSTLY_DEFAULT_HEARTBEAT_MODEL_REF = `${BUSTLY_PROVIDER_ID}/chat.standard`;
 
 export const BUSTLY_ROUTE_MODELS = [

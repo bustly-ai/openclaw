@@ -44,7 +44,7 @@ describe("normalizeBustlyModelRef", () => {
     expect(normalizeBustlyModelRef("bustly/chat.standard")).toBe("bustly/chat.standard");
     expect(normalizeBustlyModelRef("chat.advanced")).toBe("bustly/chat.advanced");
     expect(normalizeBustlyModelRef("pro")).toBe("bustly/chat.advanced");
-    expect(normalizeBustlyModelRef("lite")).toBe("bustly/chat.ultra");
+    expect(normalizeBustlyModelRef("lite")).toBe("bustly/chat.standard");
   });
 });
 
