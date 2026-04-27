@@ -52,6 +52,25 @@ function addSentryBreadcrumb(level: "info" | "warning", message: string, categor
   }
 }
 
+function captureSentryLog(level: "info" | "warning", message: string, category: string): void {
+  if (sentryLogReportingActive) {
+    return;
+  }
+  sentryLogReportingActive = true;
+  try {
+    Sentry.withScope((scope) => {
+      scope.setLevel(level);
+      scope.setTag("logger", category);
+      scope.setExtra("log_message", message);
+      Sentry.captureMessage(message);
+    });
+  } catch {
+    // Never let Sentry reporting break the main process.
+  } finally {
+    sentryLogReportingActive = false;
+  }
+}
+
 function captureSentryError(message: string, error?: unknown): void {
   if (sentryLogReportingActive) {
     return;
@@ -125,7 +144,8 @@ export function writeMainLog(message: string, level: MainLogLevel = "info", erro
   if (level === "error") {
     captureSentryError(message, error);
   } else {
-    addSentryBreadcrumb(mapLevelToSentry(level), message, "writeMainLog");
+    const sentryLevel = mapLevelToSentry(level);
+    captureSentryLog(sentryLevel, message, "writeMainLog");
   }
 }
 
