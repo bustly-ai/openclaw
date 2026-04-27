@@ -3,6 +3,7 @@ import {
   readBustlyOAuthState,
   readBustlyOAuthStateEnsuringFreshToken,
 } from "../bustly-oauth.js";
+import { bustlyNodeRequest } from "./http.js";
 
 export type BustlyAccessibleWorkspace = {
   id: string;
@@ -83,51 +84,45 @@ export async function bustlySupabaseFetch(params: BustlySupabaseFetchParams): Pr
   if (!path) {
     throw new Error("Missing Bustly Supabase path");
   }
-  const controller = new AbortController();
   const timeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? Math.max(1_000, params.timeoutMs)
       : 30_000;
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const requestUrl = `${config.url.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
-    const response = await fetch(requestUrl, {
-      method: params.method ?? "GET",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${config.accessToken}`,
-        apikey: config.anonKey,
-        ...params.headers,
-      },
-      body: params.body,
-      signal: controller.signal,
-    });
+  const requestUrl = `${config.url.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+  const response = await bustlyNodeRequest(requestUrl, {
+    method: params.method ?? "GET",
+    timeoutMs,
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${config.accessToken}`,
+      apikey: config.anonKey,
+      ...params.headers,
+    },
+    body: params.body,
+  });
 
-    if (response.status !== 401 && response.status !== 403) {
-      return response;
-    }
-
-    const refreshedConfig = await getBustlySupabaseAuthConfigEnsuringFreshToken({
-      forceRefresh: true,
-    });
-    if (!refreshedConfig) {
-      return response;
-    }
-
-    return await fetch(requestUrl, {
-      method: params.method ?? "GET",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${refreshedConfig.accessToken}`,
-        apikey: refreshedConfig.anonKey,
-        ...params.headers,
-      },
-      body: params.body,
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
+  if (response.status !== 401 && response.status !== 403) {
+    return response;
   }
+
+  const refreshedConfig = await getBustlySupabaseAuthConfigEnsuringFreshToken({
+    forceRefresh: true,
+  });
+  if (!refreshedConfig) {
+    return response;
+  }
+
+  return await bustlyNodeRequest(requestUrl, {
+    method: params.method ?? "GET",
+    timeoutMs,
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${refreshedConfig.accessToken}`,
+      apikey: refreshedConfig.anonKey,
+      ...params.headers,
+    },
+    body: params.body,
+  });
 }
 
 export async function listAccessibleBustlyWorkspaces(

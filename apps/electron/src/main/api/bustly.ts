@@ -152,7 +152,9 @@ export async function refreshBustlySession(): Promise<BustlyRefreshResult> {
   }
 
   const endpoint = `${apiBaseUrl}/api/oauth/api/v1/oauth/refresh`;
-  const response = await fetch(endpoint, {
+  const response = await mainHttpFetch(endpoint, {
+    label: "Bustly Session Refresh",
+    timeoutMs: 30_000,
     method: "POST",
     headers: {
       Accept: "application/json",

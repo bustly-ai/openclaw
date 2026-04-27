@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const oauthMocks = vi.hoisted(() => ({
   readBustlyOAuthStateMock: vi.fn(),
   readBustlyOAuthStateEnsuringFreshTokenMock: vi.fn(),
+  bustlyNodeRequestMock: vi.fn(),
 }));
 
 vi.mock("../bustly-oauth.js", () => ({
@@ -22,12 +23,17 @@ vi.mock("../bustly-oauth.js", () => ({
   ) => state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "",
 }));
 
+vi.mock("./http.js", () => ({
+  bustlyNodeRequest: oauthMocks.bustlyNodeRequestMock,
+}));
+
 import { bustlySupabaseFetch, getBustlySupabaseAuthConfigEnsuringFreshToken } from "./supabase.js";
 
 describe("bustly supabase auth helpers", () => {
   beforeEach(() => {
     oauthMocks.readBustlyOAuthStateMock.mockReset();
     oauthMocks.readBustlyOAuthStateEnsuringFreshTokenMock.mockReset();
+    oauthMocks.bustlyNodeRequestMock.mockReset();
     vi.unstubAllGlobals();
   });
 
@@ -76,8 +82,7 @@ describe("bustly supabase auth helpers", () => {
         },
       });
 
-    const fetchMock = vi
-      .fn<typeof fetch>()
+    oauthMocks.bustlyNodeRequestMock
       .mockResolvedValueOnce(new Response("unauthorized", { status: 401 }))
       .mockResolvedValueOnce(
         new Response(JSON.stringify([{ id: "workspace-1" }]), {
@@ -85,16 +90,21 @@ describe("bustly supabase auth helpers", () => {
           headers: { "content-type": "application/json" },
         }),
       );
-    vi.stubGlobal("fetch", fetchMock);
 
     const response = await bustlySupabaseFetch({
       path: "rest/v1/workspaces?select=id",
     });
 
     expect(response.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const firstHeaders = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
-    const secondHeaders = fetchMock.mock.calls[1]?.[1]?.headers as Record<string, string>;
+    expect(oauthMocks.bustlyNodeRequestMock).toHaveBeenCalledTimes(2);
+    const firstHeaders = oauthMocks.bustlyNodeRequestMock.mock.calls[0]?.[1]?.headers as Record<
+      string,
+      string
+    >;
+    const secondHeaders = oauthMocks.bustlyNodeRequestMock.mock.calls[1]?.[1]?.headers as Record<
+      string,
+      string
+    >;
     expect(firstHeaders.Authorization).toBe("Bearer stale-token");
     expect(secondHeaders.Authorization).toBe("Bearer fresh-token");
     expect(oauthMocks.readBustlyOAuthStateEnsuringFreshTokenMock).toHaveBeenNthCalledWith(

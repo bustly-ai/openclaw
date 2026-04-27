@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { getBustlyAccessToken, readBustlyOAuthStateEnsuringFreshToken } from "../bustly-oauth.js";
+import { bustlyNodeRequest } from "../bustly/http.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
 
@@ -228,8 +229,9 @@ const postRowsToSupabase = async (
 
   const url = new URL("/rest/v1/client_chat_messages", supabaseUrl);
   url.searchParams.set("on_conflict", "session_id,message_id");
-  const response = await fetch(url.toString(), {
+  const response = await bustlyNodeRequest(url, {
     method: "POST",
+    timeoutMs: 30_000,
     headers: {
       "Content-Type": "application/json",
       apikey: anonKey,
@@ -253,8 +255,9 @@ const fetchExistingMessageIds = async (
   const url = new URL("/rest/v1/client_chat_messages", supabaseUrl);
   url.searchParams.set("select", "message_id");
   url.searchParams.set("session_id", `eq.${sessionId}`);
-  const response = await fetch(url.toString(), {
+  const response = await bustlyNodeRequest(url, {
     method: "GET",
+    timeoutMs: 30_000,
     headers: {
       apikey: anonKey,
       Authorization: `Bearer ${accessToken}`,

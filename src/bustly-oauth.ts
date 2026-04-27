@@ -8,6 +8,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import * as os from "node:os";
 import { resolve } from "node:path";
 import { resolveBustlyAccountApiBaseUrl } from "./bustly/env.js";
+import { bustlyNodeRequest } from "./bustly/http.js";
 import type {
   BustlyOAuthState,
   BustlySearchDataConfig,
@@ -402,8 +403,9 @@ export async function refreshBustlySession(): Promise<BustlyRefreshResult> {
   }
 
   const endpoint = `${apiBaseUrl}/api/oauth/api/v1/oauth/refresh`;
-  const response = await fetch(endpoint, {
+  const response = await bustlyNodeRequest(endpoint, {
     method: "POST",
+    timeoutMs: 30_000,
     headers: {
       Accept: "application/json",
       "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
@@ -446,8 +448,9 @@ export async function refreshSupabaseAuth(): Promise<SupabaseRefreshResult> {
   }
 
   const endpoint = `${supabaseUrl.replace(/\/+$/, "")}/auth/v1/token?grant_type=refresh_token`;
-  const response = await fetch(endpoint, {
+  const response = await bustlyNodeRequest(endpoint, {
     method: "POST",
+    timeoutMs: 30_000,
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",

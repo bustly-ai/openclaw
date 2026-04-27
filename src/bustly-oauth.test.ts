@@ -3,6 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const { bustlyNodeRequestMock } = vi.hoisted(() => ({
+  bustlyNodeRequestMock: vi.fn(),
+}));
+
+vi.mock("./bustly/http.js", () => ({
+  bustlyNodeRequest: bustlyNodeRequestMock,
+}));
+
 describe("root bustly oauth state", () => {
   let tempHome: string;
   let previousHome: string | undefined;
@@ -19,6 +27,7 @@ describe("root bustly oauth state", () => {
     delete process.env.BUSTLY_API_BASE_URL;
     vi.resetModules();
     vi.restoreAllMocks();
+    bustlyNodeRequestMock.mockReset();
   });
 
   afterEach(() => {
@@ -101,30 +110,28 @@ describe("root bustly oauth state", () => {
     process.env.BUSTLY_ACCOUNT_API_BASE_URL = "https://test-bustly-account.bustly.ai";
     process.env.BUSTLY_API_BASE_URL = "https://legacy.example.com";
 
-    const fetchMock = vi.fn(
-      async (_input: string | URL | Request) =>
-        new Response(
-          JSON.stringify({
-            status: "0",
-            data: {
-              supabaseAccessToken: "fresh-token",
-              supabaseAccessTokenExpiresAt: 1777001200,
-              refreshToken: "bustly-refresh-token-2",
-              bustlySessionId: "session-1",
-              capabilities: ["analytics"],
-            },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
+    bustlyNodeRequestMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "0",
+          data: {
+            supabaseAccessToken: "fresh-token",
+            supabaseAccessTokenExpiresAt: 1777001200,
+            refreshToken: "bustly-refresh-token-2",
+            bustlySessionId: "session-1",
+            capabilities: ["analytics"],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
     );
-    vi.stubGlobal("fetch", fetchMock);
 
     const oauth = await import("./bustly-oauth.js");
     const refreshed = await oauth.refreshBustlyAccessToken();
 
     expect(refreshed).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [firstCall] = fetchMock.mock.calls[0] ?? [];
+    expect(bustlyNodeRequestMock).toHaveBeenCalledTimes(1);
+    const [firstCall] = bustlyNodeRequestMock.mock.calls[0] ?? [];
     expect(firstCall).toBe("https://test-bustly-account.bustly.ai/api/oauth/api/v1/oauth/refresh");
     const persistedState = JSON.parse(readFileSync(oauthPath, "utf-8")) as {
       user?: Record<string, unknown>;
@@ -159,27 +166,25 @@ describe("root bustly oauth state", () => {
     });
     process.env.BUSTLY_ACCOUNT_API_BASE_URL = "https://test-bustly-account.bustly.ai";
 
-    const fetchMock = vi.fn(
-      async (_input: string | URL | Request) =>
-        new Response(
-          JSON.stringify({
-            status: "0",
-            data: {
-              supabaseAccessToken: "fresh-token",
-              supabaseAccessTokenExpiresAt: Math.floor(Date.now() / 1000) + 3600,
-              refreshToken: "bustly-refresh-token-2",
-              bustlySessionId: "session-1",
-            },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
+    bustlyNodeRequestMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "0",
+          data: {
+            supabaseAccessToken: "fresh-token",
+            supabaseAccessTokenExpiresAt: Math.floor(Date.now() / 1000) + 3600,
+            refreshToken: "bustly-refresh-token-2",
+            bustlySessionId: "session-1",
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
     );
-    vi.stubGlobal("fetch", fetchMock);
 
     const oauth = await import("./bustly-oauth.js");
     const state = await oauth.readBustlyOAuthStateEnsuringFreshToken();
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(bustlyNodeRequestMock).toHaveBeenCalledTimes(1);
     expect(state?.user?.supabaseAccessToken).toBe("fresh-token");
     expect(state?.user?.userAccessToken).toBe("fresh-token");
   });

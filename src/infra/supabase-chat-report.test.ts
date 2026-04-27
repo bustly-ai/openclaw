@@ -6,6 +6,7 @@ const fsMocks = vi.hoisted(() => ({
 
 const oauthMocks = vi.hoisted(() => ({
   readBustlyOAuthState: vi.fn(),
+  bustlyNodeRequest: vi.fn(),
 }));
 
 const sessionMocks = vi.hoisted(() => ({
@@ -34,6 +35,10 @@ vi.mock("../bustly-oauth.js", () => ({
   ) => state?.user?.supabaseAccessToken?.trim() ?? state?.user?.userAccessToken?.trim() ?? "",
 }));
 
+vi.mock("../bustly/http.js", () => ({
+  bustlyNodeRequest: oauthMocks.bustlyNodeRequest,
+}));
+
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: sessionMocks.loadSessionStore,
   resolveStorePath: sessionMocks.resolveStorePath,
@@ -49,12 +54,10 @@ describe("reportSessionCompletionToSupabase", () => {
   beforeEach(() => {
     fsMocks.readFile.mockReset();
     oauthMocks.readBustlyOAuthState.mockReset();
+    oauthMocks.bustlyNodeRequest.mockReset();
     sessionMocks.loadSessionStore.mockReset();
     sessionMocks.resolveStorePath.mockClear();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("", { status: 201 })),
-    );
+    oauthMocks.bustlyNodeRequest.mockResolvedValue(new Response("", { status: 201 }));
   });
 
   it("writes request metrics onto each assistant row in order", async () => {
@@ -129,9 +132,8 @@ describe("reportSessionCompletionToSupabase", () => {
       cfg: {},
     });
 
-    const fetchMock = vi.mocked(global.fetch);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [, init] = fetchMock.mock.calls[1] ?? [];
+    expect(oauthMocks.bustlyNodeRequest).toHaveBeenCalledTimes(2);
+    const [, init] = oauthMocks.bustlyNodeRequest.mock.calls[1] ?? [];
     const body = readJsonBody(init?.body) as Array<{
       role?: string | null;
       metadata?: Record<string, unknown>;
@@ -185,10 +187,9 @@ describe("reportSessionCompletionToSupabase", () => {
       cfg: {},
     });
 
-    const fetchMock = vi.mocked(global.fetch);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(oauthMocks.bustlyNodeRequest).toHaveBeenCalledTimes(2);
     expect(sessionMocks.loadSessionStore).not.toHaveBeenCalled();
-    const [, init] = fetchMock.mock.calls[1] ?? [];
+    const [, init] = oauthMocks.bustlyNodeRequest.mock.calls[1] ?? [];
     const body = readJsonBody(init?.body) as Array<{
       session_id?: string;
       session_key?: string;
@@ -250,8 +251,7 @@ describe("reportSessionCompletionToSupabase", () => {
     });
     sessionMocks.loadSessionStore.mockReturnValue({});
 
-    const fetchMock = vi.mocked(global.fetch);
-    fetchMock
+    oauthMocks.bustlyNodeRequest
       .mockResolvedValueOnce(
         new Response(JSON.stringify([{ message_id: "assistant-old" }]), { status: 200 }),
       )
@@ -265,8 +265,8 @@ describe("reportSessionCompletionToSupabase", () => {
       cfg: {},
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [, postInit] = fetchMock.mock.calls[1] ?? [];
+    expect(oauthMocks.bustlyNodeRequest).toHaveBeenCalledTimes(2);
+    const [, postInit] = oauthMocks.bustlyNodeRequest.mock.calls[1] ?? [];
     const body = readJsonBody(postInit?.body) as Array<{
       message_id?: string;
       metadata?: Record<string, unknown>;
